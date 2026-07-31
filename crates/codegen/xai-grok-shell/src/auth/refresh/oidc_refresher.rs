@@ -61,7 +61,15 @@ impl OidcRefresher {
         &self,
         message: String,
         tried_key: Option<String>,
+        network_unreachable: bool,
     ) -> RefreshOutcome {
+        // Never reached the IdP → proves nothing about the credential: don't
+        // consume the escalation budget (and don't reset it — only real
+        // refresh progress does). See `OidcRefreshResult::Failed`.
+        if network_unreachable {
+            tracing::debug!(%message, "auth: transient refresh failure (network unreachable), not counted toward escalation");
+            return RefreshOutcome::transient(message);
+        }
         let escalate = {
             let mut budget = self.transient_budget.lock();
             // Re-arm when the credential changes so a fresh token never inherits
@@ -149,7 +157,7 @@ impl OidcRefresher {
                 );
                 Some(RefreshOutcome::permanent_for(reason, &disk_now))
             }
-            OidcRefreshResult::Failed => {
+            OidcRefreshResult::Failed { .. } => {
                 Some(RefreshOutcome::transient("OIDC disk-retry refresh failed"))
             }
         }
@@ -212,9 +220,13 @@ impl TokenRefresher for OidcRefresher {
             })),
         );
 
-        // Snapshot for diagnostic upload on failure.
+        // Snapshot for diagnostic upload on failure (user id, never email).
         let pre_token = crate::auth::model::token_suffix(&auth.key).to_owned();
-        let pre_email = auth.email.clone().unwrap_or_else(|| "unknown".into());
+        let pre_user_id = if auth.user_id.is_empty() {
+            "unknown".into()
+        } else {
+            auth.user_id.clone()
+        };
 
         match crate::auth::oidc::oidc_token_exchange(&auth).await {
             OidcRefreshResult::Success(new_auth) => {
@@ -231,15 +243,23 @@ impl TokenRefresher for OidcRefresher {
                 }
 
                 if let Some(uploader) = &self.diagnostic_uploader {
-                    spawn_diagnostic_upload(uploader, pre_token, pre_email, &self.upload_in_flight);
+                    spawn_diagnostic_upload(
+                        uploader,
+                        pre_token,
+                        pre_user_id,
+                        &self.upload_in_flight,
+                    );
                 }
                 RefreshOutcome::permanent_for(reason, &auth)
             }
-            OidcRefreshResult::Failed => {
+            OidcRefreshResult::Failed {
+                network_unreachable,
+            } => {
                 tracing::warn!(
                     refresh_reason = ?reason,
                     user_id = %auth.user_id,
                     has_refresh_token = auth.refresh_token.is_some(),
+                    network_unreachable,
                     issuer = ?auth.oidc_issuer,
                     client_id = ?auth.oidc_client_id,
                     expires_at = ?auth.expires_at,
@@ -251,17 +271,24 @@ impl TokenRefresher for OidcRefresher {
                     Some(serde_json::json!({
                         "has_refresh_token": auth.refresh_token.is_some(),
                         "auth_mode": format!("{:?}", auth.auth_mode),
+                        "network_unreachable": network_unreachable,
                         "issuer": auth.oidc_issuer,
                         "client_id": auth.oidc_client_id,
                         "expires_at": auth.expires_at.map(|e| e.to_rfc3339()),
                     })),
                 );
                 if let Some(uploader) = &self.diagnostic_uploader {
-                    spawn_diagnostic_upload(uploader, pre_token, pre_email, &self.upload_in_flight);
+                    spawn_diagnostic_upload(
+                        uploader,
+                        pre_token,
+                        pre_user_id,
+                        &self.upload_in_flight,
+                    );
                 }
                 self.record_transient_failure(
                     "OIDC token refresh failed".into(),
                     Some(auth.key.clone()),
+                    network_unreachable,
                 )
             }
         }
@@ -269,10 +296,11 @@ impl TokenRefresher for OidcRefresher {
 }
 
 /// Fire-and-forget diagnostic log upload. Guarded against concurrent spawns.
+/// `user_id` is the GCS path segment (never email).
 fn spawn_diagnostic_upload(
     _uploader: &DiagnosticUploader,
     _auth_token: String,
-    _email: String,
+    _user_id: String,
     _in_flight: &Arc<AtomicBool>,
 ) {
     // The persistent unified log has no per-entry provider provenance and can
