@@ -839,6 +839,8 @@ impl SessionActor {
                                 total_tokens: usage.total_tokens,
                                 reasoning_tokens: usage.output_tokens_details.reasoning_tokens,
                                 cached_prompt_tokens: usage.input_tokens_details.cached_tokens,
+                                // Responses API has no cache-write signal.
+                                cache_creation_prompt_tokens: 0,
                             };
                             let api_duration_ms =
                                 u64::try_from(attempt_started.elapsed().as_millis())

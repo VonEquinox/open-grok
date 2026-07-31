@@ -2062,6 +2062,11 @@ pub struct TokenUsage {
     ///   into `prompt_tokens` instead.
     #[serde(default)]
     pub cached_prompt_tokens: u32,
+    /// Prompt tokens written to cache this call (Messages `cache_creation_input_tokens`,
+    /// billed at ~1.25x). Part of `prompt_tokens` but distinct from cache reads; 0 on
+    /// backends without a cache-write signal.
+    #[serde(default)]
+    pub cache_creation_prompt_tokens: u32,
 }
 
 impl From<Usage> for TokenUsage {
@@ -2079,6 +2084,7 @@ impl From<Usage> for TokenUsage {
                 .as_ref()
                 .map_or(0, |d| d.reasoning_tokens),
             cached_prompt_tokens,
+            cache_creation_prompt_tokens: 0,
         }
     }
 }
@@ -4908,7 +4914,7 @@ fn mark_message_cache_breakpoint(msg: &mut crate::messages::Message) -> bool {
                     | ContentBlock::ToolResult { cache_control, .. }
                     | ContentBlock::Image { cache_control, .. }
                     | ContentBlock::ToolUse { cache_control, .. } => cache_control,
-                    ContentBlock::Thinking { .. } => continue,
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => continue,
                 };
                 *cache_control = Some(CacheControl::ephemeral());
                 return true;
