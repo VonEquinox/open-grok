@@ -544,6 +544,7 @@ impl<'a> EffectiveCommandCatalog<'a> {
             "transcript",
             "tutorial",
             "t",
+            "undo",
             "usage",
             "view-plan",
             "vim-mode",
