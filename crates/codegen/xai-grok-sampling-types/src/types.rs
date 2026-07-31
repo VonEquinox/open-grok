@@ -978,6 +978,7 @@ pub enum ModelProvider {
 pub enum ResponsesDialect {
     Xai,
     Codex,
+    DeepSeek,
 }
 
 /// Wire representation used for Code Mode's client-executed `exec` tool.
@@ -1189,19 +1190,20 @@ impl ProviderProfile {
         xai_services: XaiServicePolicy::Denied,
     };
 
-    /// DeepSeek's direct OpenAI-compatible inference API. DeepSeek uses
-    /// ordinary client-side function tools over Chat Completions and
-    /// authenticates with a provider-owned API key only.
+    /// DeepSeek's direct OpenAI-compatible inference API. V4 Flash supports
+    /// both Chat Completions and the stateless Responses API, including
+    /// OpenAI-shaped hosted web search. Authentication remains isolated to a
+    /// provider-owned API key.
     pub const DEEPSEEK: Self = Self {
         provider: ModelProvider::DeepSeek,
         backends: ProviderBackends {
             chat_completions: true,
-            responses: None,
+            responses: Some(ResponsesDialect::DeepSeek),
             messages: false,
         },
-        code_mode_transport: CodeModeTransport::Unsupported,
-        hosted_tool_dialect: None,
-        native_web_search: false,
+        code_mode_transport: CodeModeTransport::FunctionEnvelope,
+        hosted_tool_dialect: Some(HostedToolDialect::OpenAi),
+        native_web_search: true,
         request_metadata: RequestMetadataPolicy::StandardHeadersOnly,
         session_auth: BuiltInSessionAuthKind::ApiKeyOnly,
         xai_services: XaiServicePolicy::Denied,
@@ -1613,12 +1615,12 @@ mod tests {
                 name: "DeepSeek",
                 backends: ProviderBackends {
                     chat_completions: true,
-                    responses: None,
+                    responses: Some(ResponsesDialect::DeepSeek),
                     messages: false,
                 },
-                code_mode_transport: CodeModeTransport::Unsupported,
-                hosted_tools: None,
-                native_web_search: false,
+                code_mode_transport: CodeModeTransport::FunctionEnvelope,
+                hosted_tools: Some(HostedToolDialect::OpenAi),
+                native_web_search: true,
                 request_metadata: RequestMetadataPolicy::StandardHeadersOnly,
                 session_auth: BuiltInSessionAuthKind::ApiKeyOnly,
                 xai_services: XaiServicePolicy::Denied,

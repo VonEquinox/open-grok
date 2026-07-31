@@ -14046,6 +14046,36 @@ default = "grok-4.5"
     }
 
     #[test]
+    fn embedded_deepseek_models_keep_flash_on_responses_and_pro_on_chat() {
+        let defaults = default_model_entries(&EndpointsConfig::default());
+        let pro = &defaults["deepseek:deepseek-v4-pro"];
+        let flash = &defaults["deepseek:deepseek-v4-flash"];
+
+        for entry in [pro, flash] {
+            assert_eq!(entry.info.provider, ModelProvider::DeepSeek);
+            assert_eq!(
+                entry.info.base_url,
+                crate::deepseek_models::DEEPSEEK_API_BASE_URL
+            );
+            assert_eq!(entry.info.context_window.get(), 1_000_000);
+            assert_eq!(entry.info.max_completion_tokens, Some(384_000));
+            assert_eq!(entry.info.tool_mode, Some(ToolMode::Direct));
+            assert_eq!(
+                entry.env_key.as_ref().and_then(EnvKeys::primary),
+                Some(crate::deepseek_models::DEEPSEEK_API_KEY_ENV)
+            );
+            assert!(entry.info.supports_reasoning_effort);
+            assert_eq!(entry.info.reasoning_effort, Some(ReasoningEffort::High));
+        }
+
+        assert_eq!(pro.info.api_backend, ApiBackend::ChatCompletions);
+        assert!(!pro.info.supports_backend_search);
+        assert_eq!(flash.info.api_backend, ApiBackend::Responses);
+        assert!(flash.info.supports_backend_search);
+        assert_eq!(flash.info.name.as_deref(), Some("DeepSeek V4 Flash 0731"));
+    }
+
+    #[test]
     fn authoritative_fireworks_catalog_replaces_only_fireworks_partition() {
         let cfg = Config::default();
         let mut fireworks = IndexMap::new();

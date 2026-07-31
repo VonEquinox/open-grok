@@ -35,7 +35,7 @@ Adapters (credential-free): `xai-grok-sampler/src/provider.rs`.
 | OpenAI Codex | Responses | Codex | OpenAI | Codex OAuth | **denied** |
 | Kimi | Chat | none | client function tools | API key only | **denied** |
 | Fireworks AI | Chat | none | client function tools | API key only | **denied** |
-| DeepSeek direct | Chat | none | client function tools | API key only | **denied** |
+| DeepSeek direct | Chat, Responses (V4 Flash) | DeepSeek | OpenAI hosted search + client functions | API key only | **denied** |
 | OpenCode Go | Chat, Messages (per model) | none | client function tools | API key only | **denied** |
 
 ## Layer map (paths)
@@ -116,7 +116,7 @@ Also isolated:
 5. **Kimi Platform vs Code** keys, catalogs, and trusted hosts are non-interchangeable.
    Platform embeds/discovers `kimi-k3` on Moonshot; Code embeds/discovers `k3`,
    `k3-256k`, and the `kimi-for-coding*` family on `api.kimi.com/coding/v1`.
-6. **DeepSeek direct credentials are host-scoped.** UI-stored keys are sent only to the official trusted API host; `DEEPSEEK_API_KEY` may accompany an explicit process-level base-URL override.
+6. **DeepSeek direct credentials are host-scoped.** UI-stored keys are sent only to the official trusted API host; `DEEPSEEK_API_KEY` may accompany an explicit process-level base-URL override. `deepseek-v4-flash` uses DeepSeek's stateless Responses API; V4 Pro remains on Chat Completions until the provider exposes Responses support for it.
 7. **OpenCode Go is opt-in per model.** Its live `/models` IDs are intersected with canonical metadata; unsupported or unclassified models are omitted. The enabled list defaults empty, and only enabled entries reach normal model settings or subagent selection.
 8. **OpenCode Go transport is model-owned.** `@ai-sdk/anthropic` entries use Messages + `x-api-key`; OpenAI-compatible entries use Chat Completions + Bearer. Never choose the protocol from the provider alone.
 9. **xAI-only services** (relay, some uploads, etc.) close via monotonic export boundary after non-xAI denied profiles. Compatibility field name remains `ever_used_codex` even when the triggering provider is not Codex; subagents mark the parent tree.
@@ -143,10 +143,10 @@ Also isolated:
 | --- | --- | --- | --- | --- | --- | --- |
 | Private headers | `x-grok-*` | stripped | stripped | stripped | stripped | stripped |
 | Doom-loop opt-in | yes | no | no | no | no | no |
-| Responses extras | minimal | Max/Ultra mapping, multi-agent mode, reasoning summary | N/A | N/A | N/A | N/A |
+| Responses extras | minimal | Max/Ultra mapping, multi-agent mode, reasoning summary | N/A | N/A | stateless fields; effort normalized to none/low/high/max | N/A |
 | Prompt cache key | no | session id | no | no | no | no |
 | Sticky turn state | no | `x-codex-turn-state` | no | no | no | no |
-| Unknown `response.*` events | strict | ignore unknown side-channels when opted | N/A | N/A | N/A | N/A |
+| Unknown `response.*` events | strict | ignore unknown side-channels when opted | N/A | N/A | strict | N/A |
 | Chat sanitization | — | — | clears temp/top_p/penalties | schema normalization | strips internal message model IDs | per backend |
 
 ### Compaction
@@ -162,7 +162,7 @@ Also isolated:
 When Code Mode is effective (a Codex Code Mode Only requirement beats Settings):
 
 1. Responses exposes provider-compatible `exec` plus schema `wait`; Code Mode Only also retains direct-only exceptions.
-2. Codex uses native custom/freeform raw JavaScript. xAI uses a function envelope with that JavaScript in the required `source` string; native custom items are projected or rejected before xAI network I/O.
+2. Codex uses native custom/freeform raw JavaScript. xAI and DeepSeek use a function envelope with that JavaScript in the required `source` string; native custom items are projected or rejected before those network boundaries.
 3. Mixed mode retains ordinary top-level tools. Only mode keeps them registered for `tools.*` only.
 4. Persistent V8 for a compatible timeline; reset on rewind/provider boundaries and disposed on session end.
 5. UI hides transport; shows nested tools.

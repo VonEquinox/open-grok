@@ -2764,9 +2764,7 @@ pub fn inject_streaming_reasoning_fallback(items: &mut Vec<ConversationItem>, te
         return;
     }
     let any_with_text = items.iter().any(|i| match i {
-        ConversationItem::Reasoning(r) => r.summary.iter().any(|sp| match sp {
-            rs::SummaryPart::SummaryText(t) => !t.text.is_empty(),
-        }),
+        ConversationItem::Reasoning(reasoning) => !reasoning_item_text(reasoning).is_empty(),
         _ => false,
     });
     if any_with_text {
@@ -12229,6 +12227,30 @@ mod tests {
             body.pointer("/input/1/content").and_then(|v| v.as_str()),
             Some("hi")
         );
+    }
+
+    #[test]
+    fn streaming_reasoning_fallback_does_not_duplicate_terminal_raw_text() {
+        let mut items = vec![
+            ConversationItem::Reasoning(rs::ReasoningItem {
+                id: "reasoning_deepseek".to_owned(),
+                summary: Vec::new(),
+                content: Some(vec![rs::ReasoningTextContent {
+                    text: "terminal raw reasoning".to_owned(),
+                }]),
+                encrypted_content: None,
+                status: None,
+            }),
+            ConversationItem::assistant("answer"),
+        ];
+
+        inject_streaming_reasoning_fallback(&mut items, "streamed raw reasoning".to_owned());
+
+        let ConversationItem::Reasoning(reasoning) = &items[0] else {
+            panic!("reasoning item must remain first");
+        };
+        assert_eq!(reasoning_item_text(reasoning), "terminal raw reasoning");
+        assert!(reasoning.summary.is_empty());
     }
 
     /// Forward-compat guard for the async-openai gap fix.

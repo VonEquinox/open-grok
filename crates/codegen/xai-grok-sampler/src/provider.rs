@@ -163,13 +163,16 @@ pub trait ProviderAdapter: std::fmt::Debug + Send + Sync {
         match self.profile().responses_dialect() {
             None | Some(ResponsesDialect::Xai) => {}
             Some(ResponsesDialect::Codex) => patch_codex_responses_request(request_body, policy),
+            Some(ResponsesDialect::DeepSeek) => {
+                patch_deepseek_responses_request(request_body, policy)
+            }
         }
     }
 
     /// Return the provider-owned cache key derived from stable request state.
     fn prompt_cache_key(&self, session_id: Option<&str>) -> Option<String> {
         match self.profile().responses_dialect() {
-            None | Some(ResponsesDialect::Xai) => None,
+            None | Some(ResponsesDialect::Xai | ResponsesDialect::DeepSeek) => None,
             Some(ResponsesDialect::Codex) => session_id
                 .filter(|session_id| !session_id.is_empty())
                 .map(str::to_owned),
@@ -246,7 +249,7 @@ pub trait ProviderAdapter: std::fmt::Debug + Send + Sync {
         }
 
         match self.profile().responses_dialect() {
-            None | Some(ResponsesDialect::Xai) => {}
+            None | Some(ResponsesDialect::Xai | ResponsesDialect::DeepSeek) => {}
             Some(ResponsesDialect::Codex) => {
                 let value = parsed
                     .as_ref()
@@ -276,7 +279,9 @@ pub trait ProviderAdapter: std::fmt::Debug + Send + Sync {
     fn normalizes_response_events(&self) -> bool {
         match self.profile().responses_dialect() {
             None => false,
-            Some(ResponsesDialect::Xai | ResponsesDialect::Codex) => true,
+            Some(ResponsesDialect::Xai | ResponsesDialect::Codex | ResponsesDialect::DeepSeek) => {
+                true
+            }
         }
     }
 
@@ -601,6 +606,62 @@ fn patch_codex_responses_request(request_body: &mut Value, policy: ResponsesRequ
     input.insert(insert_at, mode_item);
 }
 
+fn patch_deepseek_responses_request(request_body: &mut Value, policy: ResponsesRequestPolicy) {
+    let Some(body) = request_body.as_object_mut() else {
+        return;
+    };
+
+    // DeepSeek's Responses endpoint is stateless. These OpenAI fields are
+    // unsupported (and silently ignored), so omit them rather than implying
+    // continuity, storage, or provider-side cache controls that do not exist.
+    for field in [
+        "background",
+        "conversation",
+        "context_management",
+        "include",
+        "metadata",
+        "previous_response_id",
+        "prompt",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "service_tier",
+        "store",
+        "stream_options",
+        "truncation",
+    ] {
+        body.remove(field);
+    }
+
+    // DeepSeek accepts `reasoning.summary` for compatibility but does not
+    // generate one. Its documented Responses effort set is
+    // none/low/high/max, so normalize Open Grok's broader menu explicitly.
+    let effort = policy.local_effort.map(|effort| match effort {
+        ReasoningEffort::None => "none",
+        ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium | ReasoningEffort::High | ReasoningEffort::Xhigh => "high",
+        ReasoningEffort::Max | ReasoningEffort::Ultra => "max",
+    });
+    if let Some(reasoning) = body.get_mut("reasoning").and_then(Value::as_object_mut) {
+        reasoning.remove("summary");
+        if let Some(effort) = effort {
+            reasoning.insert("effort".to_owned(), Value::String(effort.to_owned()));
+        }
+    } else if let Some(effort) = effort {
+        body.insert(
+            "reasoning".to_owned(),
+            serde_json::json!({ "effort": effort }),
+        );
+    }
+    if body
+        .get("reasoning")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        body.remove("reasoning");
+    }
+}
+
 fn remove_x_grok_headers(headers: &mut HeaderMap) {
     let private_headers = headers
         .keys()
@@ -778,13 +839,19 @@ mod tests {
                 },
             );
 
-            if provider != ModelProvider::Codex {
-                assert_eq!(request, original);
-            } else {
-                assert_eq!(request["instructions"], "base prompt");
-                assert_eq!(request["input"].as_array().unwrap().len(), 1);
-                assert_eq!(request["reasoning"]["effort"], "max");
-                assert!(request["reasoning"].get("summary").is_none());
+            match provider {
+                ModelProvider::Codex => {
+                    assert_eq!(request["instructions"], "base prompt");
+                    assert_eq!(request["input"].as_array().unwrap().len(), 1);
+                    assert_eq!(request["reasoning"]["effort"], "max");
+                    assert!(request["reasoning"].get("summary").is_none());
+                }
+                ModelProvider::DeepSeek => {
+                    assert_eq!(request["input"], original["input"]);
+                    assert_eq!(request["reasoning"]["effort"], "max");
+                    assert!(request["reasoning"].get("summary").is_none());
+                }
+                _ => assert_eq!(request, original),
             }
         }
     }
@@ -808,6 +875,7 @@ mod tests {
         let codex = provider_adapter(ModelProvider::Codex);
         let kimi = provider_adapter(ModelProvider::Kimi);
         let fireworks = provider_adapter(ModelProvider::Fireworks);
+        let deepseek = provider_adapter(ModelProvider::DeepSeek);
         assert_eq!(xai.prompt_cache_key(Some("session")), None);
         assert_eq!(
             codex.prompt_cache_key(Some("session")),
@@ -834,6 +902,51 @@ mod tests {
         );
         assert!(fireworks.validate_backend(&ApiBackend::Responses).is_err());
         assert!(fireworks.validate_backend(&ApiBackend::Messages).is_err());
+        assert_eq!(deepseek.prompt_cache_key(Some("session")), None);
+        assert!(!deepseek.supports_turn_state(&ApiBackend::Responses));
+        assert!(!deepseek.sends_doom_loop_opt_in());
+        assert!(deepseek.normalizes_response_events());
+        assert!(
+            deepseek
+                .validate_backend(&ApiBackend::ChatCompletions)
+                .is_ok()
+        );
+        assert!(deepseek.validate_backend(&ApiBackend::Responses).is_ok());
+        assert!(deepseek.validate_backend(&ApiBackend::Messages).is_err());
+    }
+
+    #[test]
+    fn deepseek_responses_normalizes_effort_and_drops_unsupported_state() {
+        for (effort, expected) in [
+            (ReasoningEffort::None, "none"),
+            (ReasoningEffort::Minimal, "low"),
+            (ReasoningEffort::Low, "low"),
+            (ReasoningEffort::Medium, "high"),
+            (ReasoningEffort::High, "high"),
+            (ReasoningEffort::Xhigh, "high"),
+            (ReasoningEffort::Max, "max"),
+            (ReasoningEffort::Ultra, "max"),
+        ] {
+            let mut request = serde_json::json!({
+                "input": [],
+                "include": ["reasoning.encrypted_content"],
+                "prompt_cache_key": "must-not-send",
+                "reasoning": {"effort": "xhigh", "summary": "concise"},
+                "store": true,
+            });
+            provider_adapter(ModelProvider::DeepSeek).patch_responses_request(
+                &mut request,
+                ResponsesRequestPolicy {
+                    local_effort: Some(effort),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(request["reasoning"]["effort"], expected);
+            assert!(request["reasoning"].get("summary").is_none());
+            assert!(request.get("include").is_none());
+            assert!(request.get("prompt_cache_key").is_none());
+            assert!(request.get("store").is_none());
+        }
     }
 
     #[test]

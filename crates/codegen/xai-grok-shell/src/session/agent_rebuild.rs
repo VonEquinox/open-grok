@@ -121,8 +121,8 @@ impl ResolvedWebSearchState {
         )
     }
 
-    /// Whether the local search replaces the provider's native hosted
-    /// declaration (Codex with a non-native source that resolved).
+    /// Whether local or standalone search replaces the provider's native
+    /// hosted declaration after the selected alternative actually resolves.
     pub(crate) fn native_hosted_web_search_suppressed(
         &self,
         provider: xai_grok_sampling_types::ModelProvider,
@@ -811,8 +811,9 @@ mod tests {
         assert!(state.standalone_active);
     }
 
-    /// Defaults with xAI signed in: providers without native search ride the
-    /// xAI client search; Codex keeps its native declaration (no client tool).
+    /// Defaults with xAI signed in: non-Codex providers ride the xAI client
+    /// search. When one also has native search, the client tool suppresses the
+    /// duplicate hosted declaration.
     #[test]
     fn default_sources_route_xai_search_to_non_native_providers() {
         let s = state(candidates(
@@ -829,6 +830,7 @@ mod tests {
         assert!(s.allowed_for_provider(ModelProvider::DeepSeek));
         assert!(s.allowed_for_provider(ModelProvider::OpenCodeGo));
         assert!(!s.native_hosted_web_search_suppressed(ModelProvider::Codex));
+        assert!(s.native_hosted_web_search_suppressed(ModelProvider::DeepSeek));
     }
 
     /// Neither xAI nor Perplexity available: every provider falls back to
@@ -852,6 +854,7 @@ mod tests {
         ] {
             assert!(!s.allowed_for_provider(provider), "{provider:?}");
         }
+        assert!(!s.native_hosted_web_search_suppressed(ModelProvider::DeepSeek));
     }
 
     /// The legacy `[toolset.perplexity_web_search]` toggle keeps acting as
@@ -905,6 +908,37 @@ mod tests {
         ));
         assert!(!perplexity_without_key.allowed_for_provider(ModelProvider::Codex));
         assert!(!perplexity_without_key.native_hosted_web_search_suppressed(ModelProvider::Codex));
+    }
+
+    #[test]
+    fn explicit_deepseek_source_controls_native_suppression() {
+        let xai_selected = state(candidates(
+            xai_enabled_config(),
+            None,
+            WebSearchSourceConfig {
+                deepseek: Some(WebSearchSource::Xai),
+                ..Default::default()
+            },
+            false,
+            true,
+        ));
+        assert!(xai_selected.allowed_for_provider(ModelProvider::DeepSeek));
+        assert!(xai_selected.native_hosted_web_search_suppressed(ModelProvider::DeepSeek));
+
+        let perplexity_without_key = state(candidates(
+            xai_enabled_config(),
+            None,
+            WebSearchSourceConfig {
+                deepseek: Some(WebSearchSource::Perplexity),
+                ..Default::default()
+            },
+            false,
+            true,
+        ));
+        assert!(!perplexity_without_key.allowed_for_provider(ModelProvider::DeepSeek));
+        assert!(
+            !perplexity_without_key.native_hosted_web_search_suppressed(ModelProvider::DeepSeek)
+        );
     }
 
     /// Legacy rule preserved: an explicitly configured web-search model

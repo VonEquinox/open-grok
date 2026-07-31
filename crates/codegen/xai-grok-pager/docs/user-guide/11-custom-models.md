@@ -241,6 +241,37 @@ context_window = 1048576
 Kimi uses standard client-side function tools. Open Grok does not add
 Kimi-platform-hosted tools to this provider profile.
 
+### DeepSeek API
+
+Open **Settings → Models → DeepSeek API key** or run `/login deepseek`, then
+select one of the provider-owned entries:
+
+| Built-in model | Backend | Notes |
+| --- | --- | --- |
+| `deepseek:deepseek-v4-flash` | Responses | Stable API ID for DeepSeek-V4-Flash-0731; native hosted web search; 1M context |
+| `deepseek:deepseek-v4-pro` | Chat Completions | Remains on Chat Completions until DeepSeek enables Responses support |
+
+`DEEPSEEK_API_KEY` is the environment alternative. The Flash model keeps the
+stable wire ID `deepseek-v4-flash`, so it automatically reaches the current
+0731 release without a versioned slug. Its Responses route is stateless: Open
+Grok sends full input and does not attach Codex OAuth, prompt-cache keys,
+turn-state headers, or remote-compaction behavior.
+
+For an explicit config-only Flash setup:
+
+```toml
+[model.deepseek-flash]
+model = "deepseek-v4-flash"
+name = "DeepSeek V4 Flash 0731"
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+api_backend = "responses"
+env_key = "DEEPSEEK_API_KEY"
+context_window = 1000000
+max_completion_tokens = 384000
+reasoning_effort = "high"
+```
+
 ### Anthropic (Claude)
 
 Use Claude models directly via the Anthropic Messages API:

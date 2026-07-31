@@ -12,7 +12,9 @@ use serde::Deserialize;
 use std::num::NonZeroU64;
 use std::time::Duration;
 use url::Url;
-use xai_grok_sampling_types::{ApiBackend, ModelProvider, ToolMode};
+use xai_grok_sampling_types::{
+    ApiBackend, ModelProvider, ReasoningEffort, ReasoningEffortOption, ToolMode,
+};
 
 pub const DEEPSEEK_API_BASE_URL: &str = "https://api.deepseek.com";
 pub const DEEPSEEK_API_BASE_URL_ENV: &str = "OPENGROK_DEEPSEEK_API_BASE_URL";
@@ -26,6 +28,9 @@ pub struct CuratedDeepSeekModel {
     pub name: &'static str,
     pub description: &'static str,
     pub context_window: u64,
+    pub max_output_tokens: u32,
+    pub api_backend: ApiBackend,
+    pub supports_backend_search: bool,
 }
 
 pub const CURATED_DEEPSEEK_MODELS: [CuratedDeepSeekModel; 2] = [
@@ -35,13 +40,19 @@ pub const CURATED_DEEPSEEK_MODELS: [CuratedDeepSeekModel; 2] = [
         name: "DeepSeek V4 Pro",
         description: "DeepSeek V4 Pro through the direct DeepSeek API",
         context_window: 1_000_000,
+        max_output_tokens: 384_000,
+        api_backend: ApiBackend::ChatCompletions,
+        supports_backend_search: false,
     },
     CuratedDeepSeekModel {
         key: "deepseek:deepseek-v4-flash",
         slug: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash",
-        description: "DeepSeek V4 Flash through the direct DeepSeek API",
+        name: "DeepSeek V4 Flash 0731",
+        description: "DeepSeek-V4-Flash-0731 through the direct DeepSeek Responses API",
         context_window: 1_000_000,
+        max_output_tokens: 384_000,
+        api_backend: ApiBackend::Responses,
+        supports_backend_search: true,
     },
 ];
 
@@ -105,14 +116,16 @@ fn curated_model_entry(curated: &CuratedDeepSeekModel, base_url: &str) -> ModelE
     info.base_url = base_url.trim_end_matches('/').to_owned();
     info.name = Some(curated.name.to_owned());
     info.description = Some(curated.description.to_owned());
-    info.api_backend = ApiBackend::ChatCompletions;
+    info.max_completion_tokens = Some(curated.max_output_tokens);
+    info.api_backend = curated.api_backend;
     info.provider = ModelProvider::DeepSeek;
     info.tool_mode = Some(ToolMode::Direct);
     info.context_window =
         NonZeroU64::new(curated.context_window).expect("non-zero DeepSeek context window");
-    info.supports_reasoning_effort = false;
-    info.reasoning_efforts.clear();
-    info.reasoning_effort = None;
+    info.supports_reasoning_effort = true;
+    info.reasoning_efforts = deepseek_reasoning_efforts();
+    info.reasoning_effort = Some(ReasoningEffort::High);
+    info.supports_backend_search = curated.supports_backend_search;
     info.supported_in_api = true;
     ModelEntry {
         info,
@@ -234,6 +247,41 @@ impl DeepSeekModelsClient {
     }
 }
 
+fn deepseek_reasoning_efforts() -> Vec<ReasoningEffortOption> {
+    [
+        (
+            ReasoningEffort::Low,
+            "Faster responses with lighter reasoning",
+            false,
+        ),
+        (
+            ReasoningEffort::High,
+            "DeepSeek's default reasoning level",
+            true,
+        ),
+        (
+            ReasoningEffort::Max,
+            "Maximum reasoning depth for difficult tasks",
+            false,
+        ),
+    ]
+    .into_iter()
+    .map(|(value, description, default)| ReasoningEffortOption {
+        id: value.as_str().to_owned(),
+        value,
+        label: match value {
+            ReasoningEffort::Low => "Low",
+            ReasoningEffort::High => "High",
+            ReasoningEffort::Max => "Max",
+            _ => unreachable!("DeepSeek exposes only low/high/max"),
+        }
+        .to_owned(),
+        description: Some(description.to_owned()),
+        default,
+    })
+    .collect()
+}
+
 fn safe_error_excerpt(body: &str, api_key: &str) -> String {
     let sanitized = body
         .replace(api_key, "[REDACTED]")
@@ -290,13 +338,16 @@ mod tests {
     }
 
     #[test]
-    fn wire_catalog_is_curated_namespaced_and_chat_only() {
+    fn wire_catalog_preserves_curated_per_model_capabilities() {
         let client = DeepSeekModelsClient::with_base_url(DEEPSEEK_API_BASE_URL);
         let catalog = client.catalog_from_wire(
             DeepSeekModelsResponse {
                 data: vec![
                     DeepSeekWireModel {
                         id: "deepseek-v4-pro".to_owned(),
+                    },
+                    DeepSeekWireModel {
+                        id: "deepseek-v4-flash".to_owned(),
                     },
                     DeepSeekWireModel {
                         id: "future-unknown".to_owned(),
@@ -306,15 +357,39 @@ mod tests {
             "catalog-key",
         );
         let entries = catalog.entries();
-        assert_eq!(entries.len(), 1);
-        let entry = &entries["deepseek:deepseek-v4-pro"];
-        assert_eq!(entry.info.model, "deepseek-v4-pro");
-        assert_eq!(entry.info.provider, ModelProvider::DeepSeek);
-        assert_eq!(entry.info.api_backend, ApiBackend::ChatCompletions);
-        assert_eq!(entry.info.tool_mode, Some(ToolMode::Direct));
-        assert_eq!(entry.info.context_window.get(), 1_000_000);
+        assert_eq!(entries.len(), 2);
+
+        let pro = &entries["deepseek:deepseek-v4-pro"];
+        assert_eq!(pro.info.model, "deepseek-v4-pro");
+        assert_eq!(pro.info.provider, ModelProvider::DeepSeek);
+        assert_eq!(pro.info.api_backend, ApiBackend::ChatCompletions);
+        assert!(!pro.info.supports_backend_search);
+
+        let flash = &entries["deepseek:deepseek-v4-flash"];
+        assert_eq!(flash.info.model, "deepseek-v4-flash");
+        assert_eq!(flash.info.name.as_deref(), Some("DeepSeek V4 Flash 0731"));
+        assert_eq!(flash.info.api_backend, ApiBackend::Responses);
+        assert_eq!(flash.info.tool_mode, Some(ToolMode::Direct));
+        assert_eq!(flash.info.context_window.get(), 1_000_000);
+        assert_eq!(flash.info.max_completion_tokens, Some(384_000));
+        assert!(flash.info.supports_backend_search);
+        assert!(flash.info.supports_reasoning_effort);
+        assert_eq!(flash.info.reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(
-            entry.env_key.as_ref().and_then(EnvKeys::primary),
+            flash
+                .info
+                .reasoning_efforts
+                .iter()
+                .map(|option| option.value)
+                .collect::<Vec<_>>(),
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ]
+        );
+        assert_eq!(
+            flash.env_key.as_ref().and_then(EnvKeys::primary),
             Some(DEEPSEEK_API_KEY_ENV)
         );
     }

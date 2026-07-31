@@ -36,9 +36,10 @@ When Code Mode Only is effective:
 1. The Responses API exposes provider-compatible `exec`, the JSON-schema
    `wait` function tool, and Codex-style direct-only exceptions for human
    interaction and multi-agent lifecycle controls. Codex uses native
-   custom/freeform `exec`; xAI uses an ordinary function envelope.
-2. Codex native `exec` accepts raw JavaScript. xAI's function envelope carries
-   the same raw JavaScript in its required `source` string field.
+   custom/freeform `exec`; xAI and DeepSeek use an ordinary function envelope.
+2. Codex native `exec` accepts raw JavaScript. The xAI/DeepSeek function
+   envelope carries the same raw JavaScript in its required `source` string
+   field.
 3. Ordinary Grok Build tools remain registered but are hidden from the model's
    top-level tool list. JavaScript reaches them through the generated `tools.*`
    namespace.
@@ -60,8 +61,8 @@ When Code Mode Only is effective:
    `tools.web__run(...)`. Unsupported routes keep hosted search.
 
 An implementation that exposes Codex native `exec` as a JSON-schema function,
-sends native custom tools to xAI, or starts a fresh JavaScript process for every
-call is not compatible with this contract.
+sends unsupported native custom tools to xAI or DeepSeek, or starts a fresh
+JavaScript process for every call is not compatible with this contract.
 
 ## Configuration behavior
 
@@ -82,7 +83,8 @@ The resolved mode, precedence source, and provider transport are persisted for
 cold resume. Existing sessions therefore retain their policy after Settings or
 catalog drift, except that a current Codex model requirement still wins. Code
 Mode routes are capability-driven: `NativeCustomGrammar` for Codex,
-`FunctionEnvelope` for xAI, and fail-closed `Unsupported` elsewhere.
+`FunctionEnvelope` for xAI and DeepSeek Responses, and fail-closed
+`Unsupported` elsewhere.
 
 ## Implementation phases
 

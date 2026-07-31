@@ -196,24 +196,41 @@
       "description": "DeepSeek V4 Pro through the direct DeepSeek API",
       "base_url": "https://api.deepseek.com",
       "context_window": 1000000,
+      "max_completion_tokens": 384000,
       "api_backend": "chat_completions",
       "provider": "deepseek",
       "env_key": "DEEPSEEK_API_KEY",
       "tool_mode": "direct",
-      "supported_in_api": true
+      "supported_in_api": true,
+      "reasoning_effort": "high",
+      "supports_reasoning_effort": true,
+      "reasoning_efforts": [
+        { "value": "low", "description": "Faster responses with lighter reasoning" },
+        { "value": "high", "description": "DeepSeek's default reasoning level", "default": true },
+        { "value": "max", "description": "Maximum reasoning depth for difficult tasks" }
+      ]
     },
     {
       "id": "deepseek:deepseek-v4-flash",
       "model": "deepseek-v4-flash",
-      "name": "DeepSeek V4 Flash",
-      "description": "DeepSeek V4 Flash through the direct DeepSeek API",
+      "name": "DeepSeek V4 Flash 0731",
+      "description": "DeepSeek-V4-Flash-0731 through the direct DeepSeek Responses API",
       "base_url": "https://api.deepseek.com",
       "context_window": 1000000,
-      "api_backend": "chat_completions",
+      "max_completion_tokens": 384000,
+      "api_backend": "responses",
       "provider": "deepseek",
       "env_key": "DEEPSEEK_API_KEY",
       "tool_mode": "direct",
-      "supported_in_api": true
+      "supported_in_api": true,
+      "reasoning_effort": "high",
+      "supports_reasoning_effort": true,
+      "reasoning_efforts": [
+        { "value": "low", "description": "Faster responses with lighter reasoning" },
+        { "value": "high", "description": "DeepSeek's default reasoning level", "default": true },
+        { "value": "max", "description": "Maximum reasoning depth for difficult tasks" }
+      ],
+      "supports_backend_search": true
     },
     {
       "model": "gpt-5.6-sol",

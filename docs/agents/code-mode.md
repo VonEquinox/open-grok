@@ -16,7 +16,7 @@ Code Mode lets the model drive the agent through a **persistent in-process JavaS
 
 | Model-facing surface | Kind | Input |
 | --- | --- | --- |
-| `exec` | Provider-compatible Responses transport | Codex: raw JavaScript custom/freeform input. xAI: function arguments with required string `source`. Both accept the optional `// @exec: {...}` pragma inside the source. |
+| `exec` | Provider-compatible Responses transport | Codex: raw JavaScript custom/freeform input. xAI and DeepSeek: function arguments with required string `source`. All accept the optional `// @exec: {...}` pragma inside the source. |
 | `wait` | Ordinary **function** tool | JSON: `cell_id`, optional `yield_time_ms` / `max_tokens` / `terminate` |
 | Nested tools | JS `tools.*` | Same Grok tools, via host delegate |
 | Direct-only tools | Top-level functions | Human interaction + multi-agent lifecycle (Code Mode Only) |
@@ -163,17 +163,17 @@ for turns, compaction, forks, and context/token accounting. In
 3. If **Code Mode Only**: retain only `is_code_mode_direct_only_tool` names in the function tool list.
 4. If any Code Mode mode: push **`wait`** as a function `ToolSpec`.
 5. Apply provider hosted-tool filtering for Code Mode.
-6. Add **`exec`** with the provider capability from `ProviderProfile.code_mode_transport`: Codex receives a custom/freeform declaration; xAI receives a function schema with required `source`; unsupported providers fail before sampling.
+6. Add **`exec`** with the provider capability from `ProviderProfile.code_mode_transport`: Codex receives a custom/freeform declaration; xAI and DeepSeek receive a function schema with required `source`; unsupported providers fail before sampling.
 
-Codex `exec` uses a **Lark freeform grammar**. xAI's envelope is intentionally a
-JSON-schema function, but the `source` value is the same raw JavaScript consumed
-by the runtime.
+Codex `exec` uses a **Lark freeform grammar**. The xAI/DeepSeek envelope is
+intentionally a JSON-schema function, but the `source` value is the same raw
+JavaScript consumed by the runtime.
 
 Before serialization, `ConversationRequest::project_code_mode_for_provider`
-rewrites any persisted Codex-style `exec` declaration/history to xAI function
-calls and coalesces notifications plus the terminal result into one ordered
-function output. The sampler also rejects unsupported native custom content
-before either streaming or non-streaming network I/O.
+rewrites any persisted Codex-style `exec` declaration/history to function
+calls for xAI or DeepSeek and coalesces notifications plus the terminal result
+into one ordered function output. The sampler also rejects unsupported native
+custom content before either streaming or non-streaming network I/O.
 
 The same history normalization runs before Chat Completions and Anthropic
 Messages conversion, and before both Codex remote-compaction request variants.
@@ -197,7 +197,7 @@ for each model tool call:
 
 `execute_code_mode_control_call` (`turn.rs`):
 
-- Decodes Codex custom input directly or extracts xAI's required JSON `source` field; a mismatched call kind fails closed.
+- Decodes Codex custom input directly or extracts the xAI/DeepSeek required JSON `source` field; a mismatched call kind fails closed.
 - Records the control result into **chat history** (`custom_tool_output` or ordered function result).
 - **Does not** emit ACP tool-call cards for transport tools (`show_transport = false` when `is_code_mode_transport_tool`).
 
@@ -347,7 +347,7 @@ When Code Mode (either variant) is effective:
 | Requirement | Why |
 | --- | --- |
 | **Responses API** backend | Code Mode transport contract |
-| Provider-compatible **`exec`** | Codex custom/freeform raw JS; xAI function envelope with raw JS in `source` |
+| Provider-compatible **`exec`** | Codex custom/freeform raw JS; xAI/DeepSeek function envelope with raw JS in `source` |
 | Function **`wait`** with pinned schema | Resume / terminate cells |
 | Session-persistent V8 | `store`, multi-cell, yield/wait |
 | Nested tools full prepare path | Plan mode, hooks, permissions, hunks |
@@ -367,7 +367,7 @@ Full text: [`../code-mode-port.md`](../code-mode-port.md).
 When **Code Mode Only** is effective, the pin requires:
 
 1. Provider-compatible `exec`, function `wait`, direct-only human/multi-agent tools.
-2. Codex uses native raw-JS custom input; xAI uses a function envelope whose `source` contains raw JS.
+2. Codex uses native raw-JS custom input; xAI and DeepSeek use a function envelope whose `source` contains raw JS.
 3. Ordinary tools registered but hidden top-level; reachable via `tools.*`.
 4. Yield / wait / terminate cell semantics.
 5. Structured tool results across the JS boundary.
@@ -393,7 +393,7 @@ Deliberate Open Grok notes in the port doc: in-process V8 only; UI mirrors Codex
 | Turn / nested | Shell session tests + `tool_calls` behavior | Sink, prepare path |
 | Replay | `session/storage/mod.rs` `replay_hides_code_mode_transport_*` | Nested cards kept; wrappers dropped |
 | Settings | pager settings registry / modal tests for `code_mode` | Three enum choices, legacy bool migration, full-restart messaging |
-| Sampling types / sampler | Projection unit tests + captured Responses request tests | Codex native wire retained; xAI contains no custom type; invalid custom history fails pre-network |
+| Sampling types / sampler | Projection unit tests + captured Responses request tests | Codex native wire retained; xAI/DeepSeek contain no unsupported custom type; invalid custom history fails pre-network |
 
 ```sh
 cargo test --locked -p xai-grok-code-mode-protocol
@@ -410,7 +410,7 @@ Also exercise plan-mode nested edits and permission deny paths when changing the
 
 | Pitfall | Symptom |
 | --- | --- |
-| Send xAI the Codex native custom declaration | `cli-chat-proxy.grok.com` rejects the request |
+| Send xAI or DeepSeek the Codex native custom declaration | The provider rejects unsupported custom tools |
 | Send Codex a JSON-schema `exec` function | Sol model contract breaks |
 | New isolate / process per `exec` | Lost `store()`; broken multi-step scripts |
 | Nested `tools.exec` / re-entrant wait | Rejected or deadlocks; protocol forbids |

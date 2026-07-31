@@ -419,6 +419,42 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_mixed_mode_uses_function_exec_and_openai_hosted_search() {
+        let tools = vec![tool("read_file")];
+        let surface = EffectiveToolSurface::build(
+            tools.clone(),
+            &definitions(&tools),
+            &[
+                HostedTool::web_search(None),
+                HostedTool::XSearch { options: None },
+            ],
+            ToolMode::CodeMode,
+            ModelProvider::DeepSeek,
+            &ApiBackend::Responses,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            surface.code_mode_transport,
+            Some(CodeModeTransport::FunctionEnvelope)
+        );
+        assert_eq!(
+            surface
+                .function_tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["read_file", "exec", "wait"]
+        );
+        assert_eq!(surface.hosted_tools.len(), 1);
+        assert!(matches!(
+            surface.hosted_tools[0],
+            HostedTool::WebSearch { .. }
+        ));
+    }
+
+    #[test]
     fn xai_only_uses_function_exec_and_direct_only_functions() {
         let tools = vec![tool("read_file"), tool("request_user_input")];
         let surface = EffectiveToolSurface::build(

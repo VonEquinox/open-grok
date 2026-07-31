@@ -558,8 +558,8 @@ impl WebSearchCandidates {
         let target = WebSearchSourceTarget::for_provider(provider, self.kimi_endpoint);
         match self.effective_source_for(target) {
             WebSearchSource::Native => match provider {
-                // Codex native search is the hosted server-side declaration;
-                // no client tool. Kimi and Fireworks have no native search.
+                // Native hosted search is a server-side declaration, not a
+                // client tool. Providers without it still resolve disabled.
                 ModelProvider::Codex
                 | ModelProvider::Kimi
                 | ModelProvider::Fireworks
@@ -582,7 +582,7 @@ impl WebSearchCandidates {
         }
     }
 
-    /// Whether Codex's native hosted web-search declaration should be
+    /// Whether a provider's native hosted web-search declaration should be
     /// suppressed: an alternative source was selected AND actually resolved.
     /// If the chosen source is unavailable (missing credentials), the native
     /// declaration stays so the model keeps some search capability.
@@ -590,11 +590,14 @@ impl WebSearchCandidates {
         &self,
         provider: xai_grok_sampling_types::ModelProvider,
     ) -> bool {
-        provider == xai_grok_sampling_types::ModelProvider::Codex
-            && !matches!(
-                self.resolved_config_for(provider),
-                xai_grok_tools::implementations::web_search::WebSearchConfig::Disabled
-            )
+        matches!(
+            provider,
+            xai_grok_sampling_types::ModelProvider::Codex
+                | xai_grok_sampling_types::ModelProvider::DeepSeek
+        ) && !matches!(
+            self.resolved_config_for(provider),
+            xai_grok_tools::implementations::web_search::WebSearchConfig::Disabled
+        )
     }
 }
 

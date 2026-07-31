@@ -27,8 +27,8 @@ use xai_grok_sampler::{
 };
 use xai_grok_sampling_types::{
     ClientTool, ConversationItem, ConversationRequest, CustomToolOutputContent,
-    CustomToolOutputItem, DoomLoopRecoveryPolicy, HostedTool, ModelProvider, ReasoningSummary,
-    ToolCall, ToolSpec, UserItem,
+    CustomToolOutputItem, DoomLoopRecoveryPolicy, HostedTool, ModelProvider, ReasoningEffort,
+    ReasoningSummary, ToolCall, ToolSpec, UserItem,
 };
 use xai_grok_test_support::{SseEvent, sse};
 
@@ -1188,6 +1188,207 @@ async fn codex_responses_wire_has_live_web_search_sources_and_never_x_search() {
             "x_search must never be sent to Codex: {body}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deepseek_flash_responses_uses_stateless_wire_and_provider_key() {
+    use std::sync::Mutex;
+
+    let captured: Arc<Mutex<Vec<(HeaderMap, serde_json::Value)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let captured_handler = Arc::clone(&captured);
+    let app = Router::new().route(
+        "/v1/responses",
+        post(
+            move |headers: HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured = Arc::clone(&captured_handler);
+                async move {
+                    captured.lock().unwrap().push((headers, body));
+                    let events = vec![
+                        SseEvent::data(
+                            json!({
+                                "type": "response.reasoning_text.delta",
+                                "sequence_number": 0,
+                                "item_id": "reasoning_deepseek",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "delta": "deepseek reasoning"
+                            })
+                            .to_string(),
+                        ),
+                        SseEvent::data(
+                            json!({
+                                "type": "response.output_text.delta",
+                                "sequence_number": 1,
+                                "item_id": "message_deepseek",
+                                "output_index": 1,
+                                "content_index": 0,
+                                "delta": "deepseek answer"
+                            })
+                            .to_string(),
+                        ),
+                        SseEvent::data(
+                            json!({
+                                "type": "response.completed",
+                                "sequence_number": 2,
+                                "response": {
+                                    "id": "resp_deepseek",
+                                    "object": "response",
+                                    "created_at": 1,
+                                    "model": "deepseek-v4-flash",
+                                    "status": "completed",
+                                    "store": false,
+                                    "previous_response_id": null,
+                                    "parallel_tool_calls": true,
+                                    "output": [
+                                        {
+                                            "type": "reasoning",
+                                            "id": "reasoning_deepseek",
+                                            "summary": [],
+                                            "content": [{
+                                                "type": "reasoning_text",
+                                                "text": "deepseek reasoning"
+                                            }],
+                                            "status": "completed"
+                                        },
+                                        {
+                                            "type": "message",
+                                            "id": "message_deepseek",
+                                            "role": "assistant",
+                                            "status": "completed",
+                                            "content": [{
+                                                "type": "output_text",
+                                                "text": "deepseek answer",
+                                                "annotations": []
+                                            }]
+                                        }
+                                    ],
+                                    "usage": {
+                                        "input_tokens": 10,
+                                        "output_tokens": 8,
+                                        "total_tokens": 18,
+                                        "input_tokens_details": {"cached_tokens": 4},
+                                        "output_tokens_details": {"reasoning_tokens": 3}
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ];
+                    Sse::new(stream::iter(
+                        sse_events_to_axum(events)
+                            .into_iter()
+                            .map(Ok::<_, std::convert::Infallible>),
+                    ))
+                }
+            },
+        ),
+    );
+    let server = MockServer::spawn(app).await;
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    let mut config = responses_config(server.base_url(), None);
+    config.model = "deepseek-v4-flash".to_owned();
+    config.provider = ModelProvider::DeepSeek;
+    config.reasoning_effort = Some(ReasoningEffort::Max);
+    config.client_identifier = Some("must-not-leak".into());
+    config.client_version = Some("must-not-leak".into());
+    config.deployment_id = Some("must-not-leak".into());
+    config.user_id = Some("must-not-leak".into());
+
+    let mut request = ConversationRequest::from_items(vec![
+        ConversationItem::system("DeepSeek system instructions"),
+        ConversationItem::user("Use the tools if needed"),
+    ])
+    .with_tools(vec![ToolSpec {
+        name: "lookup".into(),
+        description: Some("Look up a value".into()),
+        parameters: json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }),
+    }]);
+    request.hosted_tools = vec![
+        HostedTool::web_search(None),
+        HostedTool::XSearch { options: None },
+    ];
+    request.x_grok_conv_id = Some("must-not-leak".into());
+    request.x_grok_req_id = Some("must-not-leak".into());
+    request.x_grok_session_id = Some("must-not-leak".into());
+    request.x_grok_agent_id = Some("must-not-leak".into());
+
+    let handle = SamplerActor::spawn(config, RetryPolicy::default(), event_tx);
+    let (response, _) = handle
+        .submit_and_collect(RequestId::from("req-deepseek-responses"), request)
+        .await
+        .expect("DeepSeek V4 Flash Responses request should complete");
+    server.shutdown();
+
+    assert_eq!(
+        response.assistant().map(|item| item.content.as_ref()),
+        Some("deepseek answer")
+    );
+    assert_eq!(
+        response
+            .reasoning_items()
+            .map(xai_grok_sampling_types::reasoning_item_text)
+            .collect::<Vec<_>>(),
+        vec!["deepseek reasoning"]
+    );
+    let usage = response.usage.as_ref().expect("DeepSeek usage");
+    assert_eq!(usage.cached_prompt_tokens, 4);
+    assert_eq!(usage.reasoning_tokens, 3);
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    let (headers, body) = &captured[0];
+    assert_eq!(
+        headers
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer test-key")
+    );
+    assert!(
+        headers
+            .keys()
+            .all(|name| !name.as_str().starts_with("x-grok-")),
+        "DeepSeek must not receive xAI-private headers: {headers:?}"
+    );
+    assert_eq!(body["model"], "deepseek-v4-flash");
+    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("max")));
+    assert!(body.pointer("/reasoning/summary").is_none());
+    for unsupported in [
+        "include",
+        "metadata",
+        "previous_response_id",
+        "prompt_cache_key",
+        "service_tier",
+        "store",
+    ] {
+        assert!(
+            body.get(unsupported).is_none(),
+            "DeepSeek stateless request must omit {unsupported}: {body}"
+        );
+    }
+    assert!(
+        body["input"].as_array().is_some_and(|input| input
+            .iter()
+            .any(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("system"))),
+        "DeepSeek supports system input directly and must not inherit Codex role projection: {body}"
+    );
+    let tools = body["tools"].as_array().expect("Responses tools array");
+    assert!(tools.iter().any(|tool| {
+        tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+            && tool.get("name").and_then(serde_json::Value::as_str) == Some("lookup")
+    }));
+    let hosted_search = tools
+        .iter()
+        .find(|tool| tool.get("type").and_then(serde_json::Value::as_str) == Some("web_search"))
+        .expect("DeepSeek native web_search declaration");
+    assert!(hosted_search.get("external_web_access").is_none());
+    assert!(
+        !body.to_string().contains("x_search"),
+        "xAI hosted tools must not cross into DeepSeek: {body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

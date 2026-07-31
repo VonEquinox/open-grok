@@ -29,7 +29,7 @@ Codex provider does not override an explicit model API key.
 | OpenAI Codex | Responses | Codex | OpenAI | yes | standard only | Codex OAuth | denied |
 | Kimi | Chat | none | client function tools | no | standard only | provider API key | denied |
 | Fireworks AI | Chat | none | client function tools | no | standard only | provider API key | denied |
-| DeepSeek direct | Chat | none | client function tools | no | standard only | provider API key | denied |
+| DeepSeek direct | Chat, Responses (V4 Flash) | DeepSeek | OpenAI | yes (V4 Flash) | standard only | provider API key | denied |
 | OpenCode Go | Chat, Messages | none | client function tools | no | standard only | provider API key | denied |
 
 The sampler's built-in `ProviderAdapter` registry applies the transport policy
@@ -43,9 +43,12 @@ hosted-tool dialect. The Fireworks AI adapter is a plain Chat Completions
 transport: standard sampling fields pass through unchanged and no hosted-tool
 dialect is advertised. Fireworks exposes a curated model list; its `/models`
 endpoint may enrich curated entries (context window) but can neither add nor
-remove models. The DeepSeek adapter uses ordinary Chat Completions and strips
-Open Grok's internal per-message model attribution before transport. Its live
-catalog intersects DeepSeek's `/models` response with curated direct entries.
+remove models. The DeepSeek adapter keeps V4 Pro on Chat Completions and routes
+`deepseek-v4-flash` through DeepSeek's stateless Responses dialect. It
+normalizes Open Grok's reasoning menu to `none`/`low`/`high`/`max`, exposes the
+OpenAI-shaped hosted `web_search`, and never inherits Codex cache, turn-state,
+OAuth, or compaction behavior. Its live catalog intersects DeepSeek's `/models`
+response with curated direct entries.
 OpenCode Go selects Chat Completions or Messages per model from canonical
 metadata rather than from provider identity alone.
 
