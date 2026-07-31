@@ -2194,35 +2194,6 @@ impl AuthManager {
         self.refresher.read().is_some()
     }
 
-    /// `true` iff nothing can heal the current credential without the user
-    /// re-authenticating. A *live state* query ("can a future refresh
-    /// succeed?"), deliberately separate from
-    /// `recovery::manual_auth_reason` (which buckets a terminal error
-    /// *value* for the KPI). Drives the "`/login` banner vs self-healing"
-    /// decision.
-    pub(crate) fn requires_manual_reauth(&self) -> bool {
-        use crate::auth::error::RefreshTokenError;
-        // Sticky IdP rejection of the credential a refresh would send:
-        // no retry can fix it.
-        if let Some(AuthError::Refresh(RefreshTokenError::Permanent(e))) = self.permanent_failure()
-            && e.reason.is_sticky()
-        {
-            return true;
-        }
-        // No refresh authority wired (static-key manager) → nothing can heal
-        // an expired credential silently.
-        if !self.has_refresher_attached() {
-            return true;
-        }
-        // A refreshable in-memory credential (OIDC RT / external binary) or a
-        // sibling's RT on disk lets a later refresh succeed without the user.
-        let mem_refreshable = self.token_type().is_refreshable();
-        let disk_refreshable = self
-            .read_disk_auth_silent()
-            .is_some_and(|a| a.refresh_token.is_some());
-        !(mem_refreshable || disk_refreshable)
-    }
-
     /// Test-only: age the cached `permanent_failure` past its TTL so
     /// the `permanent_failure()` getter treats it as expired.
     #[cfg(test)]
