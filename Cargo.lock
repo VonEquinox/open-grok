@@ -13515,6 +13515,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xai-grok-extra-ca"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.24",
+ "rustls",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "xai-grok-hooks"
 version = "0.1.0"
 dependencies = [
