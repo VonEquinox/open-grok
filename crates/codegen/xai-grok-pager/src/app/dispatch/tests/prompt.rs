@@ -3145,8 +3145,13 @@ fn minimal_mode_blocks_fullscreen_pane_slash_command() {
         "the gate should commit exactly one system block"
     );
     assert!(
-        last_system_text(&app, AgentId(0)).contains("not available in minimal mode"),
+        last_system_text(&app, AgentId(0)).starts_with("/find isn't available in minimal mode"),
         "got: {:?}",
+        last_system_text(&app, AgentId(0))
+    );
+    assert!(
+        last_system_text(&app, AgentId(0)).contains("Run /fullscreen"),
+        "the refusal must name the way out, got: {:?}",
         last_system_text(&app, AgentId(0))
     );
 }
