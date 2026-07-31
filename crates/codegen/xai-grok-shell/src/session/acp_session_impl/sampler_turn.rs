@@ -1638,6 +1638,29 @@ impl SessionActor {
         } else {
             error.kind.as_str()
         };
+        let (error_type, detailed_message) = if error_type == "auth"
+            && self
+                .auth_manager
+                .as_ref()
+                .is_some_and(|am| !am.requires_manual_reauth())
+        {
+            xai_grok_telemetry::unified_log::info(
+                "auth: turn failure downgraded to auth_transient (refreshable credential present)",
+                Some(self.session_info.id.0.as_ref()),
+                Some(serde_json::json!({ "status_code": error.status_code })),
+            );
+            (
+                "auth_transient",
+                format!(
+                    "{detailed_message}\n\nAuthentication is temporarily unavailable \
+                     (often a network blip right after wake). Your session is still \
+                     signed in and will recover automatically — retry in a few seconds; \
+                     no need to run /login."
+                ),
+            )
+        } else {
+            (error_type, detailed_message)
+        };
         self.log_terminal_failure(
             error_type,
             error.status_code,

@@ -488,6 +488,14 @@ impl acp::Agent for MvpAgent {
                     ),
                 );
                 has_cached_token = true;
+            } else if !self.auth_manager.requires_manual_reauth() {
+                tracing::info!("auth: silent refresh failed transiently; advertising cached_token");
+                xai_grok_telemetry::unified_log::info(
+                    "auth: initialize() silent refresh failed transiently, keeping cached_token",
+                    None,
+                    None,
+                );
+                has_cached_token = true;
             } else {
                 tracing::warn!(
                     "auth: token expired, silent refresh failed - re-authentication required"
@@ -892,7 +900,44 @@ impl acp::Agent for MvpAgent {
                         }
                     }
                 }
-                let Some(auth) = self.auth_manager.current() else {
+                if self.auth_manager.current().is_none()
+                    && self.auth_manager.is_expired()
+                {
+                    let am = self.auth_manager.clone();
+                    let refresh = tokio::spawn(async move { am.auth().await });
+                    match tokio::time::timeout(
+                            crate::http::STARTUP_AUTH_REFRESH_TIMEOUT,
+                            refresh,
+                        )
+                        .await
+                    {
+                        Ok(Ok(Ok(_))) => {}
+                        outcome => {
+                            tracing::debug!(
+                                timed_out = outcome.is_err(),
+                                "auth: cached_token pre-check refresh did not produce a token (yet)"
+                            )
+                        }
+                    }
+                }
+                let resolved = self
+                    .auth_manager
+                    .current()
+                    .or_else(|| {
+                        if self.auth_manager.is_expired()
+                            && !self.auth_manager.requires_manual_reauth()
+                        {
+                            xai_grok_telemetry::unified_log::info(
+                                "auth cached_token: accepting expired-but-refreshable session",
+                                None,
+                                None,
+                            );
+                            self.auth_manager.current_or_expired()
+                        } else {
+                            None
+                        }
+                    });
+                let Some(auth) = resolved else {
                     let message = if self.auth_manager.is_expired() {
                         "Session expired, re-authentication required"
                     } else {
