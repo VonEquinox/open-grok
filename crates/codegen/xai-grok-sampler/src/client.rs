@@ -1561,7 +1561,9 @@ impl SamplingClient {
                         })
                         .flatten()
                 }),
-            None => Self::sent_fragment_from_headers(&self.default_headers, &self.defaults.auth_scheme),
+            None => {
+                Self::sent_fragment_from_headers(&self.default_headers, &self.defaults.auth_scheme)
+            }
         }
     }
 
