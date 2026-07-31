@@ -2127,6 +2127,17 @@ pub struct ConversationResponse {
     /// the wire (Messages `message_delta.stop_details.explanation`); `None`
     /// otherwise and on backends that don't report one.
     pub stop_message: Option<String>,
+    /// Provider message id (Messages `message.id`); `None` on backends that do
+    /// not carry one (OAI Chat Completions / Responses).
+    pub message_id: Option<String>,
+    /// Verbatim wire stop reason before it collapses into [`StopReason`]
+    /// (e.g. `end_turn`, `tool_use`, `pause_turn`); `None` when unreported.
+    pub raw_stop_reason: Option<String>,
+    /// The provider's matched stop sequence (Messages API
+    /// `message_delta.stop_sequence`), present only when the model stopped on a
+    /// configured stop sequence; `None` otherwise and on backends that do not
+    /// report one (OAI Chat Completions / Responses).
+    pub stop_sequence: Option<String>,
 }
 
 /// Normalize a wire cost-ticks value at capture.
@@ -9770,6 +9781,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(response.is_empty());
 
@@ -9782,6 +9796,9 @@ mod tests {
             message_chunks_emitted: 1,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(!response.is_empty());
 
@@ -9798,6 +9815,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(!response.is_empty());
     }
@@ -9820,6 +9840,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(
             response.is_empty(),
@@ -9841,6 +9864,9 @@ mod tests {
             message_chunks_emitted: 1,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(
             !response.is_empty(),
@@ -9866,6 +9892,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(
             !response.is_empty(),
@@ -9894,6 +9923,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
 
         let calls = response.tool_calls();
@@ -9914,6 +9946,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert_eq!(
             response.fallback_text().as_deref(),
@@ -9933,6 +9968,9 @@ mod tests {
             message_chunks_emitted: 42,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(response.fallback_text().is_none());
     }
@@ -9948,6 +9986,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(response.fallback_text().is_none());
     }
@@ -9967,6 +10008,9 @@ mod tests {
             message_chunks_emitted: 0, // only reasoning chunks were streamed
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert_eq!(
             response.fallback_text().as_deref(),
@@ -9989,6 +10033,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert!(response.fallback_text().is_none());
     }
@@ -11472,6 +11519,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         }
     }
 
@@ -11522,6 +11572,9 @@ mod tests {
             message_chunks_emitted: 0,
             doom_loop_signals: Vec::new(),
             stop_message: None,
+            message_id: None,
+            raw_stop_reason: None,
+            stop_sequence: None,
         };
         assert_eq!(
             response.empty_reason(),

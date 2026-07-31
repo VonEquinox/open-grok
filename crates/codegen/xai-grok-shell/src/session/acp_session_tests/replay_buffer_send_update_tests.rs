@@ -669,6 +669,9 @@ async fn completed_event_clears_slot_keeps_prior_uncommitted_segments() {
                         message_chunks_emitted: 0,
                         doom_loop_signals: Vec::new(),
                         stop_message: None,
+                        message_id: None,
+                        raw_stop_reason: None,
+                        stop_sequence: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -744,6 +747,9 @@ async fn completed_event_releases_stream_drain_barrier() {
                         message_chunks_emitted: 1,
                         doom_loop_signals: Vec::new(),
                         stop_message: None,
+                        message_id: None,
+                        raw_stop_reason: None,
+                        stop_sequence: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -876,6 +882,9 @@ async fn observe_only_confident_completion_stays_warn_only() {
                     "tail_repetition:8@thinking",
                 )],
                 stop_message: None,
+                message_id: None,
+                raw_stop_reason: None,
+                stop_sequence: None,
             };
             actor
                 .handle_sampling_event(SamplingEvent::Completed {
@@ -976,6 +985,9 @@ async fn doom_loop_recovery_stamps_capture_segments_and_counters() {
                     "tail_repetition:4@thinking",
                 )],
                 stop_message: None,
+                message_id: None,
+                raw_stop_reason: None,
+                stop_sequence: None,
             };
             actor
                 .handle_sampling_event(SamplingEvent::Completed {
