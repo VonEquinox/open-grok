@@ -78,10 +78,11 @@ impl WebSearchClient {
                 )
             }
         };
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .map_err(|_| web_search_error("Failed to initialize web search client"))?;
+        let http = xai_grok_extra_ca::with_extra_root_certificates(
+            reqwest::Client::builder().default_headers(headers),
+        )
+        .build()
+        .map_err(|_| web_search_error("Failed to initialize web search client"))?;
         Ok(Self {
             http,
             base_url,
@@ -657,11 +658,11 @@ mod tests {
         let client = WebSearchClient::new(&config, None)
             .expect("client should build")
             .with_attribution_callback(Some(cb_dyn));
-        client.record_401_attribution(Some("bearer-with-long-tail-aaaaaaaaaa"));
+        client.record_401_attribution(Some("bearer-with-long-tail-aaaadistinct"));
         let calls = cb.invocations.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, ToolConsumer::WebSearch);
-        assert_eq!(calls[0].1.as_deref(), Some("bearer-with-"));
+        assert_eq!(calls[0].1.as_deref(), Some("aaaadistinct"));
         assert_eq!(
             calls[0].1.as_deref().map(str::len),
             Some(crate::attribution::SENT_BEARER_PREFIX_LEN),
