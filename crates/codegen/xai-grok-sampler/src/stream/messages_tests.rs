@@ -59,6 +59,7 @@ fn message_delta_with_stop(stop: messages::StopReason) -> MessageStreamEvent {
         delta: MessageDeltaBody {
             stop_reason: Some(stop),
             stop_details: None,
+            stop_sequence: None,
         },
         usage: MessageDeltaUsage {
             output_tokens: 5,
@@ -80,6 +81,7 @@ fn message_delta_refusal_with_explanation(explanation: &str) -> MessageStreamEve
                 category: Some("frontier_llm".to_string()),
                 explanation: Some(explanation.to_string()),
             }),
+            stop_sequence: None,
         },
         usage: MessageDeltaUsage {
             output_tokens: 0,
@@ -575,6 +577,7 @@ fn message_delta_with_cache(
         delta: MessageDeltaBody {
             stop_reason: Some(messages::StopReason::EndTurn),
             stop_details: None,
+            stop_sequence: None,
         },
         usage: MessageDeltaUsage {
             output_tokens: output,

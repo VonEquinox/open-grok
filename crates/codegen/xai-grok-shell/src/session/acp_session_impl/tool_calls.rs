@@ -3043,6 +3043,29 @@ impl SessionActor {
                 })
                 .await;
             }
+            SamplingEvent::ResponseStarted {
+                message_id,
+                model,
+                input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                ..
+            } => {
+                self.send_buffered_xai_update(XaiSessionUpdate::ResponseStarted {
+                    message_id: Some(message_id),
+                    model: Some(model),
+                    input_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                })
+                .await;
+            }
+            SamplingEvent::ReasoningCompleted { signature, .. } => {
+                self.send_buffered_xai_update(XaiSessionUpdate::ReasoningCompleted {
+                    signature: Some(signature),
+                })
+                .await;
+            }
             SamplingEvent::Completed {
                 response, metrics, ..
             } => {
