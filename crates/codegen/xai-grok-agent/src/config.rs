@@ -789,7 +789,7 @@ pub struct AgentDefinition {
     pub isolation: Option<IsolationMode>,
     #[serde(default)]
     pub background: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_agent_color")]
     pub color: Option<AgentColor>,
     #[serde(default)]
     pub initial_prompt: Option<String>,
@@ -1056,11 +1056,13 @@ const _: () =
     Eq,
     Deserialize,
     serde::Serialize,
+    AsRefStr,
+    EnumString,
     IntoStaticStr,
     strum::EnumCount,
 )]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum AgentColor {
     Red,
     Blue,
@@ -1077,6 +1079,35 @@ impl AgentColor {
     ];
 }
 const _: () = assert!(AgentColor::VALID_VALUES.len() == <AgentColor as strum::EnumCount>::COUNT);
+/// Never fails: `color` is decorative, but a rejected value fails the whole
+/// frontmatter parse, and discovery skips agents that fail to parse — so a
+/// typo'd or hex color would silently make the agent unspawnable.
+///
+/// Frontmatter is only ever decoded by `serde_yaml`, so the intermediate value
+/// is captured as `serde_yaml::Value` (total for YAML — tagged scalars and
+/// maps with non-string keys included, which have no `serde_json::Value`
+/// form). Unrecognized values are dropped to `None` with a warning rather
+/// than mapped to a stand-in color the author never wrote.
+fn deserialize_agent_color<'de, D>(deserializer: D) -> Result<Option<AgentColor>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use std::str::FromStr;
+    let Some(value) = Option::<serde_yaml::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let parsed = value
+        .as_str()
+        .and_then(|name| AgentColor::from_str(name.trim()).ok());
+    if parsed.is_none() {
+        tracing::warn!(
+            color = ?value,
+            valid = ?AgentColor::VALID_VALUES,
+            "unrecognized agent color, ignoring"
+        );
+    }
+    Ok(parsed)
+}
 /// Agent memory scope. Distinct from `storage::MemoryScope` (global-vs-workspace write target).
 #[derive(
     Debug,
