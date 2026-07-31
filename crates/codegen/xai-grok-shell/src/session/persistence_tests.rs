@@ -23,7 +23,7 @@ fn test_actor_with_remote_sync(
     remote_sync: Option<RemoteSync>,
 ) -> ActorGuard {
     let (tx, rx) = mpsc::unbounded_channel();
-    let summary_tx = tx.clone();
+    let summary_tx = tx.downgrade();
     let provider_boundary = ProviderBoundary::default();
     let sampling_client = OaiCompatClient::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
     let task = tokio::spawn(

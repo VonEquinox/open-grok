@@ -1761,6 +1761,23 @@ impl PersistenceHandle {
     }
 }
 
+fn actor_channel(
+    provider_boundary: ProviderBoundary,
+) -> (
+    PersistenceHandle,
+    mpsc::UnboundedReceiver<PersistenceMsg>,
+    mpsc::WeakUnboundedSender<PersistenceMsg>,
+) {
+    let (tx, rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+    let weak = tx.downgrade();
+    let handle = PersistenceHandle {
+        tx,
+        provider_boundary,
+        noop: false,
+    };
+    (handle, rx, weak)
+}
+
 enum PendingAppendOutcome {
     CommittedOk(acp::SessionNotification),
     CommittedErr(acp::SessionNotification, io::Error),
@@ -2774,13 +2791,8 @@ pub(crate) async fn new(
         .then_some(registry_title_sync)
         .flatten();
 
-    let (tx, rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+    let (handle, rx, summary_tx) = actor_channel(provider_boundary.clone());
     let info_clone = info.clone();
-    let handle = PersistenceHandle {
-        tx: tx.clone(),
-        provider_boundary: provider_boundary.clone(),
-        noop: false,
-    };
 
     tokio::task::spawn(async move {
         let persistence = SessionPersistence {
@@ -2797,7 +2809,7 @@ pub(crate) async fn new(
                 crate::session::summary::SummaryConfig {
                     sampling_client,
                     model: session_summary_model,
-                    persistence_tx: tx,
+                    persistence_tx: summary_tx,
                 },
             ),
             registry_title_sync,
@@ -2852,13 +2864,8 @@ pub async fn new_with_explicit_dir(
         initialize_provider_boundary(storage.as_ref(), info, &mut summary, current_provider)
             .await?;
 
-    let (tx, rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+    let (handle, rx, summary_tx) = actor_channel(provider_boundary.clone());
     let info_clone = info.clone();
-    let handle = PersistenceHandle {
-        tx: tx.clone(),
-        provider_boundary: provider_boundary.clone(),
-        noop: false,
-    };
 
     tokio::task::spawn(async move {
         let persistence = SessionPersistence {
@@ -2875,7 +2882,7 @@ pub async fn new_with_explicit_dir(
                 crate::session::summary::SummaryConfig {
                     sampling_client,
                     model: session_summary_model,
-                    persistence_tx: tx,
+                    persistence_tx: summary_tx,
                 },
             ),
             registry_title_sync: None,
@@ -2994,20 +3001,15 @@ pub(crate) async fn load(
         .then_some(registry_title_sync)
         .flatten();
 
-    let (tx, rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+    let (handle, rx, summary_tx) = actor_channel(provider_boundary.clone());
 
     let has_title = !persisted_info.summary.display_title().is_empty();
-    let handle = PersistenceHandle {
-        tx: tx.clone(),
-        provider_boundary: provider_boundary.clone(),
-        noop: false,
-    };
     tokio::task::spawn(async move {
         let mut summary_gen = crate::session::summary::SummaryGenerator::new(
             crate::session::summary::SummaryConfig {
                 sampling_client,
                 model: session_summary_model,
-                persistence_tx: tx,
+                persistence_tx: summary_tx,
             },
         );
         if has_title {
@@ -3104,20 +3106,15 @@ pub(crate) async fn load_light(
         .then_some(registry_title_sync)
         .flatten();
 
-    let (tx, rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+    let (handle, rx, summary_tx) = actor_channel(provider_boundary.clone());
 
     let has_title = !persisted_info.summary.display_title().is_empty();
-    let handle = PersistenceHandle {
-        tx: tx.clone(),
-        provider_boundary: provider_boundary.clone(),
-        noop: false,
-    };
     tokio::task::spawn(async move {
         let mut summary_gen = crate::session::summary::SummaryGenerator::new(
             crate::session::summary::SummaryConfig {
                 sampling_client,
                 model: session_summary_model,
-                persistence_tx: tx,
+                persistence_tx: summary_tx,
             },
         );
         if has_title {
@@ -4940,6 +4937,27 @@ mod repo_wide_resolution_tests {
         assert_eq!(
             deser.resolution_kind,
             LocalSessionResolutionKind::SameRepoDifferentCwd
+        );
+    }
+}
+
+#[cfg(test)]
+mod actor_lifetime_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropping_the_session_handle_closes_the_actor_channel() {
+        let (handle, mut rx, summary_tx) = actor_channel(ProviderBoundary::default());
+
+        drop(handle);
+
+        assert!(
+            summary_tx.upgrade().is_none(),
+            "the generator's sender must not keep the channel open"
+        );
+        assert!(
+            rx.recv().await.is_none(),
+            "the actor's receive loop must end once the session drops its handle"
         );
     }
 }

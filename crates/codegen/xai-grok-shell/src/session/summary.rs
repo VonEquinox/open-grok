@@ -27,7 +27,8 @@ pub(crate) struct SummaryConfig {
     pub(crate) sampling_client: OaiCompatClient,
     pub(crate) model: String,
     /// Channel back to the persistence actor for sequential storage writes.
-    pub(crate) persistence_tx: mpsc::UnboundedSender<PersistenceMsg>,
+    /// Weak: a strong sender here would keep the actor's own channel and task alive.
+    pub(crate) persistence_tx: mpsc::WeakUnboundedSender<PersistenceMsg>,
 }
 
 /// Manages session title generation with explicit lifecycle state.
@@ -90,7 +91,12 @@ impl SummaryGenerator {
                     // actor persists it (only if the session has no title yet)
                     // and notifies the client there, so a title rejected for
                     // racing a manual `/rename` never reaches the client.
-                    let _ = persistence_tx.send(PersistenceMsg::GeneratedTitle(title));
+                    match persistence_tx.upgrade() {
+                        Some(tx) => {
+                            let _ = tx.send(PersistenceMsg::GeneratedTitle(title));
+                        }
+                        None => tracing::debug!("session closed before its title was generated"),
+                    }
                 });
             }
         }
