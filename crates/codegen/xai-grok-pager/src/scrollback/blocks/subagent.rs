@@ -18,8 +18,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::appearance::AppearanceConfig;
 use crate::app::subagent::format_subagent_meta;
+use crate::appearance::AppearanceConfig;
 use crate::render::color::blend_color;
 use crate::render::line_utils::truncate_str;
 use crate::scrollback::block::BlockContent;

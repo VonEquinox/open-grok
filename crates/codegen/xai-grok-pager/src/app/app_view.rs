@@ -6228,7 +6228,8 @@ pub(crate) mod tests {
         assert_eq!(parse_esc_ttl(Some("garbage".into())), default);
         assert_eq!(parse_esc_ttl(Some("".into())), default);
         assert_eq!(parse_esc_ttl(Some("0".into())), default);
-        assert_eq!(parse_esc_ttl(Some("-5".into())), default);        assert_eq!(
+        assert_eq!(parse_esc_ttl(Some("-5".into())), default);
+        assert_eq!(
             parse_esc_ttl(Some(" 1200 ".into())),
             Duration::from_millis(1200)
         );
