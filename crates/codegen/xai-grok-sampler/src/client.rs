@@ -3445,6 +3445,10 @@ mod tests {
                 validate_responses_wire_body_for_provider(&body, ModelProvider::Xai),
                 Err(SamplingError::InvalidConfiguration(_))
             ));
+            assert!(matches!(
+                validate_responses_wire_body_for_provider(&body, ModelProvider::DeepSeek),
+                Err(SamplingError::InvalidConfiguration(_))
+            ));
             validate_responses_wire_body_for_provider(&body, ModelProvider::Codex)
                 .expect("Codex supports native custom Responses content");
         }
@@ -4021,6 +4025,31 @@ mod tests {
             ..minimal_config()
         };
         assert!(SamplingClient::new(config).is_ok());
+    }
+
+    #[test]
+    fn deepseek_accepts_chat_and_responses_clients() {
+        for backend in [ApiBackend::ChatCompletions, ApiBackend::Responses] {
+            let config = SamplerConfig {
+                provider: ModelProvider::DeepSeek,
+                api_backend: backend,
+                ..minimal_config()
+            };
+            assert!(
+                SamplingClient::new(config).is_ok(),
+                "DeepSeek must accept {backend:?}"
+            );
+        }
+
+        let config = SamplerConfig {
+            provider: ModelProvider::DeepSeek,
+            api_backend: ApiBackend::Messages,
+            ..minimal_config()
+        };
+        assert!(matches!(
+            SamplingClient::new(config),
+            Err(SamplingError::InvalidConfiguration(_))
+        ));
     }
 
     #[test]

@@ -1097,13 +1097,15 @@ pub enum ModelProvider {
 
 /// Provider-specific wire contract used by the Responses API.
 ///
-/// This remains separate from [`ApiBackend`]: both built-in providers use the
+/// This remains separate from [`ApiBackend`]: multiple providers use the
 /// Responses endpoint, but they require different request and replay shapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsesDialect {
     Xai,
     Codex,
+    /// DeepSeek's native OpenAI-compatible Responses API (V4 Flash and later).
+    /// Stateless (`store: false`), with DeepSeek-owned reasoning-effort mapping.
     DeepSeek,
 }
 

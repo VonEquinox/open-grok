@@ -1623,6 +1623,10 @@ impl ConversationRequest {
                     (Some(crate::ResponsesDialect::Xai), BackendToolKind::XSearch(call)) => {
                         Some(x_search_call_wire_value(call))
                     }
+                    // DeepSeek Responses has no opaque provider-native history
+                    // carriers today; keep the match explicit so new dialects
+                    // fail closed until their replay contract is defined.
+                    (Some(crate::ResponsesDialect::DeepSeek), _) => None,
                     _ => None,
                 };
                 if let Some(value) = value {
@@ -13095,6 +13099,12 @@ mod tests {
             assert_eq!(replacements[0].input_item_index, case.expected_index);
             assert_eq!(replacements[0].value["type"], case.expected_type);
         }
+        assert!(
+            request
+                .raw_responses_input_replacements(crate::ModelProvider::DeepSeek)
+                .is_empty(),
+            "DeepSeek Responses must not replay xAI or Codex opaque history"
+        );
     }
 
     #[test]
