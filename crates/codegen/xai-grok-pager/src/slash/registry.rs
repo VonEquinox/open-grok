@@ -14,6 +14,7 @@ use xai_grok_tools::implementations::skills::types::SkillScope;
 
 use super::acp_command::AcpSlashCommand;
 use super::command::SlashCommand;
+use super::mode_support::ModeSupport;
 
 fn client_collision_qualified_name(
     cmd: &agent_client_protocol::AvailableCommand,
@@ -212,6 +213,15 @@ impl CommandRegistry {
             .filter(|cmd| !self.hidden.contains(cmd.name()))
             .filter(|cmd| !self.restricted_match(cmd))
             .filter(|cmd| self.tools_satisfied(cmd))
+    }
+
+    /// Declared modes for `key` (canonical name or alias), unfiltered by any
+    /// runtime gate.
+    pub(crate) fn mode_support(&self, key: &str) -> ModeSupport {
+        self.commands
+            .iter()
+            .find(|cmd| cmd.name() == key || cmd.aliases().contains(&key))
+            .map_or(ModeSupport::Both, |cmd| cmd.mode_support())
     }
 
     /// Normalize a deny-list entry: trim, strip one leading `/`, lowercase.

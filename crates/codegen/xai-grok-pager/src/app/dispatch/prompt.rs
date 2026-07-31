@@ -691,15 +691,15 @@ pub(super) fn dispatch_send_prompt_inner(
                     });
                 }
                 if let Some(command) = command {
-                    if ctx.screen_mode.is_minimal() && !command.available_in_minimal() {
-                        // Central minimal gate: commands that drive the deleted
-                        // fullscreen pane / dashboard (/find, /dashboard, …)
-                        // have nothing to act on in scrollback-native mode.
-                        // Surface a friendly system block instead of running them.
-                        CommandResult::Message(format!(
-                            "/{} is not available in minimal mode",
-                            invocation.token
-                        ))
+                    // Central screen-mode gate. Such a command is already
+                    // filtered out of every completion surface, but it stays
+                    // resolvable so a fully-typed invocation earns a hint that
+                    // names the way out instead of leaking to the model.
+                    if let Some(refusal) = command
+                        .mode_support()
+                        .refusal(invocation.token, ctx.screen_mode)
+                    {
+                        CommandResult::Message(refusal)
                     } else {
                         agent
                             .prompt

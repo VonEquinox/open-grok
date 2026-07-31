@@ -84,9 +84,4 @@ mod tests {
             CommandResult::Action(Action::ShowTasks)
         ));
     }
-
-    #[test]
-    fn available_in_minimal_by_default() {
-        assert!(TasksCommand.available_in_minimal());
-    }
 }

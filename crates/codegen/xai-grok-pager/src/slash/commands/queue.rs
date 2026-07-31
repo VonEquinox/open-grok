@@ -83,9 +83,4 @@ mod tests {
         let sid = agent_client_protocol::SessionId::from("s1".to_string());
         ctx_with_session(&models, Some(&sid));
     }
-
-    #[test]
-    fn available_in_minimal_by_default() {
-        assert!(QueueCommand.available_in_minimal());
-    }
 }
