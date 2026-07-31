@@ -4925,7 +4925,9 @@ fn mark_message_cache_breakpoint(msg: &mut crate::messages::Message) -> bool {
                     | ContentBlock::ToolResult { cache_control, .. }
                     | ContentBlock::Image { cache_control, .. }
                     | ContentBlock::ToolUse { cache_control, .. } => cache_control,
-                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => continue,
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                        continue;
+                    }
                 };
                 *cache_control = Some(CacheControl::ephemeral());
                 return true;

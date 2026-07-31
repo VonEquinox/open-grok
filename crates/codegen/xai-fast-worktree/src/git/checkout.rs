@@ -991,7 +991,8 @@ mod tests {
         std::fs::write(wt.join("lf.txt"), "a\nb\n").unwrap();
 
         let snap =
-            snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/roundtrip", "round trip").unwrap();
+            snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/roundtrip", "round trip")
+                .unwrap();
         let base = git_capture_in(&repo_path, &["rev-parse", &format!("{snap}^")], &[]).unwrap();
 
         // Dispose of the worktree dir; only the ref/objects survive.
@@ -1053,7 +1054,8 @@ mod tests {
         // Build a PARENTLESS commit holding the same working state, so its `^`
         // never resolves — exercising the base-unreachable fallback without
         // depending on gc to prune a real base.
-        let snap = snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/orphan-src", "src").unwrap();
+        let snap =
+            snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/orphan-src", "src").unwrap();
         let tree = git_capture_in(&wt, &["rev-parse", &format!("{snap}^{{tree}}")], &[]).unwrap();
         let ident = [
             ("GIT_AUTHOR_NAME", "T"),
@@ -1131,7 +1133,8 @@ mod tests {
         let (repo_path, wt) = repo_with_worktree(&temp);
 
         std::fs::write(wt.join("tracked.txt"), "edited").unwrap();
-        let snap = snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/stalereg", "stale").unwrap();
+        let snap =
+            snapshot_worktree_to_ref(&wt, "refs/open-grok/snapshots/stalereg", "stale").unwrap();
         crate::remove_worktree(&wt).unwrap();
 
         rehydrate_worktree_from_ref(&wt, &repo_path, &snap, None).unwrap();
