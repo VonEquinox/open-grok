@@ -626,16 +626,18 @@ impl SessionActor {
                         Ok(tool_result) => !tool_result.output.is_error(),
                         Err(_) => false,
                     };
+                    let duration_ms = exec_start.elapsed().as_millis() as u64;
                     xai_grok_telemetry::unified_log::info(
                         "shell.tool.exec_done",
                         Some(session_id.as_ref()),
                         Some(serde_json::json!({
                             "tool_name": prepared.tool_name.as_str(),
-                            "elapsed_ms": exec_start.elapsed().as_millis() as u64,
+                            "tool_call_id": prepared.call_id.as_str(),
+                            "elapsed_ms": duration_ms,
                             "success": success,
                         })),
                     );
-                    (idx, result)
+                    (idx, result, duration_ms)
                 }
             })
             .collect();
@@ -646,7 +648,11 @@ impl SessionActor {
         }
         let mut approved_slots: Vec<Option<PreparedToolCall>> =
             approved.into_iter().map(Some).collect();
-        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::unbounded_channel::<(usize, _)>();
+        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::unbounded_channel::<(
+            usize,
+            Result<ToolRunResult, xai_tool_runtime::ToolError>,
+            u64,
+        )>();
         let drainer = tokio::spawn(async move {
             while let Some(item) = dispatch_stream.next().await {
                 if dispatch_tx.send(item).is_err() {
@@ -655,12 +661,26 @@ impl SessionActor {
             }
         });
         let _drainer_guard = crate::util::AbortOnDrop(drainer);
-        while let Some((idx, mut result)) = dispatch_rx.recv().await {
+        while let Some((idx, mut result, mut duration_ms)) = dispatch_rx.recv().await {
             let prepared = approved_slots[idx]
                 .take()
                 .expect("dispatch index should match an approved slot exactly once");
             self.signals_handle().record_tool_call(&prepared.tool_name);
-            let tool_start = self.events.tool_started(prepared.tool_name.clone());
+            let tool_call_id = if prepared.call_id.is_empty() {
+                tracing::warn!(
+                    tool = %prepared.tool_name,
+                    batch_idx = idx,
+                    "tool call id empty; synthesizing join key"
+                );
+                format!("missing-call-id-{idx}")
+            } else {
+                prepared.call_id.clone()
+            };
+            self.events.tool_started(
+                prepared.tool_name.clone(),
+                tool_call_id.clone(),
+                duration_ms,
+            );
             let mut post_tool_use_result: Option<serde_json::Value> = None;
             if let Some((server, _)) =
                 crate::session::mcp_servers::parse_mcp_tool_name(&prepared.tool_name)
@@ -676,8 +696,16 @@ impl SessionActor {
                     }
                 };
                 if auth_rejected && self.reactive_managed_reauth(&server).await.is_ok() {
+                    let retry_start = std::time::Instant::now();
                     result = dispatch_tool(&self.workspace_ops, &prepared, &self.session_info.id.0)
                         .await;
+                    duration_ms =
+                        duration_ms.saturating_add(retry_start.elapsed().as_millis() as u64);
+                    self.events.tool_started(
+                        prepared.tool_name.clone(),
+                        tool_call_id.clone(),
+                        duration_ms,
+                    );
                 }
             }
             let tool_result_size_bytes = match &result {
@@ -812,13 +840,17 @@ impl SessionActor {
                     crate::session::events::ToolOutcome::InvalidTool
                 }
             };
-            let duration_ms = tool_start.elapsed().as_millis() as u64;
-            self.signals_handle()
-                .record_tool_duration(&prepared.tool_name, duration_ms);
+            self.signals_handle().record_tool_duration(
+                &prepared.tool_name,
+                &tool_call_id,
+                duration_ms,
+            );
             self.emit_event(crate::session::events::Event::ToolCompleted {
                 tool_name: prepared.tool_name.clone(),
                 duration_ms,
                 outcome: tool_outcome,
+                tool_call_id: tool_call_id.clone(),
+                source: crate::session::events::ToolCompletedSource::Shell,
             });
             self.observability_bridge
                 .emit(
@@ -1015,7 +1047,7 @@ impl SessionActor {
             )
             .await;
         self.signals_handle().record_tool_call(&prepared.tool_name);
-        let tool_started_at = self.events.tool_started(prepared.tool_name.clone());
+        let tool_started_at = std::time::Instant::now();
         let dispatch = || {
             dispatch_tool(
                 &self.workspace_ops,
@@ -1145,12 +1177,22 @@ impl SessionActor {
             crate::session::events::ToolOutcome::Error
         };
         self.events.tool_finished();
-        self.signals_handle()
-            .record_tool_duration(&prepared.tool_name, duration_ms);
+        self.events.tool_started(
+            prepared.tool_name.clone(),
+            prepared.call_id.clone(),
+            duration_ms,
+        );
+        self.signals_handle().record_tool_duration(
+            &prepared.tool_name,
+            &prepared.call_id,
+            duration_ms,
+        );
         self.emit_event(crate::session::events::Event::ToolCompleted {
             tool_name: prepared.tool_name.clone(),
             duration_ms,
             outcome,
+            tool_call_id: prepared.call_id.clone(),
+            source: crate::session::events::ToolCompletedSource::Shell,
         });
         self.observability_bridge
             .emit(
@@ -3140,13 +3182,18 @@ impl SessionActor {
                 result,
                 ..
             } => {
-                self.signals_handle().record_tool_success(&name);
+                let status = backend_tool_call_status(result.as_ref());
+                if status == acp::ToolCallStatus::Failed {
+                    self.signals_handle().record_tool_failure(&name);
+                } else {
+                    self.signals_handle().record_tool_success(&name);
+                }
                 let (title, _kind, _raw_input) = backend_tool_display(&name);
                 self.send_update(
                     acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
                         acp::ToolCallId::new(Arc::from(call_id.as_str())),
                         acp::ToolCallUpdateFields::new()
-                            .status(Some(acp::ToolCallStatus::Completed))
+                            .status(Some(status))
                             .title(Some(title))
                             .raw_output(result),
                     )),

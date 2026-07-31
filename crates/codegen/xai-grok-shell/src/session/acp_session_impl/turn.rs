@@ -2024,7 +2024,7 @@ impl SessionActor {
             )
             .await;
         self.signals_handle().record_tool_call(&call.name);
-        let started_at = self.events.tool_started(call.name.clone());
+        let started_at = std::time::Instant::now();
 
         let runtime = &self.rebuild_spec.code_mode_runtime;
         let exec_source = crate::session::tool_surface::code_mode_exec_source(call, transport);
@@ -2104,12 +2104,16 @@ impl SessionActor {
             .await;
         }
         self.events.tool_finished();
+        self.events
+            .tool_started(call.name.clone(), ui_call_id.clone(), duration_ms);
         self.signals_handle()
-            .record_tool_duration(&call.name, duration_ms);
+            .record_tool_duration(&call.name, &ui_call_id, duration_ms);
         self.emit_event(crate::session::events::Event::ToolCompleted {
             tool_name: call.name.clone(),
             duration_ms,
             outcome,
+            tool_call_id: ui_call_id.clone(),
+            source: crate::session::events::ToolCompletedSource::Shell,
         });
         self.observability_bridge
             .emit(
@@ -2687,6 +2691,7 @@ impl SessionActor {
                 );
             }
             self.record_response_token_usage(&response, Some(model_duration_ms));
+            let response_completed = self.response_completed_update(&response);
             if let Some(pt) = prompt_timing.take() {
                 let mcp_count = self.mcp_state.lock().await.configs.len() as u32;
                 let mcp_tools = self
@@ -2770,6 +2775,7 @@ impl SessionActor {
                 )
                 .await;
             }
+            self.send_buffered_xai_update(response_completed).await;
             if tool_calls.is_empty() {
                 if !schema_ok
                     && !turn_refused
