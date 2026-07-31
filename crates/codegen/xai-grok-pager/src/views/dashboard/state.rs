@@ -2207,6 +2207,10 @@ impl DashboardState {
                 self.settings_modal = None;
                 InputOutcome::Action(action)
             }
+            SettingsKeyOutcome::ActionThenClose(action) => {
+                self.settings_modal = None;
+                InputOutcome::Action(action)
+            }
             SettingsKeyOutcome::ActionPair(first, second) => {
                 InputOutcome::ActionPair(first, second)
             }

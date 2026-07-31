@@ -145,30 +145,32 @@ fn handle_picking_enum(state: &mut SettingsModalState, key: &KeyEvent) -> Settin
             // `action_for_string` already knows how to resolve via
             // `snapshot.resolve_model_name` AND treats the empty
             // canonical as a `Clear*` sentinel.
+            let close = std::mem::take(&mut state.close_on_picker_exit);
+            if !close {
+                state.transition_to_browse();
+            }
             let kind_is_dynamic = matches!(
                 state.registry.find(setting_key).map(|m| &m.kind),
                 Some(SettingKind::DynamicEnum { .. })
             );
-            let kimi_provider_login = state.entry_point == SettingsEntryPoint::ProviderLogin
+            let commit = if kind_is_dynamic {
+                picker_choice_at_owned(state, setting_key, choices_idx).and_then(|canonical| {
+                    action_for_string(setting_key, canonical, &state.pager_snapshot)
+                })
+            } else {
+                picker_choice_at(state, setting_key, choices_idx)
+                    .and_then(|c| action_for_enum_commit(setting_key, c))
+            };
+            let kimi_provider_login = !close
+                && state.entry_point == SettingsEntryPoint::ProviderLogin
                 && setting_key == "kimi_api_endpoint";
-            state.transition_to_browse();
-            if kind_is_dynamic {
-                let Some(canonical) = picker_choice_at_owned(state, setting_key, choices_idx)
+            if kimi_provider_login {
+                // Advance to the matching zeroizing secret editor. Deep-link
+                // armed pickers never take this route (they close instead).
+                let Some(current_canonical) = picker_choice_at(state, setting_key, choices_idx)
                 else {
                     return SettingsKeyOutcome::Changed;
                 };
-                if let Some(action) =
-                    action_for_string(setting_key, canonical, &state.pager_snapshot)
-                {
-                    return SettingsKeyOutcome::Action(action);
-                }
-                return SettingsKeyOutcome::Changed;
-            }
-            let Some(current_canonical) = picker_choice_at(state, setting_key, choices_idx) else {
-                return SettingsKeyOutcome::Changed;
-            };
-            let action = action_for_enum_commit(setting_key, current_canonical);
-            if kimi_provider_login {
                 if !state.advance_kimi_provider_login_to_secret(current_canonical) {
                     tracing::error!(
                         target: "settings",
@@ -177,14 +179,16 @@ fn handle_picking_enum(state: &mut SettingsModalState, key: &KeyEvent) -> Settin
                     );
                     return SettingsKeyOutcome::Changed;
                 }
-                return action
+                return commit
                     .map(SettingsKeyOutcome::Action)
                     .unwrap_or(SettingsKeyOutcome::Changed);
             }
-            if let Some(action) = action {
-                return SettingsKeyOutcome::Action(action);
+            match (close, commit) {
+                (true, Some(action)) => SettingsKeyOutcome::ActionThenClose(action),
+                (true, None) => SettingsKeyOutcome::Close,
+                (false, Some(action)) => SettingsKeyOutcome::Action(action),
+                (false, None) => SettingsKeyOutcome::Changed,
             }
-            SettingsKeyOutcome::Changed
         }
         KeyCode::Esc => {
             if state.entry_point == SettingsEntryPoint::ProviderLogin
@@ -192,15 +196,26 @@ fn handle_picking_enum(state: &mut SettingsModalState, key: &KeyEvent) -> Settin
             {
                 return SettingsKeyOutcome::Close;
             }
+            let close = std::mem::take(&mut state.close_on_picker_exit);
+            if !close {
+                state.transition_to_browse();
+            }
             // Revert preview and return to Browse. Non-preview Enums
             // skip the revert (no live visual was applied).
-            state.transition_to_browse();
             if let SettingValue::Enum(orig) = &original_value
                 && let Some(action) = action_for_enum(setting_key, orig)
             {
-                return SettingsKeyOutcome::Action(action);
+                return if close {
+                    SettingsKeyOutcome::ActionThenClose(action)
+                } else {
+                    SettingsKeyOutcome::Action(action)
+                };
             }
-            SettingsKeyOutcome::Changed
+            if close {
+                SettingsKeyOutcome::Close
+            } else {
+                SettingsKeyOutcome::Changed
+            }
         }
         // `d` reset: close picker, revert preview if applicable,
         // then open the reset-confirm overlay. Consent choosers opt out of
@@ -1234,6 +1249,7 @@ pub fn handle_settings_mouse(
     ) && let Some(rect) = state.settings_breadcrumb_rect
         && rect_contains(rect, column, row)
     {
+        state.close_on_picker_exit = false;
         let synthetic = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         match state.state.mode_kind() {
             SettingsModeKind::PickingEnum => {

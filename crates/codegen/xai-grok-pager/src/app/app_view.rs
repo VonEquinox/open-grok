@@ -1363,47 +1363,6 @@ fn privacy_banner_reshow_elapsed(acked_at: &str, reshow_days: Option<u64>) -> bo
     };
     chrono::Utc::now() >= next
 }
-/// Welcome-screen toast overlay (mirrors agent toast style).
-///
-/// Prefer one row above the prompt, right-aligned to it. Fall back to
-/// the view bottom-right when no prompt rect is available (login / gate).
-fn paint_welcome_toast(
-    buf: &mut ratatui::buffer::Buffer,
-    area: ratatui::layout::Rect,
-    msg: &str,
-    prompt_rect: Option<ratatui::layout::Rect>,
-) {
-    let theme = crate::theme::Theme::current();
-    let max_msg = (area.width as usize).saturating_sub(4);
-    if max_msg == 0 || area.height == 0 {
-        return;
-    }
-    let toast = if msg.chars().count() <= max_msg {
-        format!(" {msg} ")
-    } else {
-        let truncated: String = msg.chars().take(max_msg.saturating_sub(1)).collect();
-        format!(" {}… ", truncated.trim_end())
-    };
-    let w = toast.chars().count() as u16;
-    let (x, y) = if let Some(prompt) = prompt_rect.filter(|r| r.width > 0 && r.y > area.y) {
-        let max_x = area.right().saturating_sub(w).max(area.x);
-        let x = prompt.right().saturating_sub(w + 1).clamp(area.x, max_x);
-        (x, prompt.y.saturating_sub(1))
-    } else {
-        (
-            area.right().saturating_sub(w + 1),
-            area.bottom().saturating_sub(1),
-        )
-    };
-    for (i, ch) in toast.chars().enumerate() {
-        if let Some(cell) = buf.cell_mut((x + i as u16, y)) {
-            cell.set_char(ch);
-            cell.fg = theme.accent_user;
-            cell.bg = theme.bg_base;
-            cell.modifier = ratatui::prelude::Modifier::BOLD;
-        }
-    }
-}
 impl AppView {
     /// Cancel an automatic Kimi sampler refresh after an authoritative user or
     /// remote switch moved the tab to a different provider.
@@ -2401,13 +2360,14 @@ impl AppView {
             }
             ActiveView::AgentDashboard => {
                 if let Some(d) = self.dashboard.as_mut() {
-                    d.error_toast = Some(crate::glyphs::legacy_glyph_fallback(msg).into_owned());
+                    d.error_toast = Some(crate::glyphs::sanitize_toast_message(msg).into_owned());
                 }
             }
             ActiveView::Welcome => {
-                let msg = crate::glyphs::legacy_glyph_fallback(msg).into_owned();
-                self.welcome_toast =
-                    Some((msg, std::time::Instant::now() + WELCOME_TOAST_DURATION));
+                self.welcome_toast = Some((
+                    crate::glyphs::sanitize_toast_message(msg).into_owned(),
+                    std::time::Instant::now() + WELCOME_TOAST_DURATION,
+                ));
             }
         }
     }
@@ -4936,7 +4896,7 @@ impl AppView {
                         self.welcome_privacy_banner_policy_rect = result.privacy_banner_policy_rect;
                         self.welcome_changelog_cta_rect = result.changelog_cta_rect;
                         if let Some((ref msg, _)) = self.welcome_toast {
-                            paint_welcome_toast(
+                            crate::views::welcome::paint_welcome_toast(
                                 f.buffer_mut(),
                                 view_area,
                                 msg,
@@ -6245,14 +6205,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn welcome_show_toast_scrubs_control_chars() {
+        let mut app = test_app();
+        assert!(matches!(app.active_view, ActiveView::Welcome));
+        app.show_toast("a\nb\rc\thttps://x.ai");
+        let toast = app
+            .welcome_toast
+            .as_ref()
+            .map(|(m, _)| m.as_str())
+            .unwrap_or("");
+        assert!(
+            !toast.chars().any(|c| c.is_control()),
+            "control chars must be scrubbed at write: {toast:?}"
+        );
+        assert!(toast.contains("https://x.ai"), "{toast:?}");
+    }
+
+    #[test]
     fn parse_esc_ttl_bounds() {
         let default = PendingAction::ESC_DOUBLE_PRESS_TTL;
         assert_eq!(parse_esc_ttl(None), default);
         assert_eq!(parse_esc_ttl(Some("garbage".into())), default);
         assert_eq!(parse_esc_ttl(Some("".into())), default);
         assert_eq!(parse_esc_ttl(Some("0".into())), default);
-        assert_eq!(parse_esc_ttl(Some("-5".into())), default);
-        assert_eq!(
+        assert_eq!(parse_esc_ttl(Some("-5".into())), default);        assert_eq!(
             parse_esc_ttl(Some(" 1200 ".into())),
             Duration::from_millis(1200)
         );

@@ -296,6 +296,27 @@ pub fn timeline_chevron_down() -> &'static str {
     }
 }
 
+/// `"━"` (U+2501 HEAVY HORIZONTAL) normally, `"─"` (U+2500 LIGHT
+/// HORIZONTAL, CP437 `0xC4`) on legacy ConHost. Always 1 column wide.
+///
+/// Prefer [`timeline_tick_active`] for the sidebar rail — on legacy ConHost
+/// this falls back to the same light stroke used for hover.
+pub fn heavy_horizontal() -> &'static str {
+    if is_legacy_windows_console() {
+        "\u{2500}"
+    } else {
+        "\u{2501}"
+    }
+}
+
+/// `"─"` (U+2500 LIGHT HORIZONTAL, CP437 `0xC4`). Always 1 column wide and
+/// present on every target, but exposed here so the timeline sidebar's
+/// inactive ticks share one glyph source with [`heavy_horizontal`] instead
+/// of hardcoding the codepoint.
+pub fn light_horizontal() -> &'static str {
+    "\u{2500}"
+}
+
 /// Precomposed 2-col active tick for the timeline rail: `"━━"` normally,
 /// `"══"` (U+2550 BOX DRAWINGS DOUBLE HORIZONTAL, CP437 `0xCD`) on legacy
 /// ConHost — distinct from the light hover/idle stroke there.
@@ -459,6 +480,21 @@ pub fn legacy_glyph_fallback(s: &str) -> Cow<'_, str> {
         return Cow::Borrowed(s);
     }
     Cow::Owned(to_legacy_glyphs(s))
+}
+
+/// Single-row toast sinks: glyph fallback, then map control chars to spaces.
+/// Borrows when the input is already clean (common path).
+pub fn sanitize_toast_message(msg: &str) -> Cow<'_, str> {
+    let glyph = legacy_glyph_fallback(msg);
+    if !glyph.chars().any(char::is_control) {
+        return glyph;
+    }
+    Cow::Owned(
+        glyph
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect(),
+    )
 }
 
 /// Pure glyph → legacy-safe mapping behind [`legacy_glyph_fallback`], split
@@ -711,6 +747,22 @@ mod tests {
             legacy_glyph_fallback("\u{2713} Saved"),
             Cow::Borrowed("\u{2713} Saved")
         ));
+    }
+
+    #[test]
+    fn sanitize_toast_message_borrows_when_clean() {
+        assert!(!is_legacy_windows_console());
+        assert!(matches!(
+            sanitize_toast_message("plain toast"),
+            Cow::Borrowed("plain toast")
+        ));
+    }
+
+    #[test]
+    fn sanitize_toast_message_maps_controls_to_spaces() {
+        let out = sanitize_toast_message("a\nb\tc");
+        assert_eq!(out.as_ref(), "a b c");
+        assert!(!out.chars().any(char::is_control));
     }
 
     #[test]

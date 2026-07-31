@@ -2030,6 +2030,10 @@ pub(super) fn apply_settings_outcome(
             agent.active_modal = None;
             InputOutcome::Action(a)
         }
+        SettingsKeyOutcome::ActionThenClose(a) => {
+            agent.active_modal = None;
+            InputOutcome::Action(a)
+        }
         SettingsKeyOutcome::ActionPair(a, b) => InputOutcome::ActionPair(a, b),
         SettingsKeyOutcome::Changed => InputOutcome::Changed,
         SettingsKeyOutcome::Unchanged => InputOutcome::Unchanged,
