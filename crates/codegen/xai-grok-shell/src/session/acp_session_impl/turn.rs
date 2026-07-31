@@ -920,6 +920,7 @@ impl SessionActor {
         .await;
         let turn_scope_guard =
             TurnSubagentScopeGuard::new(self.current_prompt_id.clone(), prompt_id.to_string());
+        self.open_subagent_spawn_admission();
         let turn_model_id = self.current_model_id().await;
         let doom_event_model = turn_model_id.clone();
         let turn_timer = std::time::Instant::now();
@@ -1273,7 +1274,7 @@ impl SessionActor {
             result,
             Ok(TurnOutcome::Cancelled { .. }) | Ok(TurnOutcome::MaxTurnsReached { .. })
         ) {
-            self.cancel_running_turn_subagents();
+            self.cancel_running_turn_subagents(prompt_id);
         }
         self.flush_to_disk().await;
         self.file_state_tracker

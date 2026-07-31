@@ -233,6 +233,9 @@ fn harness_with_options(
         .run(),
     );
     Harness {
+        // Unbound by default so tests can set request.parent_session_id
+        // freely (e.g. nested reparent). ParentSession APIs must use
+        // `parent_backend` so they stay session-scoped.
         backend: ChannelBackend::new(command_tx),
         start,
         finish,
@@ -241,6 +244,12 @@ fn harness_with_options(
         started,
         actor,
     }
+}
+
+/// Session-bound backend for ParentSession cancel / admission on the default
+/// test parent (`"parent"`). Required because unbound cancel is rejected.
+fn parent_backend(harness: &Harness) -> ChannelBackend {
+    ChannelBackend::for_session(harness.backend.sender(), "parent")
 }
 
 async fn loop_unit_active(backend: &ChannelBackend, task_id: &str) -> bool {
@@ -1006,6 +1015,156 @@ async fn usage_events_feed_sorted_outstanding_reply() {
     for spawn in spawns {
         assert!(spawn.await.unwrap().unwrap().cancelled);
     }
+    harness.actor.abort();
+}
+
+/// Prior-turn background + current-turn children all die on ParentSession cancel (GBT-4942).
+#[tokio::test]
+async fn cancel_parent_session_kills_prior_turn_background() {
+    let mut harness = harness(true, std::time::Duration::from_secs(60));
+    let mut prior = request("prior-bg", true);
+    prior.parent_prompt_id = Some("turn-1".into());
+    let mut current = request("current", false);
+    current.parent_prompt_id = Some("turn-2".into());
+    let mut spawns = Vec::new();
+    for req in [prior, current] {
+        let id = req.id.clone();
+        spawns.push(tokio::spawn({
+            let backend = harness.backend.clone();
+            async move { backend.spawn(req).await }
+        }));
+        assert_eq!(
+            harness
+                .requests
+                .recv()
+                .await
+                .as_ref()
+                .map(|r| r.id.as_str()),
+            Some(id.as_str())
+        );
+        let _ = harness.start.send(());
+        assert_eq!(harness.started.recv().await.as_deref(), Some(id.as_str()));
+    }
+    assert!(matches!(
+        parent_backend(&harness).cancel_parent_session().await,
+        SubagentCancelOutcome::Cancelled
+    ));
+    for spawn in spawns {
+        assert!(
+            spawn.await.unwrap().unwrap().cancelled,
+            "ParentSession cancel must kill prior-turn and current-turn children"
+        );
+    }
+    harness.actor.abort();
+}
+
+/// A foreign session's children must not die when this session Stop fires.
+#[tokio::test]
+async fn cancel_parent_session_does_not_touch_foreign_session() {
+    let mut harness = harness(true, std::time::Duration::from_secs(60));
+    let mut foreign = request("foreign-child", true);
+    foreign.parent_session_id = "other-session".into();
+    let foreign_spawn = tokio::spawn({
+        let backend = ChannelBackend::for_session(harness.backend.sender(), "other-session");
+        async move { backend.spawn(foreign).await }
+    });
+    assert_eq!(
+        harness
+            .requests
+            .recv()
+            .await
+            .as_ref()
+            .map(|r| r.id.as_str()),
+        Some("foreign-child")
+    );
+    let _ = harness.start.send(());
+    assert_eq!(
+        harness.started.recv().await.as_deref(),
+        Some("foreign-child")
+    );
+
+    assert!(matches!(
+        parent_backend(&harness).cancel_parent_session().await,
+        SubagentCancelOutcome::Cancelled
+    ));
+    // Foreign child still running — finish it successfully.
+    let _ = harness.finish.send(());
+    let result = foreign_spawn.await.unwrap().unwrap();
+    assert!(result.success && !result.cancelled);
+    harness.actor.abort();
+}
+
+/// Unbound backend must not wildcard-cancel (rejects before send).
+#[tokio::test]
+async fn cancel_parent_session_unbound_backend_is_not_found() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let unbound = ChannelBackend::new(tx);
+    assert!(matches!(
+        unbound.cancel_parent_session().await,
+        SubagentCancelOutcome::NotFound
+    ));
+}
+
+/// Late Task spawn after ParentSession cancel is rejected until admission reopens.
+#[tokio::test]
+async fn cancel_parent_session_rejects_late_spawn_until_admission_reopens() {
+    let mut harness = harness(true, std::time::Duration::from_secs(60));
+    let bound = parent_backend(&harness);
+    let prior = tokio::spawn({
+        let backend = harness.backend.clone();
+        async move { backend.spawn(request("prior", true)).await }
+    });
+    assert_eq!(
+        harness
+            .requests
+            .recv()
+            .await
+            .as_ref()
+            .map(|r| r.id.as_str()),
+        Some("prior")
+    );
+    let _ = harness.start.send(());
+    assert_eq!(harness.started.recv().await.as_deref(), Some("prior"));
+
+    assert!(matches!(
+        bound.cancel_parent_session().await,
+        SubagentCancelOutcome::Cancelled
+    ));
+    assert!(prior.await.unwrap().unwrap().cancelled);
+
+    // Late Task spawn is rejected by the coordinator gate (request still carries
+    // parent="parent" via unbound backend + request default).
+    let late = harness
+        .backend
+        .spawn(request("late-after-stop", true))
+        .await
+        .unwrap();
+    assert!(
+        late.cancelled && !late.success,
+        "late Task spawn after ParentSession must be rejected"
+    );
+
+    assert!(bound.open_spawn_admission());
+    let allowed = tokio::spawn({
+        let backend = harness.backend.clone();
+        async move { backend.spawn(request("after-reopen", true)).await }
+    });
+    assert_eq!(
+        harness
+            .requests
+            .recv()
+            .await
+            .as_ref()
+            .map(|r| r.id.as_str()),
+        Some("after-reopen")
+    );
+    let _ = harness.start.send(());
+    assert_eq!(
+        harness.started.recv().await.as_deref(),
+        Some("after-reopen")
+    );
+    let _ = harness.finish.send(());
+    assert!(allowed.await.unwrap().unwrap().success);
     harness.actor.abort();
 }
 

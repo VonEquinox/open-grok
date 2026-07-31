@@ -49,6 +49,10 @@ pub struct SubagentCoordinator<R: ChildRunner> {
     completed_order: VecDeque<String>,
     waiters: HashMap<String, Vec<BlockingWaiter>>,
     workflow_cancel_waiters: HashMap<String, Vec<oneshot::Sender<SubagentCancelOutcome>>>,
+    /// Parent sessions that received `ParentSession` cancel. Non-workflow spawns
+    /// are rejected until [`SubagentEvent::OpenSpawnAdmission`] (next turn) or
+    /// teardown, so a detached late `TaskTool` spawn cannot outrun Stop.
+    spawn_blocked_sessions: HashSet<String>,
     usage_not_applied_prompts: HashSet<PromptScope>,
     pending_completions: Vec<BufferedCompletion>,
     runs: FuturesUnordered<
@@ -95,6 +99,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             completed_order: VecDeque::new(),
             waiters: HashMap::new(),
             workflow_cancel_waiters: HashMap::new(),
+            spawn_blocked_sessions: HashSet::new(),
             usage_not_applied_prompts: HashSet::new(),
             pending_completions: Vec::new(),
             runs: FuturesUnordered::new(),
@@ -195,6 +200,23 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         request.runtime_overrides.loop_task_id = loop_task_id;
                     }
                 }
+                // Late Task spawn after user Stop (detached TaskTool background).
+                if !request.owner.is_workflow()
+                    && self
+                        .spawn_blocked_sessions
+                        .contains(&request.parent_session_id)
+                {
+                    let id = request.id.clone();
+                    let _ = command.result_tx.send(SubagentResult {
+                        success: false,
+                        cancelled: true,
+                        error: Some("parent session is stopped".to_owned()),
+                        subagent_id: id.clone(),
+                        child_session_id: id,
+                        ..Default::default()
+                    });
+                    return;
+                }
                 let id = request.id.clone();
                 if self.pending.contains_key(&id)
                     || self.active.contains_key(&id)
@@ -261,6 +283,10 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     self.cancel_parent_prompt(&prompt_id, request.parent_session_id.as_deref());
                     let _ = request.respond_to.send(SubagentCancelOutcome::Cancelled);
                 }
+                SubagentCancelTarget::ParentSession => {
+                    let outcome = self.cancel_parent_session(request.parent_session_id.as_deref());
+                    let _ = request.respond_to.send(outcome);
+                }
                 SubagentCancelTarget::WorkflowRunId(run_id) => {
                     self.cancel_workflow_children(&run_id, request.parent_session_id.as_deref());
                     if workflow_outstanding(&self.pending, &self.active, &run_id) == 0 {
@@ -309,7 +335,11 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             SubagentEvent::TeardownSession { parent_session_id } => {
                 self.pending_completions
                     .retain(|completion| completion.parent_session_id != parent_session_id);
+                self.spawn_blocked_sessions.remove(&parent_session_id);
                 self.teardown_session_children(&parent_session_id);
+            }
+            SubagentEvent::OpenSpawnAdmission { parent_session_id } => {
+                self.spawn_blocked_sessions.remove(&parent_session_id);
             }
             SubagentEvent::Outstanding(request) => {
                 // Reap again here so turn-freeze / Outstanding polls see
@@ -733,6 +763,34 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                 child.cancellation.cancel();
             }
         }
+    }
+
+    /// All non-workflow children for the parent session (user Stop / Esc).
+    ///
+    /// Requires a concrete session id — unbound (`None`) is rejected so a
+    /// wildcard cannot cancel every session on a shared coordinator.
+    fn cancel_parent_session(&mut self, parent_session_id: Option<&str>) -> SubagentCancelOutcome {
+        let Some(parent_session_id) = parent_session_id else {
+            return SubagentCancelOutcome::NotFound;
+        };
+        self.spawn_blocked_sessions
+            .insert(parent_session_id.to_owned());
+        for child in self.active.values() {
+            if child.request.parent_session_id == parent_session_id
+                && !child.request.owner.is_workflow()
+            {
+                child.cancellation.cancel();
+                child.control.cancel();
+            }
+        }
+        for child in self.pending.values() {
+            if child.request.parent_session_id == parent_session_id
+                && !child.request.owner.is_workflow()
+            {
+                child.cancellation.cancel();
+            }
+        }
+        SubagentCancelOutcome::Cancelled
     }
 
     fn teardown_session_children(&mut self, parent_session_id: &str) {
