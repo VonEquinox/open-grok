@@ -281,6 +281,7 @@ impl From<&xai_grok_tools::types::ToolInput> for AccessKind {
             | ToolInput::KillTask(_)
             | ToolInput::Skill(_) => AccessKind::Read(None),
             ToolInput::WebSearch(ws) => AccessKind::WebSearch(ws.query.clone()),
+            ToolInput::WebRun(commands) => AccessKind::WebSearch(commands.summary()),
             ToolInput::SearchReplace(search_replace) => {
                 AccessKind::Edit(search_replace.file_path.to_string())
             }
@@ -430,6 +431,8 @@ pub struct Sourced<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xai_grok_tools::implementations::grok_build::web_run::{SearchCommands, SearchQuery};
+    use xai_grok_tools::types::ToolInput;
     #[test]
     fn permission_event_subagent_fields_default_to_none() {
         let json = r#"{
@@ -637,6 +640,22 @@ mod tests {
         assert!(
             matches!(access, AccessKind::WebSearch(ref q) if q == "rust lang"),
             "WebSearch should produce AccessKind::WebSearch with the query, got {access:?}"
+        );
+    }
+    #[test]
+    fn web_run_maps_to_web_search_access() {
+        let input = ToolInput::WebRun(SearchCommands {
+            search_query: Some(vec![SearchQuery {
+                q: "Open Grok".into(),
+                recency: None,
+                domains: None,
+            }]),
+            ..Default::default()
+        });
+        let access = AccessKind::from(&input);
+        assert!(
+            matches!(access, AccessKind::WebSearch(ref query) if query == "Open Grok"),
+            "WebRun should produce AccessKind::WebSearch with the query, got {access:?}"
         );
     }
     #[test]

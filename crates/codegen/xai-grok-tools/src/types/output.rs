@@ -621,6 +621,10 @@ pub struct SearchToolOutput {
     pub result_count: usize,
     pub content: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebRunOutput {
+    pub output: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, derive_more::From)]
 #[serde(tag = "type")]
 pub enum ToolOutput {
@@ -632,6 +636,7 @@ pub enum ToolOutput {
     SearchReplace(SearchReplaceOutput),
     Todo(TodoWriteOutput),
     WebSearch(WebSearchOutput),
+    WebRun(WebRunOutput),
     WebFetch(WebFetchOutput),
     MCP(MCPOutput),
     TaskOutput(TaskOutputOutput),
@@ -689,6 +694,7 @@ impl ToolOutput {
             })),
             ToolOutput::Dynamic(output) => Ok(output.value.clone()),
             ToolOutput::Text(output) => Ok(serde_json::Value::String(output.text.clone())),
+            ToolOutput::WebRun(output) => Ok(serde_json::Value::String(output.output.clone())),
             ToolOutput::Bash(output) => Ok(serde_json::json!({
                 "output": String::from_utf8_lossy(&output.output),
                 "exit_code": output.exit_code,
@@ -827,6 +833,7 @@ impl ToolOutput {
                     )
                 }
             }
+            ToolOutput::WebRun(output) => output.output.clone(),
             ToolOutput::WebFetch(o) => o.to_prompt_format(),
             ToolOutput::MCP(mcp_output) => match &mcp_output.output {
                 MCPOutputDetails::Error(error) => {
@@ -1326,6 +1333,7 @@ impl xai_tool_runtime::ToolOutput for ListDirOutput {}
 impl xai_tool_runtime::ToolOutput for SearchReplaceOutput {}
 impl xai_tool_runtime::ToolOutput for TodoWriteOutput {}
 impl xai_tool_runtime::ToolOutput for WebSearchOutput {}
+impl xai_tool_runtime::ToolOutput for WebRunOutput {}
 impl xai_tool_runtime::ToolOutput for WebFetchOutput {}
 impl xai_tool_runtime::ToolOutput for SkillOutput {}
 impl xai_tool_runtime::ToolOutput for ApplyPatchOutput {}

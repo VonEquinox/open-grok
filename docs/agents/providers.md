@@ -123,6 +123,11 @@ Also isolated:
 10. **xAI media / Imagine** must not receive another provider's credential; hide media tools outside eligible xAI sessions.
 11. **Hosted search** is dialect-scoped: xAI web/X search vs OpenAI `web_search`. Optional client search fallbacks are declared only when the provider profile permits them. Never infer this from model names or URLs.
 12. **Opaque history** (e.g. Codex compaction carriers, xAI-only items) is projected only by the matching dialect.
+13. **Standalone search is route-scoped.** Official Codex OAuth Responses
+    routes default to the provider-local `/alpha/search` endpoint. API-key and
+    custom Responses routes must opt in with
+    `supports_standalone_web_search = true`; when unavailable, hosted search
+    remains declared.
 
 ## Sampling, routing, compaction
 
@@ -162,6 +167,8 @@ When Code Mode is effective (a Codex Code Mode Only requirement beats Settings):
 4. Persistent V8 for a compatible timeline; reset on rewind/provider boundaries and disposed on session end.
 5. UI hides transport; shows nested tools.
 6. Requires Responses-backed models.
+7. A supported native Codex route exposes `web__run` through `tools.*` and
+   suppresses hosted search only after that client tool is registered.
 
 Codex sessions use Codex file tools (`apply_patch`, …) where the toolset selects them; Grok sessions use `search_replace`. Shared multi-agent / plan / goal / scheduler features remain available across providers when the harness supports them.
 

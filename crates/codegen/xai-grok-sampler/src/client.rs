@@ -43,6 +43,7 @@ use crate::provider::{
     ProviderAdapter, ProviderRequestHeaders as GrokRequestHeaders, ResponsesRequestPolicy,
     X_CODEX_TURN_STATE_HEADER, provider_adapter,
 };
+use crate::retry::RetryDecision;
 
 // Re-export ApiBackend from the shared types crate for downstream callers.
 pub use xai_grok_sampling_types::ApiBackend;
@@ -1102,6 +1103,7 @@ struct ClientDefaults {
     reasoning_effort: Option<xai_grok_sampling_types::ReasoningEffort>,
     reasoning_summary: Option<xai_grok_sampling_types::ReasoningSummary>,
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
+    max_retries: u32,
 }
 
 /// Endpoint URL builder, resolved once at client construction so each request
@@ -1376,6 +1378,7 @@ impl SamplingClient {
             has_x_api_key_header = headers.get(HeaderName::from_static("x-api-key")).is_some(),
         );
 
+        let max_retries = crate::retry::resolve_max_retries(config.max_retries);
         let defaults = ClientDefaults {
             model: config.model,
             max_completion_tokens: config.max_completion_tokens,
@@ -1390,6 +1393,7 @@ impl SamplingClient {
             reasoning_effort: config.reasoning_effort,
             reasoning_summary: config.reasoning_summary,
             doom_loop_recovery: config.doom_loop_recovery,
+            max_retries,
         };
 
         let endpoint = EndpointTemplate::new(&config.base_url, &config.query_params);
@@ -1624,6 +1628,80 @@ impl SamplingClient {
 
     fn endpoint(&self, path: &str) -> String {
         self.endpoint.url_for_path(path)
+    }
+
+    /// Execute the provider-local Codex-compatible standalone search endpoint.
+    ///
+    /// Requests use the same endpoint template, live bearer resolver, private
+    /// header filtering, retry policy, and 401 attribution as inference.
+    pub async fn standalone_web_search(
+        &self,
+        request: &crate::standalone_web_search::StandaloneSearchRequest,
+    ) -> Result<crate::standalone_web_search::StandaloneSearchResponse> {
+        let mut retry_count = 0;
+        loop {
+            match self.standalone_web_search_once(request).await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let decision = crate::retry::classify_error(
+                        &error,
+                        retry_count,
+                        self.defaults.max_retries,
+                        crate::retry::RATE_LIMIT_RETRY_THRESHOLD,
+                    );
+                    let backoff = match decision {
+                        RetryDecision::Retry { backoff }
+                        | RetryDecision::RetryWithClientRebuild { backoff }
+                        | RetryDecision::RetryWithBackoff { backoff, .. } => backoff,
+                        RetryDecision::RetryWithImageStrip => return Err(error),
+                        RetryDecision::EmitToSession(error) | RetryDecision::Fatal(error) => {
+                            return Err(error);
+                        }
+                    };
+                    retry_count = retry_count.saturating_add(1);
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+
+    async fn standalone_web_search_once(
+        &self,
+        request: &crate::standalone_web_search::StandaloneSearchRequest,
+    ) -> Result<crate::standalone_web_search::StandaloneSearchResponse> {
+        let endpoint = self.endpoint("alpha/search");
+        let response = self
+            .post(&endpoint)
+            .json(request)
+            .send()
+            .await
+            .map_err(SamplingError::Http)?;
+        let status = response.status();
+        let model_metadata = extract_model_metadata(response.headers());
+        let retry_after_secs = extract_retry_after(response.headers());
+        let should_retry = extract_should_retry(response.headers());
+        let bytes = response.bytes().await.map_err(SamplingError::Http)?;
+
+        if !status.is_success() {
+            let server_message = user_facing_api_error_message(status, bytes.as_ref());
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.record_401_attribution(
+                    crate::attribution::SamplingConsumer::StandaloneWebSearch,
+                );
+                return Err(SamplingError::Auth(format!(
+                    "Unauthorized (401) from {endpoint}: {server_message}"
+                )));
+            }
+            return Err(SamplingError::Api {
+                status,
+                message: server_message,
+                model_metadata,
+                retry_after_secs,
+                should_retry,
+            });
+        }
+
+        serde_json::from_slice(&bytes).map_err(SamplingError::Serialization)
     }
 
     fn apply_defaults(&self, mut request: ChatCompletionRequest) -> Result<ChatCompletionRequest> {
@@ -3483,6 +3561,7 @@ mod tests {
             attribution_callback: None,
             bearer_resolver: None,
             supports_backend_search: false,
+            supports_standalone_web_search: false,
             codex_multi_agent_v2: false,
             compactions_remaining: None,
             compaction_at_tokens: None,

@@ -1,4 +1,7 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::CellId;
@@ -12,6 +15,7 @@ use super::WaitOutcome;
 use super::WaitRequest;
 use super::WaitToPendingOutcome;
 use super::WaitToPendingRequest;
+use super::yield_timeout;
 use crate::CodeModeToolKind;
 use crate::ExecuteRequest;
 use crate::ExecuteToPendingOutcome;
@@ -23,9 +27,112 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use xai_grok_code_mode_protocol::ToolName;
 
+#[test]
+fn yield_timeout_adds_grace_only_at_ten_seconds() {
+    assert_eq!(yield_timeout(9_999), Duration::from_millis(9_999));
+    assert_eq!(yield_timeout(10_000), Duration::from_secs(11));
+}
+
+#[tokio::test(start_paused = true)]
+async fn execute_waits_for_nested_tool_during_yield_grace() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let started = service
+        .execute(ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"await tools.echo({}); text("done");"#.to_string(),
+            yield_time_ms: Some(10_000),
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+    let response = tokio::spawn(started.initial_response());
+    wait_until_tool_started(&delegate).await;
+    tokio::time::advance(Duration::from_millis(10_500)).await;
+    delegate.release_tool();
+    wait_until_finished(&response).await;
+
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_waits_for_nested_tool_during_yield_grace() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let initial_response = service
+        .execute_to_pending(ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"await tools.echo({}); text("done");"#.to_string(),
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        initial_response,
+        ExecuteToPendingOutcome::Pending {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+            pending_tool_call_ids: vec!["tool-1".to_string()],
+        }
+    );
+
+    let response = service
+        .begin_wait(WaitRequest {
+            cell_id: cell_id("1"),
+            yield_time_ms: 10_000,
+        })
+        .await;
+    let response = tokio::spawn(response);
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(10_500)).await;
+    delegate.release_tool();
+    wait_until_finished(&response).await;
+
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+}
+
+async fn wait_until_finished<T>(task: &tokio::task::JoinHandle<T>) {
+    for _ in 0..10_000 {
+        if task.is_finished() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("code-mode response did not finish while virtual time was held in the grace period");
+}
+
+async fn wait_until_tool_started(delegate: &ReleasableToolDelegate) {
+    for _ in 0..10_000 {
+        if delegate.tool_started.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("nested code-mode tool did not start");
+}
+
 #[derive(Default)]
 struct ReleasableToolDelegate {
     tool_release: Notify,
+    tool_started: AtomicBool,
 }
 
 impl ReleasableToolDelegate {
@@ -40,11 +147,47 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
         _invocation: CodeModeNestedToolCall,
         cancellation_token: CancellationToken,
     ) -> ToolInvocationFuture<'a> {
+        self.tool_started.store(true, Ordering::Release);
         Box::pin(async move {
             tokio::select! {
                 _ = self.tool_release.notified() => Ok(JsonValue::Null),
                 _ = cancellation_token.cancelled() => Err("cancelled".to_string()),
             }
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+#[derive(Default)]
+struct ImmediateSearchDelegate {
+    calls: AtomicUsize,
+}
+
+impl CodeModeSessionDelegate for ImmediateSearchDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        invocation: CodeModeNestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            assert_eq!(invocation.tool_name, ToolName::plain("web__run"));
+            assert_eq!(
+                invocation.input,
+                Some(serde_json::json!({"search_query": [{"q": "Rust"}]}))
+            );
+            Ok(JsonValue::String("search result".to_string()))
         })
     }
 
@@ -86,6 +229,17 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
+fn web_run_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web__run".to_string(),
+        tool_name: ToolName::plain("web__run"),
+        description: String::new(),
+        kind: CodeModeToolKind::Function,
+        input_schema: None,
+        output_schema: None,
+    }
+}
+
 async fn execute(service: &InProcessCodeModeSession, request: ExecuteRequest) -> RuntimeResponse {
     service
         .execute(request)
@@ -120,6 +274,39 @@ async fn synchronous_exit_returns_successfully() {
             error_text: None,
         }
     );
+}
+
+#[tokio::test]
+async fn standalone_search_completes_inside_one_execute_cell() {
+    let delegate = Arc::new(ImmediateSearchDelegate::default());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![web_run_tool()],
+            source: r#"
+const result = await tools.web__run({search_query: [{q: "Rust"}]});
+text(result);
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "search result".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert_eq!(delegate.calls.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

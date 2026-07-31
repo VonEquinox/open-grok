@@ -29,6 +29,7 @@ pub mod provider;
 pub mod retry;
 pub mod sampling_log;
 mod shared_http;
+pub mod standalone_web_search;
 pub mod stream;
 pub mod types;
 
@@ -55,6 +56,14 @@ pub use retry::{
     format_sampling_error, resolve_max_retries, retry_backoff_with_jitter,
 };
 pub use sampling_log::AuthInfo;
+pub use standalone_web_search::{
+    StandaloneExternalWebAccess, StandaloneExternalWebAccessMode,
+    StandaloneSearchApproximateLocation, StandaloneSearchCaller, StandaloneSearchContent,
+    StandaloneSearchContextSize, StandaloneSearchFilters, StandaloneSearchImageSettings,
+    StandaloneSearchInput, StandaloneSearchLocationType, StandaloneSearchMessage,
+    StandaloneSearchMessageType, StandaloneSearchRequest, StandaloneSearchResponse,
+    StandaloneSearchRole, StandaloneSearchSettings,
+};
 pub use stream::{
     collect_response, stream_chat_completions, stream_messages, stream_responses,
     stream_responses_with_client_custom_tools,

@@ -26,11 +26,11 @@ use std::sync::Arc;
 ///
 /// # Scope: sampler endpoints only
 ///
-/// This enum enumerates the six HTTP endpoints owned by
+/// This enum enumerates the HTTP endpoints owned by
 /// `SamplingClient` (chat completions, responses, messages -- each in
-/// streaming and non-streaming form). It does *not* cover image
-/// generation, video generation, web search, or embedding -- those
-/// tools live in `xai-grok-tools`
+/// streaming and non-streaming form -- plus standalone provider search). It
+/// does *not* cover image generation, video generation, fallback web search,
+/// or embedding -- those tools live in `xai-grok-tools`
 /// (`crates/codegen/xai-grok-tools/src/implementations/`), have their
 /// own HTTP clients that do not flow through `SamplingClient`, and
 /// hook into the `xai_grok_tools::ApiKeyProvider` trait rather than
@@ -49,6 +49,8 @@ pub enum SamplingConsumer {
     MessagesStream,
     /// `messages`: Anthropic Messages API non-streaming.
     Messages,
+    /// `alpha/search`: provider-authenticated standalone web search.
+    StandaloneWebSearch,
 }
 
 impl SamplingConsumer {
@@ -64,6 +66,7 @@ impl SamplingConsumer {
             Self::Responses => "responses",
             Self::MessagesStream => "messages_stream",
             Self::Messages => "messages",
+            Self::StandaloneWebSearch => "standalone_web_search",
         }
     }
 }

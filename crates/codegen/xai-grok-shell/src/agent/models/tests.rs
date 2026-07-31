@@ -1627,6 +1627,7 @@ fn make_entry_config_with_id(
         supports_reasoning_summary_parameter: false,
         default_reasoning_summary: xai_grok_sampling_types::ReasoningSummary::None,
         supports_backend_search: false,
+        supports_standalone_web_search: None,
         compactions_remaining: None,
         compaction_at_tokens: None,
         show_model_fingerprint: false,

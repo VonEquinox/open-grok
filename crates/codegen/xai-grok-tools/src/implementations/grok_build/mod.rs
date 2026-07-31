@@ -33,6 +33,7 @@ pub mod update_goal;
 pub mod video_gen;
 pub mod view_image;
 pub mod web_fetch;
+pub mod web_run;
 pub mod web_search;
 pub mod workflow;
 pub mod x_search;
@@ -71,6 +72,10 @@ pub use video_gen::{
 };
 pub use view_image::ViewImageTool;
 pub use web_fetch::{WebFetchClient, WebFetchConfig, WebFetchParams, WebFetchTool};
+pub use web_run::{
+    SearchCommands, StandaloneWebSearchBackend, StandaloneWebSearchBackendResource,
+    StandaloneWebSearchFuture, WEB_RUN_TOOL_NAME, WebRunTool,
+};
 pub use web_search::WebSearchTool;
 pub use workflow::{WORKFLOW_TOOL_NAME, WorkflowTool};
 pub use x_search::XSearchTool;

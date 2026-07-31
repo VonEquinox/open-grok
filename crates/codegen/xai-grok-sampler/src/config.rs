@@ -120,6 +120,11 @@ pub struct SamplerConfig {
     #[serde(default)]
     pub supports_backend_search: bool,
 
+    /// Whether this exact Responses route exposes the Codex-compatible
+    /// provider-local `/alpha/search` endpoint.
+    #[serde(default)]
+    pub supports_standalone_web_search: bool,
+
     /// Whether this Codex model uses the v2 multi-agent policy contract.
     /// The shell derives this from the authenticated model catalog rather
     /// than model-name checks, so newly advertised models inherit the same
@@ -181,6 +186,7 @@ impl Default for SamplerConfig {
             attribution_callback: None,
             bearer_resolver: None,
             supports_backend_search: false,
+            supports_standalone_web_search: false,
             codex_multi_agent_v2: false,
             compactions_remaining: None,
             compaction_at_tokens: None,

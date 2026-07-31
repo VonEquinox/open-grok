@@ -17,7 +17,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - Runs raw JavaScript -- no Node, no file system, no network access, no console.
 - Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
-- `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to 10000 ms.
+- `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to 30000 ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
 
@@ -880,6 +880,8 @@ bar"
     fn exec_description_mentions_timeout_helpers() {
         let description =
             build_exec_tool_description(&[], &[], &BTreeMap::new(), /*code_mode_only*/ false);
+        assert!(description.contains("Defaults to 30000 ms."));
+        assert!(!description.contains("Defaults to 10000 ms."));
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
     }

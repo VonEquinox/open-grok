@@ -107,6 +107,7 @@ pub fn canonical_input(input: &ToolInput) -> Option<serde_json::Value> {
         | ToolInput::Task(_)
         | ToolInput::AgentSwarm(_)
         | ToolInput::WebSearch(_)
+        | ToolInput::WebRun(_)
         | ToolInput::ImageGen(_)
         | ToolInput::ImageEdit(_)
         | ToolInput::ImageToVideo(_)

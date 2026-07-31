@@ -159,7 +159,7 @@ async fn web_search_reload_waits_for_an_active_kimi_turn() {
                 .handle_reload_web_search_toolset(
                     crate::session::agent_rebuild::ResolvedWebSearchState::resolved_for(
                         crate::tools::config::WebSearchCandidates::disabled(),
-                        xai_grok_sampling_types::ModelProvider::default(),
+                        &xai_grok_sampler::SamplerConfig::default(),
                     ),
                     responds_to,
                 )

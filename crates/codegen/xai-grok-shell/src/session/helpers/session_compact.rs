@@ -1654,6 +1654,7 @@ mod reasoning_compaction_regression_tests {
             attribution_callback: None,
             bearer_resolver: None,
             supports_backend_search: false,
+            supports_standalone_web_search: false,
             codex_multi_agent_v2: false,
             compactions_remaining: None,
             compaction_at_tokens: None,

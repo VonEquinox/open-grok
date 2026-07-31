@@ -780,6 +780,10 @@ impl SessionActor {
                 None
             },
             supports_backend_search: self.supports_backend_search.get(),
+            supports_standalone_web_search: self
+                .rebuild_spec
+                .active_sampling_config()
+                .supports_standalone_web_search,
             codex_multi_agent_v2,
             compactions_remaining: self.compactions_remaining.get(),
             compaction_at_tokens: self.compaction_at_tokens.get(),

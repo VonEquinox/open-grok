@@ -24,21 +24,13 @@ fn code_mode_runtime_reset_required(
 }
 
 impl SessionActor {
-    async fn current_provider(&self) -> xai_grok_sampling_types::ModelProvider {
-        self.chat_state_handle
-            .get_sampling_config()
-            .await
-            .map(|config| config.provider)
-            .unwrap_or_default()
-    }
-
     async fn apply_web_search_toolset_state(
         &self,
         mut state: crate::session::agent_rebuild::ResolvedWebSearchState,
     ) -> Result<(), acp::Error> {
         // The reload broadcast carries provider-agnostic candidates; the
         // active backend is this session's per-provider resolution.
-        state.resolve_active(self.current_provider().await);
+        state.resolve_active(&self.rebuild_spec.active_sampling_config());
         let previous = self.rebuild_spec.replace_web_search_state(state);
         let definition = self.agent.borrow().definition().clone();
         let tool_mode = self.agent.borrow().tool_mode();
@@ -224,31 +216,30 @@ impl SessionActor {
         // `[toolset.web_search_source]` (e.g. Kimi→Codex must not carry a
         // Perplexity backend across the boundary). Swapped back if the staged
         // build below fails and the session stays on the previous provider.
-        let web_search_previous = (previous_provider != sampling_config.provider).then(|| {
-            let mut state = self.rebuild_spec.web_search_state();
-            state.resolve_active(sampling_config.provider);
-            self.rebuild_spec.replace_web_search_state(state)
-        });
+        let mut next_web_search = self.rebuild_spec.web_search_state();
+        next_web_search.resolve_active(&sampling_config);
+        let web_search_previous = self.rebuild_spec.replace_web_search_state(next_web_search);
+        let sampling_config_previous = self
+            .rebuild_spec
+            .replace_active_sampling_config(sampling_config.clone());
         // Build a replacement harness to completion before invalidating the
         // live JavaScript timeline. Agent construction is the fallible part of
         // a harness switch; staging it here keeps a failed model switch from
         // resetting an otherwise unchanged Code Mode session.
-        let prepared_agent_rebuild = match agent_rebuild {
-            Some((definition, preserve_history)) => {
-                match self
-                    .build_agent_for_definition(*definition, effective_tool_mode)
-                    .await
-                {
-                    Ok(agent) => Some((agent, preserve_history)),
-                    Err(error) => {
-                        if let Some(previous) = web_search_previous {
-                            self.rebuild_spec.replace_web_search_state(previous);
-                        }
-                        return Err(error);
-                    }
-                }
+        let (definition, preserve_history) = agent_rebuild
+            .unwrap_or_else(|| (Box::new(self.agent.borrow().definition().clone()), true));
+        let prepared_agent_rebuild = match self
+            .build_agent_for_definition(*definition, effective_tool_mode)
+            .await
+        {
+            Ok(agent) => (agent, preserve_history),
+            Err(error) => {
+                self.rebuild_spec
+                    .replace_web_search_state(web_search_previous);
+                self.rebuild_spec
+                    .replace_active_sampling_config(sampling_config_previous);
+                return Err(error);
             }
-            None => None,
         };
 
         // Close the cumulative xAI export boundary synchronously before any
@@ -261,18 +252,17 @@ impl SessionActor {
             previous_tool_mode,
             effective_tool_mode,
         ) {
-            self.rebuild_spec
-                .code_mode_runtime
-                .reset()
-                .await
-                .map_err(|error| {
-                    acp::Error::internal_error()
-                        .data(format!("failed to reset Code Mode runtime: {error}"))
-                })?;
+            if let Err(error) = self.rebuild_spec.code_mode_runtime.reset().await {
+                self.rebuild_spec
+                    .replace_web_search_state(web_search_previous);
+                self.rebuild_spec
+                    .replace_active_sampling_config(sampling_config_previous);
+                return Err(acp::Error::internal_error()
+                    .data(format!("failed to reset Code Mode runtime: {error}")));
+            }
         }
-        if let Some((agent, preserve_history)) = prepared_agent_rebuild {
-            self.install_rebuilt_agent(agent, preserve_history).await;
-        }
+        self.install_rebuilt_agent(prepared_agent_rebuild.0, prepared_agent_rebuild.1)
+            .await;
         let model_id = acp::ModelId::new(sampling_config.model.clone());
         let new_context_window = self.compaction.context_window_override.unwrap_or_else(|| {
             std::num::NonZeroU64::new(sampling_config.context_window).unwrap_or_else(|| {

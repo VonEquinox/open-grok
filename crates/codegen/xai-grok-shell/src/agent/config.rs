@@ -4319,6 +4319,7 @@ fn default_models(
                     ReasoningSummary::None
                 },
                 supports_backend_search: m.supports_backend_search,
+                supports_standalone_web_search: None,
                 compactions_remaining: m.compactions_remaining,
                 compaction_at_tokens: m.compaction_at_tokens,
                 show_model_fingerprint: m.show_model_fingerprint,
@@ -4443,6 +4444,10 @@ pub struct ModelEntryConfig {
     pub supported_in_api: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_backend_search: bool,
+    /// Explicit capability override for the provider-local `/alpha/search`
+    /// endpoint. `None` enables it only for official Codex OAuth routes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_standalone_web_search: Option<bool>,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions_remaining: Option<CompactionsRemaining>,
@@ -4805,6 +4810,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub default_reasoning_summary: ReasoningSummary,
     pub supports_backend_search: bool,
+    pub supports_standalone_web_search: Option<bool>,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     pub compactions_remaining: Option<CompactionsRemaining>,
     /// Per-model config for the `x-compaction-at` header; `None` disables it.
@@ -4856,6 +4862,7 @@ impl ModelInfo {
             supports_reasoning_summary_parameter: false,
             default_reasoning_summary: ReasoningSummary::None,
             supports_backend_search: false,
+            supports_standalone_web_search: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -4898,6 +4905,7 @@ impl ModelInfo {
             supports_reasoning_summary_parameter: entry.supports_reasoning_summary_parameter,
             default_reasoning_summary: entry.default_reasoning_summary,
             supports_backend_search: entry.supports_backend_search,
+            supports_standalone_web_search: entry.supports_standalone_web_search,
             compactions_remaining: entry.compactions_remaining,
             compaction_at_tokens: entry.compaction_at_tokens,
             show_model_fingerprint: entry.show_model_fingerprint,
@@ -5879,6 +5887,7 @@ pub fn resolve_aux_model_sampling_config(
                 supports_reasoning_summary_parameter: false,
                 default_reasoning_summary: ReasoningSummary::None,
                 supports_backend_search: false,
+                supports_standalone_web_search: None,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
@@ -6140,6 +6149,7 @@ pub fn sampling_config_for_model(
             )) as xai_grok_sampler::SharedBearerResolver
         }),
         supports_backend_search: info.supports_backend_search,
+        supports_standalone_web_search: supports_standalone_web_search(info, uses_codex_oauth),
         // Preserve the live Codex `multi_agent_version` contract through the sampler.
         codex_multi_agent_v2: supports_codex_multi_agent_v2(info),
         compactions_remaining: info.compactions_remaining,
@@ -6147,6 +6157,11 @@ pub fn sampling_config_for_model(
         doom_loop_recovery: None,
         header_injector: None,
     }
+}
+
+fn supports_standalone_web_search(info: &ModelInfo, uses_codex_oauth: bool) -> bool {
+    info.supports_standalone_web_search
+        .unwrap_or(uses_codex_oauth && info.api_backend == ApiBackend::Responses)
 }
 
 /// Whether authenticated catalog metadata opts this Codex model into the v2
@@ -6281,6 +6296,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             supports_reasoning_summary_parameter: false,
             default_reasoning_summary: ReasoningSummary::None,
             supports_backend_search: false,
+            supports_standalone_web_search: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -7702,6 +7718,7 @@ reasoning_effort = "low"
                 supports_reasoning_summary_parameter: false,
                 default_reasoning_summary: ReasoningSummary::None,
                 supports_backend_search: false,
+                supports_standalone_web_search: None,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
@@ -8673,6 +8690,7 @@ reasoning_effort = "low"
             api_backend = "responses"
             agent_type = "codex"
             tool_mode = "code_mode_only"
+            supports_standalone_web_search = true
             "#,
         )
         .unwrap();
@@ -8680,6 +8698,7 @@ reasoning_effort = "low"
         let resolved = resolve_model_list(&cfg, None);
         let model = resolved.get("gpt-5-6-sol").expect("model should exist");
         assert_eq!(model.info.tool_mode, Some(ToolMode::CodeModeOnly));
+        assert_eq!(model.info.supports_standalone_web_search, Some(true));
     }
     #[test]
     fn model_tool_mode_defaults_to_unspecified() {
@@ -8695,6 +8714,21 @@ reasoning_effort = "low"
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
         let resolved = resolve_model_list(&cfg, None);
         assert_eq!(resolved["direct"].info.tool_mode, None);
+        assert_eq!(resolved["direct"].info.supports_standalone_web_search, None);
+    }
+    #[test]
+    fn standalone_search_defaults_only_for_oauth_responses_and_honors_override() {
+        let mut info = ModelInfo::fallback("codex");
+        info.provider = ModelProvider::Codex;
+        info.api_backend = ApiBackend::Responses;
+
+        assert!(supports_standalone_web_search(&info, true));
+        assert!(!supports_standalone_web_search(&info, false));
+
+        info.supports_standalone_web_search = Some(true);
+        assert!(supports_standalone_web_search(&info, false));
+        info.supports_standalone_web_search = Some(false);
+        assert!(!supports_standalone_web_search(&info, true));
     }
     #[test]
     fn effective_tool_mode_uses_explicit_preference_and_codex_only_override() {
@@ -8957,6 +8991,7 @@ reasoning_effort = "low"
             supports_reasoning_summary_parameter: false,
             default_reasoning_summary: ReasoningSummary::None,
             supports_backend_search: false,
+            supports_standalone_web_search: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -9121,6 +9156,7 @@ reasoning_effort = "low"
             supports_reasoning_summary_parameter: false,
             default_reasoning_summary: ReasoningSummary::None,
             supports_backend_search: false,
+            supports_standalone_web_search: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -9577,6 +9613,7 @@ reasoning_effort = "low"
             supports_reasoning_summary_parameter: false,
             default_reasoning_summary: ReasoningSummary::None,
             supports_backend_search: false,
+            supports_standalone_web_search: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -13451,6 +13488,7 @@ default = "grok-4.5"
                 supports_reasoning_summary_parameter: false,
                 default_reasoning_summary: ReasoningSummary::None,
                 supports_backend_search: false,
+                supports_standalone_web_search: None,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,

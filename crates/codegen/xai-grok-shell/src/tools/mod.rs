@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod config;
 pub mod notification_bridge;
 pub mod retry;
+pub mod standalone_web_search;
 pub mod todo;
 pub mod tool_context;
 

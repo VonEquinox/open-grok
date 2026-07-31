@@ -85,6 +85,7 @@ description = "Model description"          # Optional description
 api_key = "sk-..."                        # API key for this provider (optional)
 env_key = "XAI_API_KEY"                   # Env var holding the API key (optional; string or array)
 api_backend = "chat_completions"          # "chat_completions", "responses", or "messages"
+supports_standalone_web_search = true     # Opt in to /alpha/search when the endpoint supports it
 temperature = 0.7                         # Sampling temperature
 top_p = 0.95                              # Nucleus sampling parameter
 max_completion_tokens = 8192              # Maximum tokens per response
@@ -280,6 +281,25 @@ name = "GPT-4o (Responses)"
 api_backend = "responses"
 env_key = "OPENAI_API_KEY"
 ```
+
+Responses endpoints that implement Codex's standalone `/alpha/search` contract
+can opt in explicitly:
+
+```toml
+[model.my-codex-gateway]
+model = "gpt-custom"
+provider = "codex"
+base_url = "https://gateway.example/v1"
+api_backend = "responses"
+env_key = "GATEWAY_API_KEY"
+supports_standalone_web_search = true
+```
+
+When native web search is selected, this registers `web__run`, including inside
+Code Mode as `tools.web__run(...)`, and suppresses hosted `web_search`. If the
+flag is absent or false, Open Grok keeps the hosted-search fallback. Official
+ChatGPT Codex OAuth routes enable standalone search automatically; public
+API-key routes do not.
 
 ### Ollama (Local Models)
 

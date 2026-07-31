@@ -971,6 +971,12 @@ pub fn parse_remote_model_value(
             .or_else(|| meta.and_then(|m| m.get("supportsBackendSearch")))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        supports_standalone_web_search: obj
+            .get("supportsStandaloneWebSearch")
+            .or_else(|| obj.get("supports_standalone_web_search"))
+            .or_else(|| meta.and_then(|m| m.get("supportsStandaloneWebSearch")))
+            .or_else(|| meta.and_then(|m| m.get("supports_standalone_web_search")))
+            .and_then(|value| value.as_bool()),
         compactions_remaining: obj
             .get("compactionsRemaining")
             .or_else(|| obj.get("compactions_remaining"))

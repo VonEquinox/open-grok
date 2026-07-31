@@ -1974,6 +1974,22 @@ async fn read_parent_sampling_config_resolves_backend_search_from_catalog() {
             "subagent should inherit backend-tools capability from the live model catalog"
         );
 }
+
+#[tokio::test]
+async fn read_parent_sampling_config_inherits_standalone_search_route_support() {
+    let mut models = indexmap::IndexMap::new();
+    models.insert("auto".to_string(), test_model_entry("gpt-test"));
+    let mut ctx = ctx_with_parent_chat_state("auto", "gpt-test", "auto", models);
+    ctx.sampling_config.supports_standalone_web_search = true;
+
+    let (config, _model_id) = read_parent_sampling_config(&ctx).await;
+
+    assert!(
+        config.supports_standalone_web_search,
+        "a subagent on the inherited route must retain standalone-search support"
+    );
+}
+
 #[tokio::test]
 async fn read_parent_sampling_config_fallback_resolves_backend_search_from_catalog() {
     let mut entry = test_model_entry("composer-2-fast");

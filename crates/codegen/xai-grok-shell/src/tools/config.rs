@@ -258,6 +258,7 @@ impl ShellToolsetConfig {
             attribution_callback: None,
             bearer_resolver: None,
             supports_backend_search: false,
+            supports_standalone_web_search: false,
             codex_multi_agent_v2: false,
             compactions_remaining: None,
             compaction_at_tokens: None,
@@ -471,6 +472,9 @@ impl Default for XSearchToolConfig {
 /// `[toolset.web_search_source]` selection.
 #[derive(Clone)]
 pub struct WebSearchCandidates {
+    /// Master web-search enablement. Native standalone search must not bypass
+    /// the process/session-level disable switch.
+    pub enabled: bool,
     /// xAI Responses-backed client config (`Disabled` when no xAI
     /// credentials resolve).
     pub xai: xai_grok_tools::implementations::web_search::WebSearchConfig,
@@ -494,6 +498,7 @@ impl WebSearchCandidates {
     /// All-disabled candidates (master `disable_web_search`, or tests).
     pub fn disabled() -> Self {
         Self {
+            enabled: false,
             xai: xai_grok_tools::implementations::web_search::WebSearchConfig::Disabled,
             perplexity: None,
             source: WebSearchSourceConfig::default(),
@@ -596,6 +601,7 @@ impl WebSearchCandidates {
 impl std::fmt::Debug for WebSearchCandidates {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebSearchCandidates")
+            .field("enabled", &self.enabled)
             .field("xai_available", &self.xai_available())
             .field("perplexity_available", &self.perplexity.is_some())
             .field("source", &self.source)

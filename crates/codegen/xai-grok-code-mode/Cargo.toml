@@ -19,11 +19,12 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-v8 = { workspace = true }
+v8 = "=150.4.0"
 xai-grok-code-mode-protocol = { path = "../xai-grok-code-mode-protocol" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

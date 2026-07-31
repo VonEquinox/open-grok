@@ -29,6 +29,7 @@ use crate::implementations::grok_build::update_goal::UpdateGoalInput;
 use crate::implementations::grok_build::video_gen::{ImageToVideoInput, ReferenceToVideoInput};
 use crate::implementations::grok_build::view_image::ViewImageInput;
 use crate::implementations::grok_build::web_fetch::WebFetchInput;
+use crate::implementations::grok_build::web_run::SearchCommands;
 use crate::implementations::grok_build::web_search::WebSearchInput;
 use crate::implementations::lsp::LspToolInput;
 use crate::implementations::memory::types::{MemoryGetInput, MemorySearchInput};
@@ -75,6 +76,7 @@ pub enum ToolInput {
     Task(TaskToolInput),
     AgentSwarm(AgentSwarmToolInput),
     WebSearch(WebSearchInput),
+    WebRun(SearchCommands),
     ImageGen(ImageGenInput),
     ImageEdit(ImageEditInput),
     ImageToVideo(ImageToVideoInput),

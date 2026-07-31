@@ -1757,6 +1757,7 @@ impl MvpAgent {
 
         config::PreparedWebSearchConfig {
             candidates: crate::tools::config::WebSearchCandidates {
+                enabled: true,
                 xai,
                 perplexity,
                 // Read fresh from disk so Settings changes reach new sessions

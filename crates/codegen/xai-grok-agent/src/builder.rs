@@ -88,6 +88,8 @@ pub struct AgentBuilder {
     state_path: Option<PathBuf>,
     memory_backend: Option<Arc<dyn xai_grok_tools::types::memory_backend::MemoryBackend>>,
     web_search_config: xai_grok_tools::implementations::web_search::WebSearchConfig,
+    standalone_web_search_backend:
+        Option<xai_grok_tools::implementations::grok_build::StandaloneWebSearchBackendResource>,
     x_search_config: xai_grok_tools::implementations::web_search::WebSearchConfig,
     /// When true, web search and X search are sent as native server-side
     /// tools for execution by the agentic sampler, instead of being
@@ -233,6 +235,7 @@ impl AgentBuilder {
             state_path: None,
             memory_backend: None,
             web_search_config: Default::default(),
+            standalone_web_search_backend: None,
             x_search_config: Default::default(),
             backend_search: false,
             web_fetch_config: Default::default(),
@@ -441,6 +444,18 @@ impl AgentBuilder {
         config: xai_grok_tools::implementations::web_search::WebSearchConfig,
     ) -> Self {
         self.web_search_config = config;
+        self
+    }
+
+    pub fn with_standalone_web_search_backend(
+        mut self,
+        backend: Arc<dyn xai_grok_tools::implementations::grok_build::StandaloneWebSearchBackend>,
+    ) -> Self {
+        self.standalone_web_search_backend = Some(
+            xai_grok_tools::implementations::grok_build::StandaloneWebSearchBackendResource(
+                backend,
+            ),
+        );
         self
     }
 
@@ -860,6 +875,11 @@ impl AgentBuilder {
                     Some(build_task_description(&subagents, &self.task_model_slugs));
             }
         }
+        if self.standalone_web_search_backend.is_some() {
+            tool_config
+                .tools
+                .push((&xai_grok_tools::implementations::grok_build::WebRunTool).into());
+        }
         if task_stripped {
             use xai_grok_tools::types::tool::ToolNamespace;
             let has_satisfier = |ns: ToolNamespace, id: &str, needs_bg: bool| {
@@ -1060,6 +1080,7 @@ impl AgentBuilder {
             }
         }
         let use_backend_search = self.backend_search;
+        let standalone_web_search_backend = self.standalone_web_search_backend.take();
         // Backend-hosted web search uses the primary model provider and does
         // not depend on credentials for the separate client-executed search
         // implementation.
@@ -1106,6 +1127,9 @@ impl AgentBuilder {
                     },
                 ),
             );
+        }
+        if let Some(backend) = standalone_web_search_backend {
+            tool_bridge.toolset().resources.lock().await.insert(backend);
         }
         if let Some(names) = self.persisted_announced_skill_names {
             tool_bridge.restore_announced_skill_names(names).await;

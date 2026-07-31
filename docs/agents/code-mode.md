@@ -208,13 +208,19 @@ From `is_code_mode_direct_only_tool` — must stay model-visible; **excluded** f
 | Category | Names |
 | --- | --- |
 | Human interaction | `ask_user_question`, `request_user_input` |
+| Plan / workflow | `enter_plan_mode`, `exit_plan_mode`, `workflow` |
 | Multi-agent / tasks | `task`, `spawn_subagent`, `get_task_output`, `get_command_or_subagent_output`, `wait_tasks`, `wait_commands_or_subagents`, `kill_task`, `kill_command_or_subagent` |
 
 Rationale: ACP questions and collaboration lifecycle cannot safely live inside a JS callback that pauses the model turn. Matches Sol multi-agent-v2 **DirectModelOnly** policy.
 
 ### 4.4 Hosted search
 
-- Provider-hosted web search stays **top-level** beside `exec` when backend search is on.
+- A supported native Codex OAuth Responses route registers client-executed
+  `web__run` and suppresses provider-hosted `web_search`. JavaScript calls it as
+  `tools.web__run(...)`, so search/open/click/find and related commands stay in
+  one `exec` cell.
+- Unsupported, disabled, non-opted-in API-key, or explicitly non-native routes
+  retain the provider-hosted search declaration.
 - Nested `tools.web_search` is omitted when hosted web is already advertised.
 - Codex Code Mode Only keeps OpenAI web search only (no `x_search` at the provider boundary).
 
@@ -367,6 +373,8 @@ When **Code Mode Only** is effective, the pin requires:
 5. Structured tool results across the JS boundary.
 6. Persistent JS runtime for the agent session; dispose on end.
 7. Direct-only collaboration tools stay top-level, out of `tools.*`.
+8. `exec` defaults to 30 seconds, `wait` to 10 seconds, and observation windows
+   of at least 10 seconds receive a one-second completion grace.
 8. `exec`/`wait` stay in model history but not as TUI tool cards; nested tools show normally.
 
 Deliberate Open Grok notes in the port doc: in-process V8 only; UI mirrors Codex split plus stripping transport from legacy replay.
@@ -380,6 +388,7 @@ Deliberate Open Grok notes in the port doc: in-process V8 only; UI mirrors Codex
 | Protocol | `xai-grok-code-mode-protocol` (e.g. `description`, `session_tests`) | Pragma parse, names, descriptions |
 | Runtime | `xai-grok-code-mode` `service_tests`, `cell_actor/*_tests`, `session_runtime/tests`, `tests/jit.rs` | Cells, yield/wait, tools, store, shutdown |
 | Shell adapter | `session/code_mode.rs` module tests | Transport helpers, exec/wait tool shape, hosted-search policy, direct-only list |
+| Standalone search | sampler `standalone_web_search`, tools `web_run`, shell `agent_rebuild` | Wire/auth, schema, permissions, native/hosted fallback |
 | Tool mode | `agent/config.rs` mixed-fallback/model-first test; `agent/models.rs` resolve tests | Precedence |
 | Turn / nested | Shell session tests + `tool_calls` behavior | Sink, prepare path |
 | Replay | `session/storage/mod.rs` `replay_hides_code_mode_transport_*` | Nested cards kept; wrappers dropped |

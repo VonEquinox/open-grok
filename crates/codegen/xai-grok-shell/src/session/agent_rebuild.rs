@@ -81,21 +81,31 @@ pub struct ResolvedWebSearchState {
     /// Candidate backends plus the persisted per-provider source selection,
     /// so a provider change can re-resolve locally.
     pub candidates: crate::tools::config::WebSearchCandidates,
+    /// True only when the current route can register `web__run`.
+    pub standalone_active: bool,
 }
 
 impl ResolvedWebSearchState {
     /// State whose active config is resolved for `provider`.
     pub(crate) fn resolved_for(
         candidates: crate::tools::config::WebSearchCandidates,
-        provider: xai_grok_sampling_types::ModelProvider,
+        sampling_config: &xai_grok_sampler::SamplerConfig,
     ) -> Self {
-        let config = candidates.resolved_config_for(provider);
-        Self { config, candidates }
+        let config = candidates.resolved_config_for(sampling_config.provider);
+        let standalone_active = standalone_web_search_active(&candidates, sampling_config);
+        Self {
+            config,
+            candidates,
+            standalone_active,
+        }
     }
 
     /// Re-resolve the active config for `provider` in place.
-    pub(crate) fn resolve_active(&mut self, provider: xai_grok_sampling_types::ModelProvider) {
-        self.config = self.candidates.resolved_config_for(provider);
+    pub(crate) fn resolve_active(&mut self, sampling_config: &xai_grok_sampler::SamplerConfig) {
+        self.config = self
+            .candidates
+            .resolved_config_for(sampling_config.provider);
+        self.standalone_active = standalone_web_search_active(&self.candidates, sampling_config);
     }
 
     /// Whether the client `web_search` tool is model-visible for `provider`.
@@ -117,9 +127,23 @@ impl ResolvedWebSearchState {
         &self,
         provider: xai_grok_sampling_types::ModelProvider,
     ) -> bool {
-        self.candidates
-            .native_hosted_web_search_suppressed(provider)
+        self.standalone_active
+            || self
+                .candidates
+                .native_hosted_web_search_suppressed(provider)
     }
+}
+
+fn standalone_web_search_active(
+    candidates: &crate::tools::config::WebSearchCandidates,
+    config: &xai_grok_sampler::SamplerConfig,
+) -> bool {
+    candidates.enabled
+        && config.provider == xai_grok_sampling_types::ModelProvider::Codex
+        && config.api_backend == xai_grok_sampling_types::ApiBackend::Responses
+        && config.supports_standalone_web_search
+        && candidates.effective_source_for(crate::tools::config::WebSearchSourceTarget::Codex)
+            == crate::tools::config::WebSearchSource::Native
 }
 /// Cached recipe for building a session-scoped [`Agent`].
 ///
@@ -148,6 +172,8 @@ pub(crate) struct AgentRebuildSpec {
     pub memory_workspace_path: Option<String>,
     pub memory_backend: Option<Arc<dyn MemoryBackend>>,
     pub web_search: parking_lot::RwLock<ResolvedWebSearchState>,
+    pub active_sampling_config: parking_lot::RwLock<xai_grok_sampler::SamplerConfig>,
+    pub chat_state_handle: xai_chat_state::ChatStateHandle,
     /// `[toolset.x_search].enabled` at spawn. The client x_search tool is
     /// registered when this is set AND the xAI candidate resolved (signed
     /// in); per-turn provider filtering keeps it off xAI requests, which use
@@ -214,6 +240,17 @@ impl AgentRebuildSpec {
         std::mem::replace(&mut *self.web_search.write(), next)
     }
 
+    pub(crate) fn replace_active_sampling_config(
+        &self,
+        next: xai_grok_sampler::SamplerConfig,
+    ) -> xai_grok_sampler::SamplerConfig {
+        std::mem::replace(&mut *self.active_sampling_config.write(), next)
+    }
+
+    pub(crate) fn active_sampling_config(&self) -> xai_grok_sampler::SamplerConfig {
+        self.active_sampling_config.read().clone()
+    }
+
     /// Build a fresh [`Agent`] from this spec and an [`AgentDefinition`].
     ///
     /// This is the canonical construction path; see module docs for the
@@ -271,6 +308,8 @@ impl AgentRebuildSpec {
             memory_workspace_path,
             memory_backend,
             web_search,
+            active_sampling_config,
+            chat_state_handle,
             x_search_enabled,
             backend_search,
             web_fetch_config,
@@ -315,7 +354,8 @@ impl AgentRebuildSpec {
         } = self.as_ref();
         let _ = mcp_state;
         let _ = code_mode_runtime;
-        let web_search_config = web_search.read().config.clone();
+        let web_search_state = web_search.read().clone();
+        let web_search_config = web_search_state.config.clone();
         #[allow(unused_variables)]
         let is_cursor_template =
             crate::session::is_cursor_system_template(&definition.system_prompt);
@@ -394,6 +434,16 @@ impl AgentRebuildSpec {
         }
         if let Some(attribution_callback) = attribution_callback.clone() {
             builder = builder.with_attribution_callback(attribution_callback);
+        }
+        if web_search_state.standalone_active {
+            let backend =
+                crate::tools::standalone_web_search::SamplerStandaloneWebSearchBackend::new(
+                    active_sampling_config.read().clone(),
+                    chat_state_handle.clone(),
+                    session_id_str.clone(),
+                )
+                .map_err(|error| AgentBuildError::ToolError(error.to_string()))?;
+            builder = builder.with_standalone_web_search_backend(backend);
         }
         if let Some(bash_params_json) = tool_params_json.bash.clone() {
             builder = builder.with_bash_params(bash_params_json);
@@ -509,6 +559,29 @@ impl AgentRebuildSpec {
 #[cfg(test)]
 pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
     let (uq_tx, _uq_rx) = tokio::sync::mpsc::unbounded_channel();
+    let active_sampling_config = xai_grok_sampler::SamplerConfig::default();
+    let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
+        Vec::new(),
+        xai_grok_sampling_types::SamplingConfig {
+            base_url: String::new(),
+            model: String::new(),
+            max_completion_tokens: None,
+            temperature: None,
+            top_p: None,
+            api_backend: Default::default(),
+            provider: Default::default(),
+            extra_headers: Default::default(),
+            query_params: Default::default(),
+            env_http_headers: Default::default(),
+            context_window: std::num::NonZeroU64::new(1).expect("non-zero"),
+            reasoning_effort: None,
+            stream_tool_calls: None,
+        },
+        Box::new(xai_chat_state::NullChatPersistence),
+        chat_event_tx,
+        tokio_util::sync::CancellationToken::new(),
+    );
     Arc::new(AgentRebuildSpec {
         working_directory: std::env::temp_dir(),
         terminal_backend: Arc::new(
@@ -532,8 +605,10 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         memory_backend: None,
         web_search: parking_lot::RwLock::new(ResolvedWebSearchState::resolved_for(
             crate::tools::config::WebSearchCandidates::disabled(),
-            xai_grok_sampling_types::ModelProvider::default(),
+            &active_sampling_config,
         )),
+        active_sampling_config: parking_lot::RwLock::new(active_sampling_config),
+        chat_state_handle,
         x_search_enabled: false,
         backend_search: false,
         web_fetch_config: WebFetchConfig::Disabled,
@@ -611,6 +686,7 @@ mod tests {
         implicit_xai_default: bool,
     ) -> WebSearchCandidates {
         WebSearchCandidates {
+            enabled: true,
             xai,
             perplexity,
             source,
@@ -621,7 +697,118 @@ mod tests {
     }
 
     fn state(candidates: WebSearchCandidates) -> ResolvedWebSearchState {
-        ResolvedWebSearchState::resolved_for(candidates, ModelProvider::default())
+        ResolvedWebSearchState::resolved_for(
+            candidates,
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::default(),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn standalone_search_requires_native_enabled_codex_responses_route() {
+        let native_candidates = candidates(
+            WebSearchConfig::Disabled,
+            None,
+            WebSearchSourceConfig::default(),
+            false,
+            true,
+        );
+        let supported = ResolvedWebSearchState::resolved_for(
+            native_candidates.clone(),
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Codex,
+                api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                supports_standalone_web_search: true,
+                ..Default::default()
+            },
+        );
+        assert!(supported.standalone_active);
+        assert!(supported.native_hosted_web_search_suppressed(ModelProvider::Codex));
+
+        let unsupported = ResolvedWebSearchState::resolved_for(
+            native_candidates.clone(),
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Codex,
+                api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                supports_standalone_web_search: false,
+                ..Default::default()
+            },
+        );
+        assert!(!unsupported.standalone_active);
+        assert!(!unsupported.native_hosted_web_search_suppressed(ModelProvider::Codex));
+
+        let chat_completions = ResolvedWebSearchState::resolved_for(
+            native_candidates.clone(),
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Codex,
+                api_backend: xai_grok_sampling_types::ApiBackend::ChatCompletions,
+                supports_standalone_web_search: true,
+                ..Default::default()
+            },
+        );
+        assert!(!chat_completions.standalone_active);
+
+        let wrong_provider = ResolvedWebSearchState::resolved_for(
+            native_candidates,
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Xai,
+                api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                supports_standalone_web_search: true,
+                ..Default::default()
+            },
+        );
+        assert!(!wrong_provider.standalone_active);
+
+        let disabled = ResolvedWebSearchState::resolved_for(
+            WebSearchCandidates::disabled(),
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Codex,
+                api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                supports_standalone_web_search: true,
+                ..Default::default()
+            },
+        );
+        assert!(!disabled.standalone_active);
+        assert!(!disabled.native_hosted_web_search_suppressed(ModelProvider::Codex));
+    }
+
+    #[test]
+    fn standalone_search_re_resolves_across_route_changes() {
+        let mut state = ResolvedWebSearchState::resolved_for(
+            candidates(
+                WebSearchConfig::Disabled,
+                None,
+                WebSearchSourceConfig::default(),
+                false,
+                true,
+            ),
+            &xai_grok_sampler::SamplerConfig {
+                provider: ModelProvider::Codex,
+                api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                supports_standalone_web_search: true,
+                ..Default::default()
+            },
+        );
+        assert!(state.standalone_active);
+
+        state.resolve_active(&xai_grok_sampler::SamplerConfig {
+            provider: ModelProvider::Codex,
+            api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+            supports_standalone_web_search: false,
+            ..Default::default()
+        });
+        assert!(!state.standalone_active);
+        assert!(!state.native_hosted_web_search_suppressed(ModelProvider::Codex));
+
+        state.resolve_active(&xai_grok_sampler::SamplerConfig {
+            provider: ModelProvider::Codex,
+            api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+            supports_standalone_web_search: true,
+            ..Default::default()
+        });
+        assert!(state.standalone_active);
     }
 
     /// Defaults with xAI signed in: providers without native search ride the
@@ -793,6 +980,46 @@ mod tests {
                     agent.tool_mode(),
                     xai_grok_sampling_types::ToolMode::CodeMode
                 );
+            })
+            .await;
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn rebuild_registers_standalone_web_run_for_supported_native_route() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let spec = test_rebuild_spec_default();
+                let config = xai_grok_sampler::SamplerConfig {
+                    base_url: "https://chatgpt.com/backend-api/codex".into(),
+                    model: "gpt-test".into(),
+                    api_backend: xai_grok_sampling_types::ApiBackend::Responses,
+                    provider: ModelProvider::Codex,
+                    supports_standalone_web_search: true,
+                    ..Default::default()
+                };
+                spec.replace_active_sampling_config(config.clone());
+                spec.replace_web_search_state(ResolvedWebSearchState::resolved_for(
+                    candidates(
+                        WebSearchConfig::Disabled,
+                        None,
+                        WebSearchSourceConfig::default(),
+                        false,
+                        true,
+                    ),
+                    &config,
+                ));
+
+                let agent = spec
+                    .build_agent(AgentDefinition::default_grok_build())
+                    .await
+                    .expect("agent build should succeed");
+                let names = agent
+                    .tool_bridge()
+                    .toolset()
+                    .tool_definitions()
+                    .into_iter()
+                    .map(|definition| definition.function.name)
+                    .collect::<Vec<_>>();
+                assert!(names.iter().any(|name| name == "web__run"));
             })
             .await;
     }

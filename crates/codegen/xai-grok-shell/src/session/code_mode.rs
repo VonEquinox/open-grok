@@ -1490,6 +1490,85 @@ mod tests {
     }
 
     #[test]
+    fn normalized_code_mode_name_collisions_keep_the_first_registered_tool() {
+        let first = GrokToolDefinition::function(
+            "foo-bar",
+            Some("FIRST_COLLISION_WINNER"),
+            json!({"type": "object"}),
+        );
+        let second = GrokToolDefinition::function(
+            "foo_bar",
+            Some("SECOND_COLLISION_SHADOW"),
+            json!({"type": "object"}),
+        );
+
+        for code_mode_only in [false, true] {
+            let collected = collect_code_mode_tool_definitions(&[first.clone(), second.clone()]);
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].name, "foo_bar");
+            assert_eq!(collected[0].tool_name, ToolName::plain("foo-bar"));
+            assert_eq!(collected[0].description, "FIRST_COLLISION_WINNER");
+
+            let ClientTool::Custom {
+                description: Some(description),
+                ..
+            } = create_exec_tool(&[first.clone(), second.clone()], code_mode_only)
+            else {
+                panic!("exec must be a custom tool with a description");
+            };
+            if code_mode_only {
+                assert_eq!(description.matches("### `foo_bar`").count(), 1);
+                assert!(description.contains("FIRST_COLLISION_WINNER"));
+                assert!(!description.contains("SECOND_COLLISION_SHADOW"));
+            } else {
+                assert_eq!(description.matches("### `foo_bar`").count(), 0);
+            }
+        }
+
+        let reversed = collect_code_mode_tool_definitions(&[second, first]);
+        assert_eq!(reversed.len(), 1);
+        assert_eq!(reversed[0].tool_name, ToolName::plain("foo_bar"));
+        assert_eq!(reversed[0].description, "SECOND_COLLISION_SHADOW");
+    }
+
+    #[test]
+    fn normalized_collision_winner_controls_deferred_exposure() {
+        let described_winner = collect_code_mode_tool_definitions(&[
+            GrokToolDefinition::function(
+                "x-search",
+                Some("described winner"),
+                json!({"type": "object"}),
+            ),
+            GrokToolDefinition::function(
+                "x_search",
+                Some("deferred shadow"),
+                json!({"type": "object"}),
+            ),
+        ]);
+        let (described, deferred) = split_deferred_code_mode_tools(described_winner);
+        assert_eq!(described.len(), 1);
+        assert!(deferred.is_empty());
+        assert_eq!(described[0].tool_name, ToolName::plain("x-search"));
+
+        let deferred_winner = collect_code_mode_tool_definitions(&[
+            GrokToolDefinition::function(
+                "x_search",
+                Some("deferred winner"),
+                json!({"type": "object"}),
+            ),
+            GrokToolDefinition::function(
+                "x-search",
+                Some("described shadow"),
+                json!({"type": "object"}),
+            ),
+        ]);
+        let (described, deferred) = split_deferred_code_mode_tools(deferred_winner);
+        assert!(described.is_empty());
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].tool_name, ToolName::plain("x_search"));
+    }
+
+    #[test]
     fn direct_model_only_question_and_collaboration_tools_are_not_nested_in_exec() {
         let tools = vec![
             GrokToolDefinition::function(
@@ -1512,6 +1591,16 @@ mod tests {
                 Some("Read subagent output"),
                 json!({"type": "object"}),
             ),
+            GrokToolDefinition::function(
+                "monitor",
+                Some("Start a monitor"),
+                json!({"type": "object"}),
+            ),
+            GrokToolDefinition::function(
+                "scheduler_create",
+                Some("Create a scheduled task"),
+                json!({"type": "object"}),
+            ),
         ];
         let nested = collect_code_mode_tool_definitions(&tools);
         assert_eq!(
@@ -1519,13 +1608,16 @@ mod tests {
                 .iter()
                 .map(|definition| definition.tool_name.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["read_file"]
+            vec!["monitor", "read_file", "scheduler_create"]
         );
         for direct_only in [
             "ask_user_question",
             "request_user_input",
+            "enter_plan_mode",
+            "exit_plan_mode",
             "task",
             "spawn_subagent",
+            "workflow",
             "get_task_output",
             "get_command_or_subagent_output",
             "wait_tasks",
@@ -1539,6 +1631,17 @@ mod tests {
             );
         }
         assert!(!is_code_mode_direct_only_tool("read_file"));
+        for prompt_returning in [
+            "monitor",
+            "scheduler_create",
+            "scheduler_delete",
+            "scheduler_list",
+        ] {
+            assert!(
+                !is_code_mode_direct_only_tool(prompt_returning),
+                "{prompt_returning} returns promptly and must remain nested"
+            );
+        }
     }
 
     #[test]
@@ -1582,6 +1685,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["read_file"]
         );
+    }
+
+    #[test]
+    fn standalone_web_run_remains_nested_when_hosted_search_is_suppressed() {
+        let definitions = vec![
+            GrokToolDefinition::function(
+                "web__run",
+                Some("Standalone search"),
+                json!({"type": "object"}),
+            ),
+            GrokToolDefinition::function(
+                "read_file",
+                Some("Read a file"),
+                json!({"type": "object"}),
+            ),
+        ];
+        let nested = nested_tool_definitions_for_provider(
+            &definitions,
+            xai_grok_sampling_types::ModelProvider::Codex,
+            &[],
+        );
+        assert_eq!(
+            nested
+                .iter()
+                .map(|definition| definition.function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["web__run", "read_file"]
+        );
+        let bindings = collect_code_mode_tool_definitions(&nested);
+        assert!(bindings.iter().any(|definition| {
+            definition.name == "web__run" && definition.tool_name.name == "web__run"
+        }));
     }
 
     /// `x_search` is a deferred nested tool: bound on the JS `tools` object

@@ -3972,6 +3972,7 @@ impl acp::Agent for MvpAgent {
                 let state = crate::session::agent_rebuild::ResolvedWebSearchState {
                     config: xai_grok_tools::implementations::WebSearchConfig::Disabled,
                     candidates: prepared.candidates,
+                    standalone_active: false,
                 };
                 let sessions = self
                     .sessions

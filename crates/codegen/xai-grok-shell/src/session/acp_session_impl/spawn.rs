@@ -643,7 +643,7 @@ pub(crate) async fn spawn_session_actor(
         } else {
             web_search_config.candidates
         },
-        sampling_config.provider,
+        &sampling_config,
     );
     // Memory embeddings are an independent xAI helper path. A Codex session
     // must never send its ChatGPT bearer or backend URL to the embeddings API,
@@ -1227,6 +1227,8 @@ pub(crate) async fn spawn_session_actor(
             .map(|s| s.workspace_memory_file().to_string_lossy().into_owned()),
         memory_backend: memory_backend_for_spec,
         web_search: parking_lot::RwLock::new(web_search_state.clone()),
+        active_sampling_config: parking_lot::RwLock::new(sampling_config.clone()),
+        chat_state_handle: chat_state_handle.clone(),
         x_search_enabled: crate::util::config::load_x_search_config_sync().enabled,
         backend_search: backend_tools_enabled,
         web_fetch_config: web_fetch_config.clone(),

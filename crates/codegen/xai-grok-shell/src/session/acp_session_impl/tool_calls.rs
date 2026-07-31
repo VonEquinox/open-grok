@@ -2140,6 +2140,12 @@ impl SessionActor {
                 vec![],
                 vec![],
             ),
+            ToolInput::WebRun(commands) => (
+                format!("Web search: \"{}\"", commands.summary()),
+                acp::ToolKind::Search,
+                vec![],
+                vec![],
+            ),
             ToolInput::ImageGen(ig) => (
                 format!("imagine: {}", ig.prompt),
                 acp::ToolKind::Other,

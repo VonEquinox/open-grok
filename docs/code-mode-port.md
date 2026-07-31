@@ -17,6 +17,18 @@ Provider authentication, quota, and hosted-search compatibility are recorded in
 The commit is intentionally pinned. Future upstream changes must be reviewed and
 ported explicitly rather than silently changing the runtime contract.
 
+The July 2026 selective sync reviewed upstream through
+`53d06e24ea318a963812030fa8fed1bd0fc42d42`. It ports the 30-second buffered
+`exec` default, the one-second grace for yields of at least ten seconds,
+first-wins normalized tool-name collision coverage, V8 150.4.0, and standalone
+provider search. It deliberately does not adopt upstream's external
+`codex-code-mode-host` process.
+
+This sync also leaves upstream #34588's sampled MCP catalog-revision binding for
+a dedicated reconnect-during-turn correctness and security audit. It does not
+change MCP startup/runtime assembly, telemetry metadata, structured read/edit
+tools, or audio output.
+
 ## Compatibility contract
 
 When Code Mode Only is effective:
@@ -43,6 +55,9 @@ When Code Mode Only is effective:
    tool cards. The UI shows only the decoded nested tools and their ordinary
    structured results; raw JavaScript, wait arguments, and cell transport output
    stay hidden during live streaming and session replay.
+9. On a supported native Codex Responses route, `web__run` replaces the hosted
+   web-search declaration and is callable inside JavaScript as
+   `tools.web__run(...)`. Unsupported routes keep hosted search.
 
 An implementation that exposes Codex native `exec` as a JSON-schema function,
 sends native custom tools to xAI, or starts a fresh JavaScript process for every
@@ -87,10 +102,16 @@ Mode routes are capability-driven: `NativeCustomGrammar` for Codex,
 6. Run focused protocol, runtime, sampler, tool-registry, configuration, and pager
    tests followed by formatting and lint checks for the affected crates.
 
-All six phases are implemented against the pinned revision. Grok Build uses the
-upstream embedded V8 provider; the optional out-of-process `code-mode-host` is not
-included. This keeps the execution and persistence contract while avoiding a
-second process-management path.
+All six phases are implemented against the pinned revision plus the selective
+sync recorded above. Open Grok keeps an embedded V8 provider, now on V8 150.4.0,
+even though upstream removed that path in favor of `codex-code-mode-host`. This
+keeps the execution and persistence contract while avoiding a second
+process-management path.
+
+`exec` defaults to a 30-second observation window while `wait` remains at ten
+seconds. Both receive a one-second runtime grace when the requested observation
+window is at least ten seconds, allowing a nested tool that completes just after
+the advertised deadline to return without another model turn.
 
 The user-visible event behavior was rechecked against Codex commit
 `cbc83d961e8132bfff4d340ab8342d181b79e95e`. That revision records outer custom
