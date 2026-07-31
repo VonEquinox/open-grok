@@ -281,7 +281,18 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
                         false
                     }
                 } else {
-                    finish_wake_turn(agent, &prompt_id, &stop_reason, agent_result.as_deref());
+                    let cancel_trigger = session_notif
+                        .meta
+                        .as_ref()
+                        .and_then(|v| v.get("cancelTrigger"))
+                        .and_then(|v| v.as_str());
+                    finish_wake_turn(
+                        agent,
+                        &prompt_id,
+                        &stop_reason,
+                        agent_result.as_deref(),
+                        cancel_trigger,
+                    );
                     true
                 }
             } else if is_server_initiated_prompt(&prompt_id)
