@@ -197,6 +197,10 @@ harness = false
 name = "edit_highlight"
 harness = false
 
+[[bench]]
+name = "resize"
+harness = false
+
 # PTY integration tests are split into coherent scheduling families. The test
 # modules remain under tests/pty_e2e/; these roots only define which cases share
 # one Cargo/Bazel process. All cases stay #[ignore]d for ordinary Cargo runs.

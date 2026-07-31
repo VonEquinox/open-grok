@@ -1,5 +1,6 @@
 //! AgentMessageBlock - displays agent responses with markdown.
 
+use crate::appearance::AppearanceConfig;
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{AccentStyle, BlockContext, BlockOutput};
 
@@ -203,7 +204,7 @@ impl BlockContent for AgentMessageBlock {
         None
     }
 
-    fn has_vpad(&self, _ctx: &BlockContext) -> bool {
+    fn has_vpad_for(&self, _appearance: &AppearanceConfig) -> bool {
         false
     }
 

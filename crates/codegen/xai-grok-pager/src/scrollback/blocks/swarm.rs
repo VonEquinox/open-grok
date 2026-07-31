@@ -7,6 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::appearance::AppearanceConfig;
 use crate::render::line_utils::truncate_str;
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{AccentStyle, BlockContext, BlockOutput, DisplayMode};
@@ -343,7 +344,7 @@ impl BlockContent for SwarmBlock {
     fn bullet(&self, ctx: &BlockContext) -> Option<AccentStyle> {
         self.accent(ctx)
     }
-    fn has_vpad(&self, _ctx: &BlockContext) -> bool {
+    fn has_vpad_for(&self, _appearance: &AppearanceConfig) -> bool {
         false
     }
     fn has_raw_mode(&self) -> bool {

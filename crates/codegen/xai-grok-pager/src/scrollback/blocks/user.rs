@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::appearance::AppearanceConfig;
 use crate::render::wrapping::{RtOptions, word_wrap_line_with_joiners};
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{
@@ -509,8 +510,8 @@ impl BlockContent for UserPromptBlock {
         ctx.appearance.scrollback.blocks.prompt.bg
     }
 
-    fn has_vpad(&self, ctx: &BlockContext) -> bool {
-        ctx.appearance.scrollback.blocks.prompt.vpad && !ctx.appearance.prompt.compact
+    fn has_vpad_for(&self, appearance: &AppearanceConfig) -> bool {
+        appearance.scrollback.blocks.prompt.vpad && !appearance.prompt.compact
     }
 
     fn has_raw_mode(&self) -> bool {

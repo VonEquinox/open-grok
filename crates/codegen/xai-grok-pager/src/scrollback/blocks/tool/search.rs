@@ -3,6 +3,7 @@
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
+use crate::appearance::AppearanceConfig;
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{
     AccentStyle, BlockBackground, BlockContext, BlockLine, BlockOutput, DisplayMode, Selectable,
@@ -531,7 +532,7 @@ impl BlockContent for SearchToolCallBlock {
         }
     }
 
-    fn has_vpad(&self, _ctx: &BlockContext) -> bool {
+    fn has_vpad_for(&self, _appearance: &AppearanceConfig) -> bool {
         false
     }
 

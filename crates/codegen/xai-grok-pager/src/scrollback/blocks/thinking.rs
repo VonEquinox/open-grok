@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthStr;
 
+use crate::appearance::AppearanceConfig;
 use crate::render::color::blend_line_with_default;
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{
@@ -463,7 +464,7 @@ impl BlockContent for ThinkingBlock {
         false
     }
 
-    fn has_vpad(&self, _ctx: &BlockContext) -> bool {
+    fn has_vpad_for(&self, _appearance: &AppearanceConfig) -> bool {
         false
     }
 
