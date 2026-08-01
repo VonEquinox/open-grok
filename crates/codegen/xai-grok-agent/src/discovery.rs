@@ -353,7 +353,7 @@ fn all_subagents_with_plugins_and_home(
                         continue;
                     }
                     // Use frontmatter-only parsing for untrusted plugins.
-                    let Some(mut def) = load_plugin_agent_definition(plugin, &path) else {
+                    let Some(def) = load_plugin_agent_definition(plugin, &path) else {
                         continue;
                     };
 

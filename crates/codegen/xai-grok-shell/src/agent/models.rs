@@ -1072,6 +1072,11 @@ impl ModelsManager {
         self.inner.current_model_id.read().clone()
     }
 
+    pub(crate) fn ensure_current_model_available(&self) {
+        let config = self.inner.cfg.read().clone();
+        self.reselect_current_model_if_missing(&config);
+    }
+
     pub fn set_current_model_id(&self, id: acp::ModelId) {
         // Explicit `/model` pick: remember so first-catalog reselect won't
         // clobber it (background refresh after non-blocking boot).

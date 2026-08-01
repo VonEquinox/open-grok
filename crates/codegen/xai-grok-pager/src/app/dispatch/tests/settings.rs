@@ -1174,7 +1174,10 @@ fn every_setting_has_action_for_reset_arm() {
                  no-op. Add an arm to `action_for_reset` in dispatch.rs.",
                 meta.key,
             );
-            if meta.key == "default_model"
+            if matches!(
+                meta.kind,
+                crate::settings::SettingKind::DynamicMultiSelect { .. }
+            ) || meta.key == "default_model"
                 || matches!(meta.kind, crate::settings::SettingKind::Secret { .. })
                 || meta.key.starts_with("toolset.web_search_source.")
                 || meta.key == "toolset.x_search.enabled"
@@ -1851,6 +1854,7 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
         | "toolset.web_search_source.kimi_platform"
         | "toolset.web_search_source.kimi_code"
         | "toolset.web_search_source.fireworks"
+        | "toolset.web_search_source.deepseek"
         | "toolset.web_search_source.opencode_go" => {
             // "perplexity" is a valid non-default choice for every target.
             let _ = dispatch(
@@ -1864,12 +1868,23 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
                         "toolset.web_search_source.fireworks" => {
                             "toolset.web_search_source.fireworks"
                         }
+                        "toolset.web_search_source.deepseek" => {
+                            "toolset.web_search_source.deepseek"
+                        }
                         "toolset.web_search_source.opencode_go" => {
                             "toolset.web_search_source.opencode_go"
                         }
                         _ => "toolset.web_search_source.kimi_code",
                     },
                     choice: "perplexity",
+                },
+                app,
+            );
+        }
+        "opencode_go_models" => {
+            let _ = dispatch(
+                Action::SetOpenCodeGoEnabledModels {
+                    models: vec!["test/model".to_owned()],
                 },
                 app,
             );

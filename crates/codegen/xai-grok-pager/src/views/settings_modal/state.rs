@@ -1156,6 +1156,7 @@ pub(super) fn action_for_enum_commit(key: SettingKey, choice: &'static str) -> O
         | "toolset.web_search_source.kimi_platform"
         | "toolset.web_search_source.kimi_code"
         | "toolset.web_search_source.fireworks"
+        | "toolset.web_search_source.deepseek"
         | "toolset.web_search_source.opencode_go" => {
             Some(Action::SetWebSearchSource { key, choice })
         }

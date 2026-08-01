@@ -936,6 +936,14 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "auto_update",
             // SHELL-owned hunk_tracker_mode (Advanced; `off` disables it).
             "hunk_tracker_mode",
+            "memory.enabled",
+            "memory.dream.enabled",
+            "features.lsp_tools",
+            "features.web_fetch",
+            "features.two_pass_compaction",
+            "features.non_git_warning",
+            "doom_loop_recovery.enabled",
+            "features.subagent_worktree_snapshot",
         ]
     );
 }
@@ -6596,7 +6604,7 @@ fn consent_chooser_drops_tip_and_reset() {
     let mut consent = enter_picker_for("coding_data_sharing");
     let text = screen(&mut consent);
     assert!(
-        !text.contains("Ask Grok"),
+        !text.contains("Ask Open Grok"),
         "consent chooser must not render the docs tip:\n{text}"
     );
     assert!(
@@ -6625,7 +6633,7 @@ fn consent_chooser_drops_tip_and_reset() {
     let mut ordinary = enter_picker_for("theme");
     let text = screen(&mut ordinary);
     assert!(
-        text.contains("d reset") && text.contains("Ask Grok"),
+        text.contains("d reset") && text.contains("Ask Open Grok"),
         "ordinary pickers keep the tip and the reset hint:\n{text}"
     );
     assert!(

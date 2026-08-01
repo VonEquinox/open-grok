@@ -11,6 +11,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 /// Shares its row with the buttons.
 const PRIVACY_BANNER_TITLE: &str = "Help improve Open Grok";
+const PRIVACY_BANNER_COMPACT_TITLE: &str = "Improve Open Grok";
 
 const PRIVACY_BANNER_DESC: &str = "Off by default. Opt-in to allow SpaceXAI to retain coding \
      data, e.g., prompts, traces, & metrics, for training and debugging purposes. Change \
@@ -102,6 +103,14 @@ fn title_width(area_width: u16) -> u16 {
     }
 }
 
+fn title(area_width: u16) -> &'static str {
+    if title_width(area_width) >= PRIVACY_BANNER_TITLE.len() as u16 {
+        PRIVACY_BANNER_TITLE
+    } else {
+        PRIVACY_BANNER_COMPACT_TITLE
+    }
+}
+
 fn wrap_to(width: usize) -> Vec<std::borrow::Cow<'static, str>> {
     if width == 0 {
         return vec![];
@@ -162,7 +171,7 @@ pub(crate) fn render(
     buf.set_stringn(
         area.x,
         area.y,
-        PRIVACY_BANNER_TITLE,
+        title(area.width),
         title_width(area.width) as usize,
         Style::default().fg(theme.text_primary),
     );
@@ -334,7 +343,7 @@ mod tests {
             let rows = rows(width);
             assert_eq!(rows.len(), height(width) as usize);
             assert!(
-                rows[0].starts_with(PRIVACY_BANNER_TITLE),
+                rows[0].starts_with(title(width)),
                 "width {width}: title must never be clipped, got {:?}",
                 rows[0]
             );

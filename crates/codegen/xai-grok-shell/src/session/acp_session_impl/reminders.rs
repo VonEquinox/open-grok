@@ -611,6 +611,9 @@ impl SessionActor {
         let reported = res.get_or_default::<State<ReportedTaskCompletions>>();
         for id in ids {
             reported.mark_reported(id);
+            if let Some(reservations) = &self.tool_context.task_completion_reservations {
+                reservations.release(id);
+            }
         }
     }
     pub(super) async fn drain_between_turn_completions(&self) {

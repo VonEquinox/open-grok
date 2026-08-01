@@ -1583,6 +1583,21 @@ fn default_resolution_skips_api_key_provider_without_credentials() {
     assert_eq!(source, config::ConfigSource::Default);
 }
 
+#[test]
+fn new_session_reselection_repairs_removed_current_model() {
+    let manager = test_manager();
+    let fallback = crate::models::default_model();
+    manager.insert_test_entry(
+        fallback,
+        ModelEntry::fallback(fallback, &config::EndpointsConfig::default()),
+    );
+    manager.set_current_model_id(acp::ModelId::new("removed-model"));
+
+    manager.ensure_current_model_available();
+
+    assert_eq!(manager.current_model_id().0.as_ref(), fallback);
+}
+
 // ── duplicate model slug re-keying (A/B experiment "auto" alias) ──
 
 fn make_entry_config(model: &str, name: Option<&str>) -> config::ModelEntryConfig {

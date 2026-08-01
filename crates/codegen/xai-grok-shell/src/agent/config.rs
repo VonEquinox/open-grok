@@ -3802,8 +3802,22 @@ pub fn resolve_model_list_with_provider_catalogs(
         tracing::info!(
             models_base_url = ? cfg.endpoints.models_base_url, models_list_url = ? cfg
             .endpoints.models_list_url,
-            "custom models endpoint active, skipping built-in xAI defaults",
+            "custom models endpoint active, skipping non-bootstrap built-in xAI defaults",
         );
+        let has_prefetched_xai = prefetched.as_ref().is_some_and(|models| {
+            models
+                .values()
+                .any(|entry| entry.info.provider == ModelProvider::Xai)
+        });
+        if !has_prefetched_xai {
+            let default_model = crate::models::default_model();
+            if let Some(entry) = defaults
+                .get(default_model)
+                .filter(|entry| entry.info.provider == ModelProvider::Xai)
+            {
+                resolved.insert(default_model.to_owned(), entry.clone());
+            }
+        }
         resolved.extend(
             defaults
                 .iter()
@@ -3827,67 +3841,71 @@ pub fn resolve_model_list_with_provider_catalogs(
             }
             keep
         });
-        let default_cw = DEFAULT_CONTEXT_WINDOW;
-        for (key, entry) in prefetched.iter_mut() {
-            let donor = resolved
-                .get(key)
-                .filter(|donor| donor.info.provider == entry.info.provider);
-            if let Some(donor) = donor {
-                if entry.info.context_window.get() == default_cw
-                    && donor.info.context_window.get() != default_cw
+        if prefetched.is_empty() && cfg.endpoints.has_custom_endpoint() {
+            tracing::warn!("xAI model catalog contained no usable entries; keeping bootstrap");
+        } else {
+            let default_cw = DEFAULT_CONTEXT_WINDOW;
+            for (key, entry) in prefetched.iter_mut() {
+                let donor = resolved
+                    .get(key)
+                    .filter(|donor| donor.info.provider == entry.info.provider);
+                if let Some(donor) = donor {
+                    if entry.info.context_window.get() == default_cw
+                        && donor.info.context_window.get() != default_cw
+                    {
+                        tracing::debug!(
+                            model_key = %key,
+                            model = %entry.info.model,
+                            client_default = default_cw,
+                            inherited = donor.info.context_window.get(),
+                            donor_model = %donor.info.model,
+                            "prefetched model missing context_window, inheriting from hardcoded default"
+                        );
+                        entry.info.context_window = donor.info.context_window;
+                    }
+                    if entry.info.agent_type == DEFAULT_AGENT_TYPE {
+                        entry.info.agent_type.clone_from(&donor.info.agent_type);
+                    }
+                    if entry.info.api_backend == ApiBackend::default() {
+                        entry.info.api_backend.clone_from(&donor.info.api_backend);
+                    }
+                    if entry.info.tool_mode.is_none() {
+                        entry.info.tool_mode = donor.info.tool_mode;
+                    }
+                }
+                if resolved.contains_key(key) {
+                    tracing::debug!(model_key = %key, "prefetched model overriding default");
+                }
+            }
+            // A remote xAI catalog is authoritative only for xAI entries. Keep all
+            // other provider partitions beside whatever the xAI endpoint returns.
+            let mut merged: IndexMap<String, ModelEntry> = resolved
+                .into_iter()
+                .filter(|(_, entry)| entry.info.provider != ModelProvider::Xai)
+                .collect();
+            for (key, entry) in prefetched {
+                if merged
+                    .get(&key)
+                    .is_some_and(|existing| existing.info.provider != ModelProvider::Xai)
                 {
-                    tracing::debug!(
+                    let mut qualified = format!("xai:{key}");
+                    let mut suffix = 2usize;
+                    while merged.contains_key(&qualified) {
+                        qualified = format!("xai:{key}:{suffix}");
+                        suffix += 1;
+                    }
+                    tracing::warn!(
                         model_key = %key,
-                        model = %entry.info.model,
-                        client_default = default_cw,
-                        inherited = donor.info.context_window.get(),
-                        donor_model = %donor.info.model,
-                        "prefetched model missing context_window, inheriting from hardcoded default"
+                        qualified_key = %qualified,
+                        "xAI model key collides with another provider slug; qualifying xAI key"
                     );
-                    entry.info.context_window = donor.info.context_window;
-                }
-                if entry.info.agent_type == DEFAULT_AGENT_TYPE {
-                    entry.info.agent_type.clone_from(&donor.info.agent_type);
-                }
-                if entry.info.api_backend == ApiBackend::default() {
-                    entry.info.api_backend.clone_from(&donor.info.api_backend);
-                }
-                if entry.info.tool_mode.is_none() {
-                    entry.info.tool_mode = donor.info.tool_mode;
+                    merged.insert(qualified, entry);
+                } else {
+                    merged.insert(key, entry);
                 }
             }
-            if resolved.contains_key(key) {
-                tracing::debug!(model_key = %key, "prefetched model overriding default");
-            }
+            resolved = merged;
         }
-        // A remote xAI catalog is authoritative only for xAI entries. Keep all
-        // other provider partitions beside whatever the xAI endpoint returns.
-        let mut merged: IndexMap<String, ModelEntry> = resolved
-            .into_iter()
-            .filter(|(_, entry)| entry.info.provider != ModelProvider::Xai)
-            .collect();
-        for (key, entry) in prefetched {
-            if merged
-                .get(&key)
-                .is_some_and(|existing| existing.info.provider != ModelProvider::Xai)
-            {
-                let mut qualified = format!("xai:{key}");
-                let mut suffix = 2usize;
-                while merged.contains_key(&qualified) {
-                    qualified = format!("xai:{key}:{suffix}");
-                    suffix += 1;
-                }
-                tracing::warn!(
-                    model_key = %key,
-                    qualified_key = %qualified,
-                    "xAI model key collides with another provider slug; qualifying xAI key"
-                );
-                merged.insert(qualified, entry);
-            } else {
-                merged.insert(key, entry);
-            }
-        }
-        resolved = merged;
     }
     merge_remote_provider_partition(
         &mut resolved,
@@ -4537,6 +4555,7 @@ pub struct ConfigModelOverride {
     pub supports_reasoning_summary_parameter: Option<bool>,
     pub default_reasoning_summary: Option<ReasoningSummary>,
     pub supports_backend_search: Option<bool>,
+    pub supports_standalone_web_search: Option<bool>,
     /// Aliases must be registered in `config_model_override_parse::ALIASES`;
     /// serde rejects a table that contains both spellings otherwise.
     #[serde(alias = "send_compactions_remaining")]
@@ -4611,6 +4630,7 @@ impl ConfigModelOverride {
                 default_agent_type()
             };
             entry.info.supports_backend_search = false;
+            entry.info.supports_standalone_web_search = None;
             entry.info.reasoning_effort = None;
             entry.info.supports_reasoning_effort = false;
             entry.info.reasoning_efforts.clear();
@@ -4704,6 +4724,9 @@ impl ConfigModelOverride {
         }
         if let Some(v) = self.supports_backend_search {
             entry.info.supports_backend_search = v;
+        }
+        if let Some(v) = self.supports_standalone_web_search {
+            entry.info.supports_standalone_web_search = Some(v);
         }
         if self.compactions_remaining.is_some() {
             entry.info.compactions_remaining = self.compactions_remaining;
@@ -10173,6 +10196,31 @@ reasoning_effort = "low"
                 .any(|entry| entry.info.provider == ModelProvider::Kimi),
             "isolated Kimi fallbacks remain available"
         );
+    }
+    #[test]
+    fn custom_endpoint_bootstraps_xai_default_without_usable_catalog() {
+        let mut cfg = Config::default();
+        cfg.endpoints.models_base_url = Some("https://enterprise.acme.com/v1".to_owned());
+
+        for prefetched in [None, Some(IndexMap::new())] {
+            let resolved = resolve_model_list(&cfg, prefetched);
+            let default_model = crate::models::default_model();
+            let bootstrap = resolved
+                .get(default_model)
+                .expect("bundled xAI default should bootstrap the custom endpoint");
+            let xai_entries = resolved
+                .values()
+                .filter(|entry| entry.info.provider == ModelProvider::Xai)
+                .count();
+
+            assert_eq!(xai_entries, 1);
+            assert_eq!(
+                resolved.first().map(|(key, _)| key.as_str()),
+                Some(default_model)
+            );
+            assert_eq!(bootstrap.info.provider, ModelProvider::Xai);
+            assert_eq!(bootstrap.info.base_url, "https://enterprise.acme.com/v1");
+        }
     }
     #[test]
     fn e2e_default_endpoint_still_injects_defaults() {

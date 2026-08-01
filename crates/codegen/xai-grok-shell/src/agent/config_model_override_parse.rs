@@ -728,6 +728,7 @@ mod tests {
             supports_reasoning_summary_parameter: Some(true),
             default_reasoning_summary: Some(ReasoningSummary::Detailed),
             supports_backend_search: Some(false),
+            supports_standalone_web_search: Some(true),
             compactions_remaining: Some(CompactionsRemaining::Fixed(1)),
             compaction_at_tokens: Some(CompactionAtTokens::Fixed(100_000)),
             show_model_fingerprint: Some(true),

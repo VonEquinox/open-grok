@@ -46,14 +46,21 @@ fn bare_login_opens_provider_picker_without_starting_auth() {
         panic!("bare /login should open the provider ArgPicker");
     };
     assert_eq!(command, "login");
-    assert_eq!(items.len(), 5);
-    assert_eq!(original_items.len(), 5);
+    assert_eq!(items.len(), 6);
+    assert_eq!(original_items.len(), 6);
     assert_eq!(
         items
             .iter()
             .map(|item| item.insert_text.as_str())
             .collect::<Vec<_>>(),
-        ["xai", "codex", "kimi", "fireworks", "opencode-go"]
+        [
+            "xai",
+            "codex",
+            "kimi",
+            "fireworks",
+            "deepseek",
+            "opencode-go",
+        ]
     );
 }
 
@@ -79,7 +86,14 @@ fn dashboard_bare_login_opens_inline_provider_picker_without_starting_auth() {
             .iter()
             .map(|item| item.insert_text.as_str())
             .collect::<Vec<_>>(),
-        ["xai", "codex", "kimi", "fireworks", "opencode-go"]
+        [
+            "xai",
+            "codex",
+            "kimi",
+            "fireworks",
+            "deepseek",
+            "opencode-go",
+        ]
     );
 }
 

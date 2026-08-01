@@ -1098,6 +1098,9 @@ pub(in crate::app::dispatch) fn action_for_reset(
 ) -> Option<Action> {
     use crate::settings::SettingValue;
     match (key, value) {
+        ("opencode_go_models", SettingValue::Bool(false)) => {
+            Some(Action::SetOpenCodeGoEnabledModels { models: Vec::new() })
+        }
         (
             "toolset.web_search_source.xai"
             | "toolset.web_search_source.codex"

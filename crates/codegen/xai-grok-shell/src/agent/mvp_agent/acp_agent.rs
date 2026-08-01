@@ -1173,6 +1173,7 @@ impl acp::Agent for MvpAgent {
         if let Err(error) = self.models_manager.refresh_codex_models(false).await {
             tracing::warn!(%error, "Codex model catalog refresh failed during new session; keeping cached/embedded models");
         }
+        self.models_manager.ensure_current_model_available();
         self.spawn_settings_reapply();
         let cwd = AbsPathBuf::new(arguments.cwd.clone())
             .map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;

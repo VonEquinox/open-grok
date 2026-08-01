@@ -1638,8 +1638,11 @@ mod tests {
         let ui = UiConfig::default();
         let pager = PagerLocalSnapshot::default();
         for meta in reg.all() {
-            // Group rows carry no scalar value; they are not read via this path.
-            if matches!(meta.kind, SettingKind::Group { .. }) {
+            // Group-like rows carry no scalar value; they are not read via this path.
+            if matches!(
+                meta.kind,
+                SettingKind::Group { .. } | SettingKind::DynamicMultiSelect { .. }
+            ) {
                 continue;
             }
             let value = current_value_for(meta.key, &ui, &pager).unwrap_or_else(|| {
@@ -1934,8 +1937,11 @@ mod tests {
     fn default_value_for_returns_kind_default() {
         let reg = SettingsRegistry::defaults();
         for meta in reg.all() {
-            // Group rows have no meaningful scalar default (sentinel only).
-            if matches!(meta.kind, SettingKind::Group { .. }) {
+            // Group-like rows have no meaningful scalar default (sentinel only).
+            if matches!(
+                meta.kind,
+                SettingKind::Group { .. } | SettingKind::DynamicMultiSelect { .. }
+            ) {
                 continue;
             }
             let v = default_value_for(meta);

@@ -651,8 +651,11 @@ impl SessionActor {
         let auth_method = self.auth_method_id.load();
         let gate =
             SessionTokenAuthGate::new(auth_method.as_deref(), model_facts.byok, &cfg.base_url);
-        let use_bearer_resolver = gate.active();
-        self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
+        let uses_xai_session_auth = cfg.provider.profile().session_auth.is_xai();
+        let use_bearer_resolver = uses_xai_session_auth && gate.active();
+        if uses_xai_session_auth {
+            self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
+        }
         if use_bearer_resolver && let Some(am) = self.auth_manager.as_ref() {
             let _ = am.auth().await;
         }

@@ -2050,7 +2050,14 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(report.gc.as_ref().unwrap().dead_removed, 1);
+        assert!(
+            report.gc.as_ref().unwrap().dead_removed >= 1,
+            "the target dead row must be reclaimed"
+        );
+        assert!(
+            db.get("sole-dead").unwrap().is_none(),
+            "the target dead row must be removed even if parallel tests add rows"
+        );
         assert!(
             report.stale_registrations_cleaned >= 1,
             "dead sole-row source_repo must still be pruned; cleaned={}",

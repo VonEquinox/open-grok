@@ -122,6 +122,7 @@ impl ContentController {
     /// `GET /v1/models`. Use [`MockModel::with_agent_type`] to configure
     /// models with different harness types for agent-type-mismatch tests.
     pub async fn start_with_models(models: Vec<MockModel>) -> Result<Self> {
+        let default_model = models.first().map(|model| model.id.clone());
         let server = MockInferenceServer::start_with_models(models)
             .await
             .context("start mock inference server")?;
@@ -133,6 +134,9 @@ impl ContentController {
         server.set_response(default_response_text());
 
         let mut sandbox = TestSandbox::builder().mock_url(server.url()).build();
+        if let Some(default_model) = default_model {
+            sandbox.set_env("GROK_DEFAULT_MODEL", default_model);
+        }
         // Keep unrelated autocomplete work out of PTY timing assertions.
         sandbox.set_env("GROK_PROMPT_SUGGESTIONS", "false");
 

@@ -334,9 +334,6 @@ impl SessionActor {
         let origin = super::super::PromptOrigin::from_prompt_id(prompt_id);
         if let Some(completion_id) = origin.completion_id() {
             self.mark_completions_reported(&[completion_id]).await;
-            if let Some(reservations) = &self.tool_context.task_completion_reservations {
-                reservations.release(completion_id);
-            }
         }
         if !origin.is_synthetic() {
             self.cancel_pending_recap_for_new_prompt();

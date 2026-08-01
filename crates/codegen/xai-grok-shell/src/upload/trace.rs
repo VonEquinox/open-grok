@@ -2025,7 +2025,7 @@ mod tests {
     /// trace upload path is a cache hit — the refresher fires once
     /// (proactive), then `resolve_async` picks up the cached token
     /// without calling the refresher again.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn proactive_refresh_makes_trace_resolve_a_cache_hit() {
         use crate::auth::{GrokAuth, GrokComConfig};
         use crate::session::repo_changes::UploadMethod;
@@ -2060,7 +2060,13 @@ mod tests {
         auth_manager.set_refresher(Arc::new(Counting(cc)));
         let cancel = tokio_util::sync::CancellationToken::new();
         auth_manager.start_proactive_refresh(cancel.clone());
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(crate::auth::manager::PROACTIVE_MIN_SLEEP).await;
+        for _ in 0..8 {
+            if call_count.load(std::sync::atomic::Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
         assert!(call_count.load(std::sync::atomic::Ordering::SeqCst) >= 1);
         let count_after_proactive = call_count.load(std::sync::atomic::Ordering::SeqCst);
         let resolver = DynamicResolver {
