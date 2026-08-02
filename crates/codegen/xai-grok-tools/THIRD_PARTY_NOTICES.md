@@ -19,6 +19,9 @@ The tool implementations under `src/implementations/codex/` (`apply_patch`,
 `grep_files`, `list_dir`, `read_file`) are ported from the
 [openai/codex](https://github.com/openai/codex) project
 (`codex-rs/core/src/tools/handlers/`).
+The standalone web-search description and adapted command contract under
+`src/implementations/grok_build/web_run/` derive from
+`codex-rs/ext/web-search/` in the same project.
 
 Copyright 2025 OpenAI
 

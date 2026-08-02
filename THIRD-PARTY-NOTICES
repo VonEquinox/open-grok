@@ -16635,9 +16635,10 @@ License: Apache-2.0
 Source revisions:
   2be648ba4a6c159a3d80b1c07e7323cbd5efef8f (Code Mode and OAuth baseline)
   cbc83d961e8132bfff4d340ab8342d181b79e95e (live model catalog contract)
+  2b5bdcf67547860f2e5c5a605009a70026796b2b (standalone web-search parity)
 Upstream paths: codex-rs/code-mode, codex-rs/code-mode-protocol,
   codex-rs/core/src/tools/code_mode/, codex-rs/core/src/tools/handlers/
-  (and apply-patch crate), codex-rs/models-manager,
+  (and apply-patch crate), codex-rs/ext/web-search, codex-rs/models-manager,
   codex-rs/model-provider/src/models_endpoint.rs,
   codex-rs/codex-api/src/endpoint/models.rs,
   codex-rs/protocol/src/openai_models.rs
@@ -16651,6 +16652,8 @@ Additional requirements / notices:
   Tool implementations under:
     crates/codegen/xai-grok-tools/src/implementations/codex/
   Modules: apply_patch, grep_files, list_dir, read_file.
+  Standalone web-search description and adapted command contract under:
+    crates/codegen/xai-grok-tools/src/implementations/grok_build/web_run/
   Code Mode protocol and embedded JavaScript runtime under:
     crates/codegen/xai-grok-code-mode-protocol/
     crates/codegen/xai-grok-code-mode/
