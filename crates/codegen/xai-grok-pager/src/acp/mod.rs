@@ -61,6 +61,9 @@ pub struct AcpConnection {
     /// lets startup route to Codex OAuth when the desired Codex model is absent
     /// from the auth-filtered `modelState`.
     pub configured_default_model: Option<acp::ModelId>,
+    /// Whether the configured startup model is a Codex Responses model with
+    /// its own API key. Such a model does not need ChatGPT Codex OAuth at startup.
+    pub configured_default_model_has_own_credentials: bool,
     /// Whether the agent is a grok-shell instance.
     pub is_grok_shell: bool,
     /// Auth methods advertised by the agent.
@@ -155,6 +158,19 @@ pub struct ConnectFlags {
     pub default_auto_mode: bool,
 }
 
+/// Whether the configured default is a Codex Responses model with a credential
+/// owned by that model rather than ChatGPT Codex OAuth.
+fn configured_default_model_has_codex_api_key(config: &AgentConfig) -> bool {
+    let Some(default_model) = config.models.default.as_deref() else {
+        return false;
+    };
+    let models = xai_grok_shell::agent::config::resolve_model_list(config, None);
+    xai_grok_shell::agent::config::find_model_by_id(&models, default_model).is_some_and(|model| {
+        model.info().provider == xai_grok_shell::sampling::types::ModelProvider::Codex
+            && model.has_own_credentials()
+    })
+}
+
 /// Connect to an agent: spawn, initialize, authenticate.
 ///
 /// This is the main entry point for establishing an ACP connection.
@@ -197,6 +213,9 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
 
     apply_config_writes(&flags);
 
+    let configured_default_model_has_own_credentials =
+        configured_default_model_has_codex_api_key(&agent_config);
+
     // Spawn the agent
     let memory_config = agent_config.memory_config.clone();
     let spawned = spawn::spawn_grok_shell(agent_config, cancel, memory_config).await?;
@@ -216,21 +235,36 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
         session_recap_available,
     ) = initialize(&tx, &flags).await?;
 
-    // Determine whether interactive login is needed.
-    let (needs_login, login_label, login_method_id, auth_start_mode) =
-        startup_auth_metadata(&auth_methods);
+    // Determine whether interactive login is needed. A configured Codex BYOK
+    // model owns its credential, so it can enter the UI without OAuth.
+    let skip_startup_auth = configured_default_model_has_own_credentials;
+    let (needs_login, login_label, login_method_id, auth_start_mode) = if skip_startup_auth {
+        (false, None, None, AuthStartMode::Pending)
+    } else {
+        startup_auth_metadata(&auth_methods)
+    };
 
     let (needs_login, login_label, login_method_id, auth_start_mode, auth_meta) =
-        bounded_eager_auth(
-            &tx,
-            &auth_methods,
-            default_auth_method_id.as_ref(),
-            needs_login,
-            login_label,
-            login_method_id,
-            auth_start_mode,
-        )
-        .await;
+        if skip_startup_auth {
+            (
+                needs_login,
+                login_label,
+                login_method_id,
+                auth_start_mode,
+                None,
+            )
+        } else {
+            bounded_eager_auth(
+                &tx,
+                &auth_methods,
+                default_auth_method_id.as_ref(),
+                needs_login,
+                login_label,
+                login_method_id,
+                auth_start_mode,
+            )
+            .await
+        };
 
     Ok(AcpConnection {
         tx,
@@ -238,6 +272,7 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
         models,
         model_providers,
         configured_default_model,
+        configured_default_model_has_own_credentials,
         is_grok_shell,
         auth_methods,
         cancel: spawned.cancel,
@@ -321,6 +356,8 @@ pub async fn connect_via_leader(
         ReconnectPolicy::unbounded(),
     )?;
     let (tx, rx) = (bridge.channel.tx, bridge.channel.rx);
+    let configured_default_model_has_own_credentials =
+        configured_default_model_has_codex_api_key(&agent_config);
 
     let (
         models,
@@ -334,20 +371,36 @@ pub async fn connect_via_leader(
         session_recap_available,
     ) = initialize(&tx, &flags).await?;
 
-    let (needs_login, login_label, login_method_id, auth_start_mode) =
-        startup_auth_metadata(&auth_methods);
+    // A configured Codex BYOK model does not need either xAI or ChatGPT OAuth
+    // during TUI startup; its own API key is bound when the session is created.
+    let skip_startup_auth = configured_default_model_has_own_credentials;
+    let (needs_login, login_label, login_method_id, auth_start_mode) = if skip_startup_auth {
+        (false, None, None, AuthStartMode::Pending)
+    } else {
+        startup_auth_metadata(&auth_methods)
+    };
 
     let (needs_login, login_label, login_method_id, auth_start_mode, auth_meta) =
-        bounded_eager_auth(
-            &tx,
-            &auth_methods,
-            default_auth_method_id.as_ref(),
-            needs_login,
-            login_label,
-            login_method_id,
-            auth_start_mode,
-        )
-        .await;
+        if skip_startup_auth {
+            (
+                needs_login,
+                login_label,
+                login_method_id,
+                auth_start_mode,
+                None,
+            )
+        } else {
+            bounded_eager_auth(
+                &tx,
+                &auth_methods,
+                default_auth_method_id.as_ref(),
+                needs_login,
+                login_label,
+                login_method_id,
+                auth_start_mode,
+            )
+            .await
+        };
 
     // Leader mode runs the agent in a separate process, so there's no shared
     // in-process `AuthManager`. Build a dedicated *non-refreshing* one over the
@@ -369,6 +422,7 @@ pub async fn connect_via_leader(
         models,
         model_providers,
         configured_default_model,
+        configured_default_model_has_own_credentials,
         is_grok_shell,
         auth_methods,
         cancel: bridge.cancel,
@@ -1066,6 +1120,28 @@ mod tests {
         assert!(label.is_none());
         assert!(method_id.is_none());
         assert_eq!(mode, AuthStartMode::Pending);
+    }
+
+    #[test]
+    fn configured_codex_byok_default_is_detected_before_startup_auth() {
+        let raw: toml::Value = toml::from_str(
+            r#"
+[models]
+default = "sub2api"
+
+[model.sub2api]
+model = "sub2api-gpt-5.6-sol"
+base_url = "http://example.test/v1"
+provider = "codex"
+api_backend = "responses"
+api_key = "test-key"
+context_window = 353000
+"#,
+        )
+        .expect("test config must parse");
+        let config = AgentConfig::new_from_toml_cfg(&raw).expect("test config must resolve");
+
+        assert!(configured_default_model_has_codex_api_key(&config));
     }
 
     /// Inverse direction: when `xai.api_key` is NOT in the list, the pager
