@@ -150,6 +150,8 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         Some(crate::app::app_view::PrimaryProvider::DeepSeek)
     } else if app.pending_opencode_go_rebind_agents.contains(&parent_id) {
         Some(crate::app::app_view::PrimaryProvider::OpenCodeGo)
+    } else if app.pending_wafer_rebind_agents.contains(&parent_id) {
+        Some(crate::app::app_view::PrimaryProvider::Wafer)
     } else {
         Some(crate::app::app_view::PrimaryProvider::Kimi)
     };
@@ -1246,6 +1248,9 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         }
         Some(crate::app::app_view::PrimaryProvider::OpenCodeGo) => {
             app.cancel_pending_opencode_go_rebind(parent_id);
+        }
+        Some(crate::app::app_view::PrimaryProvider::Wafer) => {
+            app.cancel_pending_wafer_rebind(parent_id);
         }
         Some(
             crate::app::app_view::PrimaryProvider::Xai

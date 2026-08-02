@@ -1400,6 +1400,13 @@ impl SessionActor {
                     );
                     false
                 }
+                xai_grok_sampling_types::ModelProvider::Wafer => {
+                    tracing::warn!(
+                        session_id = %self.session_info.id.0,
+                        "Wafer API-key authentication cannot be refreshed; surfacing 401",
+                    );
+                    false
+                }
                 xai_grok_sampling_types::ModelProvider::OpenCodeGo => {
                     tracing::warn!(
                         session_id = %self.session_info.id.0,
@@ -2115,6 +2122,10 @@ mod auxiliary_model_policy_tests {
         assert_eq!(
             auxiliary_reasoning_effort(ModelProvider::Kimi, true, Some(ReasoningEffort::Max)),
             Some(ReasoningEffort::Max)
+        );
+        assert_eq!(
+            auxiliary_reasoning_effort(ModelProvider::Wafer, true, Some(ReasoningEffort::High)),
+            Some(ReasoningEffort::High)
         );
         assert_eq!(
             auxiliary_reasoning_effort(ModelProvider::Codex, false, Some(ReasoningEffort::High),),

@@ -4270,6 +4270,10 @@ fn default_models(
                     crate::deepseek_models::DEEPSEEK_API_KEY_ENV,
                 ));
             }
+            if m.provider == ModelProvider::Wafer {
+                m.base_url = Some(crate::wafer_models::api_base_url());
+                m.env_key = Some(EnvKeys::single(crate::wafer_models::WAFER_API_KEY_ENV));
+            }
             let key = m.id.clone().unwrap_or_else(|| m.model.clone());
             let context_window = m
                 .context_window
@@ -4615,6 +4619,7 @@ impl ConfigModelOverride {
                 | ModelProvider::Kimi
                 | ModelProvider::Fireworks
                 | ModelProvider::DeepSeek
+                | ModelProvider::Wafer
                 | ModelProvider::OpenCodeGo => ApiBackend::ChatCompletions,
             };
             if self.base_url.is_none() {

@@ -30,6 +30,7 @@ Codex provider does not override an explicit model API key.
 | Kimi | Chat | none | client function tools | no | standard only | provider API key | denied |
 | Fireworks AI | Chat | none | client function tools | no | standard only | provider API key | denied |
 | DeepSeek direct | Chat, Responses (V4 Flash) | DeepSeek | OpenAI | yes (V4 Flash) | standard only | provider API key | denied |
+| Wafer AI | Chat | none | client function tools | no | standard only | provider API key | denied |
 | OpenCode Go | Chat, Messages | none | client function tools | no | standard only | provider API key | denied |
 
 The sampler's built-in `ProviderAdapter` registry applies the transport policy
@@ -51,6 +52,11 @@ OAuth, or compaction behavior. Its live catalog intersects DeepSeek's `/models`
 response with curated direct entries.
 OpenCode Go selects Chat Completions or Messages per model from canonical
 metadata rather than from provider identity alone.
+Wafer AI is a plain OpenAI-compatible Chat Completions provider at
+`https://pass.wafer.ai/v1`: it uses provider-local API-key auth, discovers
+models from `GET /v1/models`, and exposes only standard client function tools.
+It has no native hosted web-search capability and never inherits xAI request
+metadata, credentials, or exports.
 
 `ConversationRequest` and `ConversationResponse` remain provider neutral.
 Provider-native opaque history is retained with a typed backend item and is

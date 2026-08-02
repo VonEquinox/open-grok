@@ -122,7 +122,8 @@ fn startup_codex_freshness_required(
             PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
-            | PrimaryProvider::OpenCodeGo => false,
+            | PrimaryProvider::OpenCodeGo
+            | PrimaryProvider::Wafer => false,
         },
     }
 }
@@ -146,7 +147,8 @@ fn plan_startup_auth(
             PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
-            | PrimaryProvider::OpenCodeGo => StartupAuthPlan::Ready,
+            | PrimaryProvider::OpenCodeGo
+            | PrimaryProvider::Wafer => StartupAuthPlan::Ready,
         };
     }
     match selected_provider {
@@ -157,7 +159,8 @@ fn plan_startup_auth(
         | PrimaryProvider::Kimi
         | PrimaryProvider::Fireworks
         | PrimaryProvider::DeepSeek
-        | PrimaryProvider::OpenCodeGo => StartupAuthPlan::Ready,
+        | PrimaryProvider::OpenCodeGo
+        | PrimaryProvider::Wafer => StartupAuthPlan::Ready,
     }
 }
 

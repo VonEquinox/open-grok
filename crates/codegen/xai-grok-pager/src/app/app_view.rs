@@ -412,6 +412,7 @@ pub enum PrimaryProvider {
     Fireworks,
     DeepSeek,
     OpenCodeGo,
+    Wafer,
 }
 
 pub const CODEX_STARTUP_MODEL_ID: &str = "gpt-5.6-sol";
@@ -440,6 +441,11 @@ impl PrimaryProvider {
             || provider.eq_ignore_ascii_case("opencode-go")
         {
             Some(Self::OpenCodeGo)
+        } else if provider.eq_ignore_ascii_case("wafer")
+            || provider.eq_ignore_ascii_case("wafer_ai")
+            || provider.eq_ignore_ascii_case("wafer-ai")
+        {
+            Some(Self::Wafer)
         } else {
             None
         }
@@ -742,6 +748,9 @@ pub struct AppView {
     pub(crate) opencode_go_operation_generation: u64,
     pub(crate) opencode_go_runtime_update_pending: bool,
     pub(crate) pending_opencode_go_rebind_agents: std::collections::HashSet<AgentId>,
+    pub(crate) wafer_operation_generation: u64,
+    pub(crate) wafer_runtime_update_pending: bool,
+    pub(crate) pending_wafer_rebind_agents: std::collections::HashSet<AgentId>,
     pub(crate) opencode_go_models:
         Vec<xai_grok_shell::opencode_go_models::OpenCodeGoModelDescriptor>,
     pub(crate) opencode_go_enabled_models: Vec<String>,
@@ -1410,6 +1419,17 @@ impl AppView {
         }
     }
 
+    pub(crate) fn cancel_pending_wafer_rebind(&mut self, agent_id: AgentId) -> bool {
+        let removed = self.pending_wafer_rebind_agents.remove(&agent_id);
+        if let Some(agent) = self.agents.get_mut(&agent_id) {
+            let was_pending = agent.session.provider_rebind_pending;
+            agent.session.provider_rebind_pending = false;
+            removed || was_pending
+        } else {
+            removed
+        }
+    }
+
     pub fn is_zdr_blocked(&self) -> bool {
         self.is_zdr && !self.zdr_access_enabled
     }
@@ -1432,7 +1452,8 @@ impl AppView {
             | PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
-            | PrimaryProvider::OpenCodeGo => {
+            | PrimaryProvider::OpenCodeGo
+            | PrimaryProvider::Wafer => {
                 // Preserve the xAI snapshot only when crossing out of xAI.
                 // A non-xAI <-> non-xAI transition sees already-cleared
                 // controls and must not overwrite the saved xAI state with
@@ -1746,6 +1767,9 @@ impl AppView {
             opencode_go_operation_generation: 0,
             opencode_go_runtime_update_pending: false,
             pending_opencode_go_rebind_agents: Default::default(),
+            wafer_operation_generation: 0,
+            wafer_runtime_update_pending: false,
+            pending_wafer_rebind_agents: Default::default(),
             opencode_go_models: Vec::new(),
             opencode_go_enabled_models: Vec::new(),
             perplexity_web_search_enabled: false,
@@ -6314,6 +6338,9 @@ pub(crate) mod tests {
             opencode_go_operation_generation: 0,
             opencode_go_runtime_update_pending: false,
             pending_opencode_go_rebind_agents: Default::default(),
+            wafer_operation_generation: 0,
+            wafer_runtime_update_pending: false,
+            pending_wafer_rebind_agents: Default::default(),
             opencode_go_models: Vec::new(),
             opencode_go_enabled_models: Vec::new(),
             perplexity_web_search_enabled: false,

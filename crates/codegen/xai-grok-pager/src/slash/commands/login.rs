@@ -14,6 +14,7 @@ pub(crate) fn provider_items(
     fireworks_status: Option<crate::settings::SecretStatus>,
     deepseek_status: Option<crate::settings::SecretStatus>,
     opencode_go_status: Option<crate::settings::SecretStatus>,
+    wafer_status: Option<crate::settings::SecretStatus>,
 ) -> Vec<ArgItem> {
     let api_key_description = |status: Option<crate::settings::SecretStatus>| match status {
         Some(status) => format!("API key · {}", status.display()),
@@ -23,6 +24,7 @@ pub(crate) fn provider_items(
     let fireworks_description = api_key_description(fireworks_status);
     let deepseek_description = api_key_description(deepseek_status);
     let opencode_go_description = api_key_description(opencode_go_status);
+    let wafer_description = api_key_description(wafer_status);
     vec![
         ArgItem {
             display: "xAI Grok".to_owned(),
@@ -60,6 +62,12 @@ pub(crate) fn provider_items(
             insert_text: "opencode-go".to_owned(),
             description: opencode_go_description,
         },
+        ArgItem {
+            display: "Wafer AI".to_owned(),
+            match_text: "wafer wafer ai api key chat completions dynamic models".to_owned(),
+            insert_text: "wafer".to_owned(),
+            description: wafer_description,
+        },
     ]
 }
 
@@ -75,8 +83,9 @@ pub(crate) fn provider_action(args: &str) -> Result<Action, String> {
         "fireworks" => Ok(Action::OpenFireworksApiKeyEditor),
         "deepseek" | "deep-seek" | "deepseek-api" => Ok(Action::OpenDeepSeekApiKeyEditor),
         "opencode" | "opencode-go" | "opencode_go" | "go" => Ok(Action::OpenOpenCodeGoApiKeyEditor),
+        "wafer" | "wafer-ai" | "wafer_ai" => Ok(Action::OpenWaferApiKeyEditor),
         _ => Err(format!(
-            "Unknown provider: {}. Use /login xai, /login codex, /login kimi, /login fireworks, /login deepseek, or /login opencode-go",
+            "Unknown provider: {}. Use /login xai, /login codex, /login kimi, /login fireworks, /login deepseek, /login wafer, or /login opencode-go",
             args.trim()
         )),
     }
@@ -88,11 +97,11 @@ impl SlashCommand for LoginCommand {
     }
 
     fn description(&self) -> &str {
-        "Connect xAI, OpenAI Codex, Kimi, Fireworks AI, DeepSeek, or OpenCode Go"
+        "Connect xAI, OpenAI Codex, Kimi, Fireworks AI, DeepSeek, Wafer AI, or OpenCode Go"
     }
 
     fn usage(&self) -> &str {
-        "/login [xai|codex|kimi|fireworks|deepseek|opencode-go]"
+        "/login [xai|codex|kimi|fireworks|deepseek|wafer|opencode-go]"
     }
 
     fn takes_args(&self) -> bool {
@@ -104,7 +113,7 @@ impl SlashCommand for LoginCommand {
     }
 
     fn suggest_args(&self, _ctx: &AppCtx, _args_query: &str) -> Option<Vec<ArgItem>> {
-        Some(provider_items(None, None, None, None))
+        Some(provider_items(None, None, None, None, None))
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {

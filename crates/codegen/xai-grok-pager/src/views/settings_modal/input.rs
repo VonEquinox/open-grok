@@ -577,6 +577,15 @@ fn handle_editing_secret(state: &mut SettingsModalState, key: &KeyEvent) -> Sett
                     SettingsKeyOutcome::Action(action)
                 };
             }
+            if setting_key == "wafer_api_key" {
+                let action = Action::SetWaferApiKey { key: secret };
+                return if state.entry_point == SettingsEntryPoint::ProviderLogin {
+                    SettingsKeyOutcome::ActionAndClose(action)
+                } else {
+                    state.transition_to_browse();
+                    SettingsKeyOutcome::Action(action)
+                };
+            }
             if let Some(endpoint) = endpoint {
                 let action = Action::SetKimiApiKey {
                     endpoint,

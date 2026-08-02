@@ -390,6 +390,22 @@ impl ProviderAdapter for OpenCodeGoProvider {
     }
 }
 
+/// Wafer AI is an ordinary OpenAI-compatible Chat Completions provider.
+#[derive(Debug)]
+pub struct WaferProvider;
+
+impl ProviderAdapter for WaferProvider {
+    fn provider(&self) -> ModelProvider {
+        ModelProvider::Wafer
+    }
+
+    fn sanitize_chat_request(&self, request: &mut ChatCompletionRequest) {
+        for message in &mut request.messages {
+            message.model_id = None;
+        }
+    }
+}
+
 fn normalize_fireworks_schema(schema: &mut Value) {
     match schema {
         Value::Bool(true) => {
@@ -493,9 +509,10 @@ static KIMI_PROVIDER: KimiProvider = KimiProvider;
 static FIREWORKS_PROVIDER: FireworksProvider = FireworksProvider;
 static DEEPSEEK_PROVIDER: DeepSeekProvider = DeepSeekProvider;
 static OPEN_CODE_GO_PROVIDER: OpenCodeGoProvider = OpenCodeGoProvider;
+static WAFER_PROVIDER: WaferProvider = WaferProvider;
 
 /// Complete registry for the built-in providers.
-pub static PROVIDER_REGISTRY: [ProviderRegistration; 6] = [
+pub static PROVIDER_REGISTRY: [ProviderRegistration; 7] = [
     ProviderRegistration {
         provider: ModelProvider::Xai,
         adapter: &XAI_PROVIDER,
@@ -520,6 +537,10 @@ pub static PROVIDER_REGISTRY: [ProviderRegistration; 6] = [
         provider: ModelProvider::OpenCodeGo,
         adapter: &OPEN_CODE_GO_PROVIDER,
     },
+    ProviderRegistration {
+        provider: ModelProvider::Wafer,
+        adapter: &WAFER_PROVIDER,
+    },
 ];
 
 /// Look up the stateless transport adapter for a built-in provider.
@@ -533,6 +554,7 @@ pub fn provider_adapter(provider: ModelProvider) -> &'static dyn ProviderAdapter
         ModelProvider::Fireworks => PROVIDER_REGISTRY[3].adapter,
         ModelProvider::DeepSeek => PROVIDER_REGISTRY[4].adapter,
         ModelProvider::OpenCodeGo => PROVIDER_REGISTRY[5].adapter,
+        ModelProvider::Wafer => PROVIDER_REGISTRY[6].adapter,
     }
 }
 
@@ -803,6 +825,7 @@ mod tests {
             ModelProvider::Fireworks,
             ModelProvider::DeepSeek,
             ModelProvider::OpenCodeGo,
+            ModelProvider::Wafer,
         ];
         assert_eq!(PROVIDER_REGISTRY.len(), expected.len());
         for provider in expected {
@@ -827,6 +850,7 @@ mod tests {
             ModelProvider::Fireworks,
             ModelProvider::DeepSeek,
             ModelProvider::OpenCodeGo,
+            ModelProvider::Wafer,
         ] {
             let mut request = base_request();
             let original = request.clone();
@@ -913,6 +937,15 @@ mod tests {
         );
         assert!(deepseek.validate_backend(&ApiBackend::Responses).is_ok());
         assert!(deepseek.validate_backend(&ApiBackend::Messages).is_err());
+
+        let wafer = provider_adapter(ModelProvider::Wafer);
+        assert_eq!(wafer.prompt_cache_key(Some("session")), None);
+        assert!(!wafer.supports_turn_state(&ApiBackend::Responses));
+        assert!(!wafer.sends_doom_loop_opt_in());
+        assert!(!wafer.normalizes_response_events());
+        assert!(wafer.validate_backend(&ApiBackend::ChatCompletions).is_ok());
+        assert!(wafer.validate_backend(&ApiBackend::Responses).is_err());
+        assert!(wafer.validate_backend(&ApiBackend::Messages).is_err());
     }
 
     #[test]
@@ -958,6 +991,40 @@ mod tests {
         provider_adapter(ModelProvider::Fireworks).sanitize_chat_request(&mut request);
         assert_eq!(request.temperature, Some(0.7));
         assert_eq!(request.top_p, Some(0.95));
+    }
+
+    #[test]
+    fn wafer_sanitizes_internal_message_metadata_and_keeps_function_tools() {
+        use xai_grok_sampling_types::types::{ChatRequestMessage, ToolDefinition};
+
+        let assistant = ChatRequestMessage::assistant("previous turn", "wafer-model", None);
+        let mut request = ChatCompletionRequest::new("wafer-model", vec![assistant]);
+        request.temperature = Some(0.7);
+        request.top_p = Some(0.95);
+        request.tools = Some(vec![ToolDefinition::function(
+            "lookup",
+            Some("Look up a value"),
+            serde_json::json!({
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"]
+            }),
+        )]);
+
+        provider_adapter(ModelProvider::Wafer).sanitize_chat_request(&mut request);
+
+        assert!(
+            request
+                .messages
+                .iter()
+                .all(|message| message.model_id.is_none())
+        );
+        assert_eq!(request.temperature, Some(0.7));
+        assert_eq!(request.top_p, Some(0.95));
+        let wire = serde_json::to_value(&request).expect("serializes");
+        assert!(wire["messages"][0].get("model_id").is_none());
+        assert_eq!(wire["tools"][0]["type"], "function");
+        assert_eq!(wire["tools"][0]["function"]["name"], "lookup");
     }
 
     #[test]

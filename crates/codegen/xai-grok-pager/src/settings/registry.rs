@@ -364,6 +364,8 @@ pub struct PagerLocalSnapshot {
     /// Status-only mirror for the direct DeepSeek API-key source.
     pub deepseek_api_key_status: SecretStatus,
     pub opencode_go_api_key_status: SecretStatus,
+    /// Status-only mirror for the Wafer AI API-key source.
+    pub wafer_api_key_status: SecretStatus,
     pub opencode_go_models: Vec<xai_grok_shell::opencode_go_models::OpenCodeGoModelDescriptor>,
     pub opencode_go_enabled_models: Vec<String>,
     pub perplexity_web_search_enabled: bool,
@@ -442,6 +444,7 @@ impl Default for PagerLocalSnapshot {
             fireworks_api_key_status: SecretStatus::Missing,
             deepseek_api_key_status: SecretStatus::Missing,
             opencode_go_api_key_status: SecretStatus::Missing,
+            wafer_api_key_status: SecretStatus::Missing,
             opencode_go_models: Vec::new(),
             opencode_go_enabled_models: Vec::new(),
             perplexity_web_search_enabled: false,
@@ -881,6 +884,7 @@ pub fn current_value_for(
         "fireworks_api_key" => Some(SettingValue::SecretStatus(pager.fireworks_api_key_status)),
         "deepseek_api_key" => Some(SettingValue::SecretStatus(pager.deepseek_api_key_status)),
         "opencode_go_api_key" => Some(SettingValue::SecretStatus(pager.opencode_go_api_key_status)),
+        "wafer_api_key" => Some(SettingValue::SecretStatus(pager.wafer_api_key_status)),
         "toolset.perplexity_web_search.enabled" => {
             Some(SettingValue::Bool(pager.perplexity_web_search_enabled))
         }
@@ -1214,6 +1218,7 @@ mod tests {
                     | "fireworks_api_key"
                     | "deepseek_api_key"
                     | "opencode_go_api_key"
+                    | "wafer_api_key"
                     | "perplexity_api_key",
                     SettingKind::Secret,
                 ) => {

@@ -1093,6 +1093,8 @@ pub enum ModelProvider {
     DeepSeek,
     #[serde(alias = "opencode-go", alias = "opencode_go")]
     OpenCodeGo,
+    #[serde(alias = "wafer_ai")]
+    Wafer,
 }
 
 /// Provider-specific wire contract used by the Responses API.
@@ -1354,6 +1356,24 @@ impl ProviderProfile {
         xai_services: XaiServicePolicy::Denied,
     };
 
+    /// Wafer AI's OpenAI-compatible Chat Completions API. Wafer supports
+    /// ordinary client-side function tools but does not provide hosted tools,
+    /// web search, Responses, or provider-managed OAuth authentication.
+    pub const WAFER: Self = Self {
+        provider: ModelProvider::Wafer,
+        backends: ProviderBackends {
+            chat_completions: true,
+            responses: None,
+            messages: false,
+        },
+        code_mode_transport: CodeModeTransport::Unsupported,
+        hosted_tool_dialect: None,
+        native_web_search: false,
+        request_metadata: RequestMetadataPolicy::StandardHeadersOnly,
+        session_auth: BuiltInSessionAuthKind::ApiKeyOnly,
+        xai_services: XaiServicePolicy::Denied,
+    };
+
     pub const fn id(self) -> &'static str {
         self.provider.as_str()
     }
@@ -1386,6 +1406,10 @@ impl ProviderProfile {
         self.provider.is_open_code_go()
     }
 
+    pub const fn is_wafer(self) -> bool {
+        self.provider.is_wafer()
+    }
+
     pub const fn allows_xai_services(self) -> bool {
         self.xai_services.allows()
     }
@@ -1413,6 +1437,7 @@ impl ModelProvider {
             Self::Fireworks => "fireworks",
             Self::DeepSeek => "deepseek",
             Self::OpenCodeGo => "opencode_go",
+            Self::Wafer => "wafer",
         }
     }
 
@@ -1425,6 +1450,7 @@ impl ModelProvider {
             Self::Fireworks => "Fireworks AI",
             Self::DeepSeek => "DeepSeek",
             Self::OpenCodeGo => "OpenCode Go",
+            Self::Wafer => "Wafer AI",
         }
     }
 
@@ -1452,6 +1478,10 @@ impl ModelProvider {
         matches!(self, Self::OpenCodeGo)
     }
 
+    pub const fn is_wafer(self) -> bool {
+        matches!(self, Self::Wafer)
+    }
+
     /// Return the built-in provider's complete behavior policy.
     pub const fn profile(self) -> ProviderProfile {
         match self {
@@ -1461,6 +1491,7 @@ impl ModelProvider {
             Self::Fireworks => ProviderProfile::FIREWORKS,
             Self::DeepSeek => ProviderProfile::DEEPSEEK,
             Self::OpenCodeGo => ProviderProfile::OPEN_CODE_GO,
+            Self::Wafer => ProviderProfile::WAFER,
         }
     }
 }
@@ -1773,6 +1804,22 @@ mod tests {
                 session_auth: BuiltInSessionAuthKind::ApiKeyOnly,
                 xai_services: XaiServicePolicy::Denied,
             },
+            Case {
+                provider: ModelProvider::Wafer,
+                id: "wafer",
+                name: "Wafer AI",
+                backends: ProviderBackends {
+                    chat_completions: true,
+                    responses: None,
+                    messages: false,
+                },
+                code_mode_transport: CodeModeTransport::Unsupported,
+                hosted_tools: None,
+                native_web_search: false,
+                request_metadata: RequestMetadataPolicy::StandardHeadersOnly,
+                session_auth: BuiltInSessionAuthKind::ApiKeyOnly,
+                xai_services: XaiServicePolicy::Denied,
+            },
         ];
 
         for case in cases {
@@ -1794,6 +1841,7 @@ mod tests {
             assert_eq!(profile.is_fireworks(), case.provider.is_fireworks());
             assert_eq!(profile.is_deepseek(), case.provider.is_deepseek());
             assert_eq!(profile.is_open_code_go(), case.provider.is_open_code_go());
+            assert_eq!(profile.is_wafer(), case.provider.is_wafer());
             assert_eq!(profile.allows_xai_services(), case.xai_services.allows());
             for backend in [
                 ApiBackend::ChatCompletions,

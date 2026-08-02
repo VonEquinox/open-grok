@@ -28,11 +28,13 @@ pub(super) fn dispatch_open_login_provider_picker(app: &mut AppView) -> Vec<Effe
     let fireworks_status = super::settings::ui::fireworks_api_key_status();
     let deepseek_status = super::settings::ui::deepseek_api_key_status();
     let opencode_go_status = super::settings::ui::opencode_go_api_key_status();
+    let wafer_status = super::settings::ui::wafer_api_key_status();
     let items = crate::slash::commands::login::provider_items(
         Some(kimi_status),
         Some(fireworks_status),
         Some(deepseek_status),
         Some(opencode_go_status),
+        Some(wafer_status),
     );
     if let Some(agent) = get_visible_agent_mut(app) {
         agent.active_modal = Some(crate::views::modal::ActiveModal::ArgPicker {
@@ -150,6 +152,7 @@ fn select_startup_model(
             PrimaryProvider::Fireworks => "Fireworks AI",
             PrimaryProvider::DeepSeek => "DeepSeek",
             PrimaryProvider::OpenCodeGo => "OpenCode Go",
+            PrimaryProvider::Wafer => "Wafer AI",
         };
         return Err(if allow_provider_fallback {
             format!("No visible {provider_name} model is available. Check model filters and retry.")

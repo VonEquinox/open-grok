@@ -310,6 +310,28 @@ pub(crate) fn resolve_model_catalog_with_provider_catalogs(
     deepseek_catalog: Option<&DeepSeekModelsCatalog>,
     opencode_go_catalog: Option<&OpenCodeGoModelsCatalog>,
 ) -> IndexMap<String, ModelEntry> {
+    resolve_model_catalog_with_provider_catalogs_and_wafer(
+        cfg,
+        prefetched,
+        codex_catalog,
+        kimi_catalog,
+        fireworks_catalog,
+        deepseek_catalog,
+        opencode_go_catalog,
+        None,
+    )
+}
+
+pub(crate) fn resolve_model_catalog_with_provider_catalogs_and_wafer(
+    cfg: &config::Config,
+    prefetched: Option<IndexMap<String, ModelEntry>>,
+    codex_catalog: Option<&CodexModelsCatalog>,
+    kimi_catalog: Option<&KimiModelsCatalog>,
+    fireworks_catalog: Option<&FireworksModelsCatalog>,
+    deepseek_catalog: Option<&DeepSeekModelsCatalog>,
+    opencode_go_catalog: Option<&OpenCodeGoModelsCatalog>,
+    wafer_catalog: Option<&crate::wafer_models::WaferModelsCatalog>,
+) -> IndexMap<String, ModelEntry> {
     let codex_entries = codex_catalog.map(CodexModelsCatalog::entries);
     let codex_authoritative = codex_catalog.is_some_and(CodexModelsCatalog::is_authoritative);
     let kimi_entries = kimi_catalog.map(KimiModelsCatalog::entries);
@@ -338,6 +360,13 @@ pub(crate) fn resolve_model_catalog_with_provider_catalogs(
             opencode_go_entries,
             opencode_go_authoritative,
         );
+
+    if let Some(wafer_catalog) = wafer_catalog {
+        catalog.retain(|_, entry| {
+            entry.info.provider != xai_grok_sampling_types::ModelProvider::Wafer
+        });
+        catalog.extend(wafer_catalog.entries());
+    }
 
     let enabled_open_code_go = cfg
         .models

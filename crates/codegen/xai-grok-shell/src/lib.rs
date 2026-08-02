@@ -25,6 +25,7 @@ pub mod deepseek_models;
 pub mod fireworks_models;
 pub mod kimi_models;
 pub mod opencode_go_models;
+pub mod wafer_models;
 pub use xai_grok_shell_base::cpu_profile;
 pub use xai_grok_shell_base::env;
 pub mod extensions;
