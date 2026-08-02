@@ -304,6 +304,7 @@ Paths under `xai-grok-tools/src/implementations/` unless noted.
 - `agent_swarm` launches an ordered foreground cohort through the same `SubagentBackend` as `task`; it is not a separate child runtime.
 - Item mode requires `prompt_template` with literal `{{item}}`; resume mode accepts an ordered `resume_agent_ids` object. Resume slots run before item slots and retain the source child profile.
 - The call validates completely before spawning, caps total members at 128, bursts five immediately, then ramps one launch per 700 ms. Optional concurrency and timeout overrides use `OPENGROK_AGENT_SWARM_MAX_CONCURRENCY` and `OPENGROK_SUBAGENT_TIMEOUT_MS`.
+- Code Mode keeps `agent_swarm` direct and top-level rather than nesting it under `tools.*`; the single foreground call blocks until the ordered aggregate result is ready instead of yielding through `exec` and forcing the model to poll `wait`.
 - The shell enforces hard exclusivity: `agent_swarm` cannot share a model tool-call batch. Child toolsets strip both `task` and `agent_swarm` at depth 1.
 
 ### Workflow orchestration (`workflow`)

@@ -78,6 +78,7 @@ Scheduling and output:
 - A provider-ready attempt resets the global retry interval to three seconds. If work remains queued and no 429 occurs for three minutes, capacity recovers by one once for that quiet window; another 429 starts a new window.
 - Each member has a two-hour default timeout (`OPENGROK_SUBAGENT_TIMEOUT_MS`; `0` disables it).
 - Members carry `SubagentOwner::Swarm` and `await_to_completion`: the swarm scheduler owns foreground timeout/aggregation, so the ordinary task foreground budget cannot silently background a member. Dropping the orchestration future cancels its live member spawns.
+- In Code Mode, `agent_swarm` remains a direct top-level tool and is excluded from `tools.*`. Its foreground call holds the model turn until aggregation finishes, so the 30-second `exec` yield cannot trigger repeated `wait` polling while members are still running.
 - Results are collected into fixed input-order slots and returned under `<agent_swarm_result>`, including resumable agent IDs for unfinished work.
 - Swarm metadata rides on ordinary `SubagentSpawned` / progress / finish notifications, so coordinator lifecycle, usage fold-back, permissions, resume identity, and worktree handling remain the normal subagent paths.
 

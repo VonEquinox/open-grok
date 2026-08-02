@@ -585,6 +585,114 @@ mod tests {
     }
 
     #[test]
+    fn agent_swarm_stays_direct_and_outside_exec_in_code_mode_only() {
+        for provider in [ModelProvider::Codex, ModelProvider::Xai] {
+            let tools = vec![tool("agent_swarm"), tool("read_file")];
+            let surface = EffectiveToolSurface::build(
+                tools.clone(),
+                &definitions(&tools),
+                &[],
+                ToolMode::CodeModeOnly,
+                provider,
+                &ApiBackend::Responses,
+                false,
+            )
+            .unwrap();
+
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "agent_swarm"),
+                "{provider:?} must expose agent_swarm directly"
+            );
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .all(|tool| tool.name != "read_file"),
+                "{provider:?} must keep ordinary tools nested"
+            );
+            let exec_description = surface
+                .function_tools
+                .iter()
+                .find(|tool| tool.name == "exec")
+                .and_then(|tool| tool.description.as_deref())
+                .or_else(|| {
+                    surface.hosted_tools.iter().find_map(|tool| match tool {
+                        HostedTool::ClientCustom(tool) if tool.name == "exec" => {
+                            tool.description.as_deref()
+                        }
+                        HostedTool::ClientCustom(_)
+                        | HostedTool::WebSearch { .. }
+                        | HostedTool::XSearch { .. } => None,
+                    })
+                })
+                .expect("Code Mode Only must expose exec");
+            assert!(
+                !exec_description.contains("agent_swarm"),
+                "{provider:?} must not expose agent_swarm through tools.*"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_swarm_is_not_duplicated_inside_exec_in_mixed_code_mode() {
+        for provider in [
+            ModelProvider::Codex,
+            ModelProvider::Xai,
+            ModelProvider::DeepSeek,
+        ] {
+            let tools = vec![tool("agent_swarm"), tool("read_file")];
+            let surface = EffectiveToolSurface::build(
+                tools.clone(),
+                &definitions(&tools),
+                &[],
+                ToolMode::CodeMode,
+                provider,
+                &ApiBackend::Responses,
+                false,
+            )
+            .unwrap();
+
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "agent_swarm"),
+                "{provider:?} must keep agent_swarm top-level"
+            );
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "read_file"),
+                "{provider:?} mixed Code Mode must keep ordinary tools top-level"
+            );
+            let exec_description = surface
+                .function_tools
+                .iter()
+                .find(|tool| tool.name == "exec")
+                .and_then(|tool| tool.description.as_deref())
+                .or_else(|| {
+                    surface.hosted_tools.iter().find_map(|tool| match tool {
+                        HostedTool::ClientCustom(tool) if tool.name == "exec" => {
+                            tool.description.as_deref()
+                        }
+                        HostedTool::ClientCustom(_)
+                        | HostedTool::WebSearch { .. }
+                        | HostedTool::XSearch { .. } => None,
+                    })
+                })
+                .expect("mixed Code Mode must expose exec");
+            assert!(
+                !exec_description.contains("agent_swarm"),
+                "{provider:?} must not duplicate agent_swarm through tools.*"
+            );
+        }
+    }
+
+    #[test]
     fn hosted_search_survives_when_client_replacement_was_filtered_out() {
         let tools = vec![tool("read_file")];
         let surface = EffectiveToolSurface::build(

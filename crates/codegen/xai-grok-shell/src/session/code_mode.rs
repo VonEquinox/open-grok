@@ -62,6 +62,9 @@ pub(crate) fn is_code_mode_transport_meta(meta: Option<&acp::Meta>) -> bool {
 /// approval. Nested inside an `exec` cell, that park cannot hold the turn —
 /// the cell's yield timer would hand control back to the model while the
 /// approval prompt is still open, letting it burn turns polling `wait`.
+/// Long-running foreground orchestration has the same constraint:
+/// `agent_swarm` must hold the model turn until aggregation completes instead
+/// of yielding its enclosing cell and making the model poll it.
 pub(crate) fn is_code_mode_direct_only_tool(name: &str) -> bool {
     matches!(
         name,
@@ -71,6 +74,7 @@ pub(crate) fn is_code_mode_direct_only_tool(name: &str) -> bool {
             | "exit_plan_mode"
             | "task"
             | "spawn_subagent"
+            | "agent_swarm"
             | "workflow"
             | "get_task_output"
             | "get_command_or_subagent_output"
@@ -1587,6 +1591,11 @@ mod tests {
                 json!({"type": "object"}),
             ),
             GrokToolDefinition::function(
+                "agent_swarm",
+                Some("Launch a foreground agent swarm"),
+                json!({"type": "object"}),
+            ),
+            GrokToolDefinition::function(
                 "get_command_or_subagent_output",
                 Some("Read subagent output"),
                 json!({"type": "object"}),
@@ -1617,6 +1626,7 @@ mod tests {
             "exit_plan_mode",
             "task",
             "spawn_subagent",
+            "agent_swarm",
             "workflow",
             "get_task_output",
             "get_command_or_subagent_output",
