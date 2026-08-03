@@ -15,12 +15,27 @@ use crate::scrollback::block::RenderBlock;
 use agent_client_protocol as acp;
 use std::time::Instant;
 
+// Hermetic under test: the `peek_*` reads never lazy-seed from the
+// developer's on-disk `[ui]` config, so a fresh test thread always starts
+// from the compiled defaults and `set_*` pins are optional rather than
+// load-bearing (a dropped pin used to make these tests fail only on machines
+// with the setting configured — see 9609c8f2). Production keeps the seeding
+// `load_*`. Guarded by `queue_gates_are_hermetic_in_tests`.
+
 fn page_flip_on_send() -> bool {
-    crate::appearance::cache::load_page_flip_on_send()
+    if cfg!(test) {
+        crate::appearance::cache::peek_page_flip_on_send()
+    } else {
+        crate::appearance::cache::load_page_flip_on_send()
+    }
 }
 
 fn combine_queued_prompts_enabled() -> bool {
-    crate::appearance::cache::load_combine_queued_prompts()
+    if cfg!(test) {
+        crate::appearance::cache::peek_combine_queued_prompts()
+    } else {
+        crate::appearance::cache::load_combine_queued_prompts()
+    }
 }
 
 /// Whether a prompt/command submitted right now should take the
@@ -2185,6 +2200,37 @@ mod tests {
             Some("task-1"),
             "cron_task_id must track the running cron task"
         );
+    }
+
+    /// The drain gates must be hermetic against the developer's real
+    /// `~/.opengrok/config.toml` in test builds. A fresh thread has an
+    /// unseeded appearance cache; the `cfg(test)` peek gates at the top of
+    /// this file must return compiled defaults instead of lazily seeding
+    /// from disk. Without them, every unpinned drain test fails on any
+    /// machine with `[ui].combine_queued_prompts = true` (the 9609c8f2
+    /// class), and a sync that drops a per-test pin silently reintroduces
+    /// machine-dependent failures — this test makes that loss loud.
+    #[test]
+    fn queue_gates_are_hermetic_in_tests() {
+        std::thread::spawn(|| {
+            assert!(
+                !combine_queued_prompts_enabled(),
+                "an unpinned test thread must read the compiled default (combine OFF), \
+                 never the developer's config.toml"
+            );
+            assert_eq!(
+                page_flip_on_send(),
+                xai_grok_shell::agent::config::UiConfig::PAGE_FLIP_ON_SEND_DEFAULT,
+                "an unpinned test thread must read the compiled page-flip default"
+            );
+            // Pins still steer the gates for tests that want non-defaults.
+            crate::appearance::cache::set_combine_queued_prompts(true);
+            assert!(combine_queued_prompts_enabled());
+            crate::appearance::cache::set_combine_queued_prompts(false);
+            assert!(!combine_queued_prompts_enabled());
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
