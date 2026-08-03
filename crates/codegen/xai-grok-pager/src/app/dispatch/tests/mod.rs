@@ -35,7 +35,7 @@ use super::dashboard::{
     dispatch_dashboard_overlay_exit, dispatch_dashboard_overlay_stop,
     dispatch_dashboard_peek_reply, dispatch_dashboard_permission_followup,
     dispatch_dashboard_permission_select, dispatch_dashboard_question_answer,
-    dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard,
+    dispatch_dashboard_delete, dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard,
     dispatch_open_dashboard, ensure_dashboard_state, resolve_location_input,
 };
 use super::modes::{
@@ -148,6 +148,16 @@ fn test_app() -> AppView {
         require_plan_approval: false,
         plan_mode: false,
         chat_mode: false,
+        #[cfg(feature = "local-workspace")]
+        welcome_workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
+        #[cfg(feature = "local-workspace")]
+        local_workspace_startup_locked: false,
+        #[cfg(feature = "local-workspace")]
+        welcome_session_local_workspace: None,
+        #[cfg(feature = "local-workspace")]
+        welcome_local_workspace_ack_pending: false,
+        #[cfg(feature = "local-workspace")]
+        welcome_history_load_as_build: false,
         subagents: false,
         ask_user: false,
         mouse_captured: true,
@@ -243,6 +253,10 @@ fn test_app() -> AppView {
         welcome_privacy_banner_opt_out_rect: None,
         welcome_privacy_banner_terms_rect: None,
         welcome_privacy_banner_policy_rect: None,
+        #[cfg(feature = "local-workspace")]
+        welcome_workspace_mode_rects: Default::default(),
+        #[cfg(feature = "local-workspace")]
+        welcome_on_workspace_mode: false,
         welcome_toast: None,
         welcome_on_privacy_banner: false,
         welcome_on_upgrade_cta: false,
@@ -265,6 +279,7 @@ fn test_app() -> AppView {
         session_picker_lanes: Default::default(),
         session_picker_detail_generation: 0,
         session_picker_entries_query: None,
+        session_picker_pending_delete: None,
         welcome_tick: 0,
         welcome_shimmer_frame: 0,
         startup_warnings: Vec::new(),
@@ -287,6 +302,7 @@ fn test_app() -> AppView {
         sharing_enabled: false,
         plugin_cta_enabled: false,
         usage_visible: true,
+        has_external_auth_provider: false,
         tier_restricted_commands: Vec::new(),
         leader_mode: true,
         credit_balance: None,
