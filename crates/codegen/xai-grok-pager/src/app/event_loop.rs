@@ -1987,10 +1987,12 @@ pub(crate) async fn run(
     // (without waiting for user input).
     schedule_tick(&mut animation_tick_at, &app, tick_interval);
 
-    // Resize debounce: during continuous terminal drags, dozens of resize
-    // events fire per second. Each would trigger a full layout rebuild of all
-    // entries (the most expensive per-frame operation). Instead of drawing on
-    // every resize, we schedule a single deferred draw after the size stabilizes.
+    // Resize debounce (Grok Build 0.2.117 perf): during continuous terminal
+    // drags, dozens of resize events fire per second. Each would trigger a full
+    // layout rebuild of all entries (the most expensive per-frame operation).
+    // Instead of drawing on every resize, we schedule a single deferred draw
+    // after the size stabilizes. Open Grok already had this coalescing path;
+    // keep it aligned with upstream's Event::Resize burst handling.
     const RESIZE_DEBOUNCE: Duration = Duration::from_millis(16);
     let mut resize_debounce_at: Option<Instant> = None;
 
