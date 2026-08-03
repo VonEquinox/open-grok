@@ -2192,6 +2192,11 @@ mod tests {
         // Regression: editing #3, prompts #1 and #2 drain, #3 becomes front.
         // User presses Enter (save) → DrainQueue should send #3's updated text,
         // NOT #4 or the old text.
+        // Pin the combine flag off: this test asserts one-per-turn drains, and
+        // `combine_queued_prompts_enabled()` otherwise reads the developer's
+        // on-disk `[ui].combine_queued_prompts`, which merges the whole queue
+        // into one send and breaks the front-first assertions.
+        crate::appearance::cache::set_combine_queued_prompts(false);
         let mut app = test_app_with_agent();
         let id = AgentId(0);
 
