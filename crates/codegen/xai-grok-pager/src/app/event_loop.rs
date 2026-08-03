@@ -1196,6 +1196,9 @@ pub(crate) async fn run(
     // from blocking a valid ChatGPT session.
     let xai_access_controls_active = app.uses_xai_access_controls()
         && !matches!(&app.auth_state, AuthState::ProviderChoice { .. });
+    app.has_external_auth_provider =
+        crate::app::app_view::detect_external_auth_provider(&app.auth_methods);
+
     if xai_access_controls_active {
         if let Some(meta) = connection.auth_meta.as_ref() {
             match serde_json::from_value::<xai_grok_shell::auth::AuthMeta>(meta.clone()) {
@@ -1207,9 +1210,13 @@ pub(crate) async fn run(
             app.is_api_key_auth = app.auth_methods.iter().any(|method| {
                 method.id().0.as_ref() == xai_grok_shell::agent::auth_method::XAI_API_KEY_METHOD_ID
             });
-            if app.is_api_key_auth {
+            // No AuthMeta on this path — API keys / external auth have no
+            // consumer billing surface. External auth also hides `/usage`.
+            if app.is_api_key_auth || app.has_external_auth_provider {
                 app.apply_usage_visibility(false);
-                app.ensure_voice_for_api_key();
+                if app.is_api_key_auth {
+                    app.ensure_voice_for_api_key();
+                }
             }
         }
 

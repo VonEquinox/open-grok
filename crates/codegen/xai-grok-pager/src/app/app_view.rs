@@ -849,6 +849,9 @@ pub struct AppView {
     /// Consumer billing surface (credit fetches / warnings). False for team
     /// and API-key auth. `/usage` itself stays available for session token/cost.
     pub usage_visible: bool,
+    /// External `auth_provider_command` deployment.
+    /// No grok.com billing session exists; `/usage` and credit UI stay off.
+    pub has_external_auth_provider: bool,
     /// Slash commands denied for the current subscription tier
     /// ([`TIER_RESTRICTED_COMMANDS`] when the user is on the free / X Basic
     /// tier, empty otherwise). Recomputed by [`Self::apply_tier_restrictions`]
@@ -1397,6 +1400,49 @@ fn privacy_banner_reshow_elapsed(acked_at: &str, reshow_days: Option<u64>) -> bo
     };
     chrono::Utc::now() >= next
 }
+
+/// Detect external-auth installs once at pager startup.
+///
+/// Checks ACP auth-method meta, `OPENGROK_AUTH_PROVIDER_COMMAND` (and the
+/// legacy `GROK_AUTH_PROVIDER_COMMAND` name shell still reads), and effective
+/// config `auth_provider_command`.
+pub(crate) fn detect_external_auth_provider(
+    auth_methods: &[agent_client_protocol::AuthMethod],
+) -> bool {
+    fn auth_method_is_external(method: &agent_client_protocol::AuthMethod) -> bool {
+        method
+            .meta()
+            .as_ref()
+            .and_then(|v| v.get("external_provider"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+    fn env_set() -> bool {
+        for key in ["OPENGROK_AUTH_PROVIDER_COMMAND", "GROK_AUTH_PROVIDER_COMMAND"] {
+            if std::env::var(key)
+                .ok()
+                .is_some_and(|s| !s.trim().is_empty())
+            {
+                return true;
+            }
+        }
+        false
+    }
+    fn config_set() -> bool {
+        let Ok(raw) = xai_grok_shell::config::load_effective_config() else {
+            return false;
+        };
+        let Ok(cfg) = xai_grok_shell::agent::config::Config::new_from_toml_cfg(&raw) else {
+            return false;
+        };
+        cfg.grok_com_config
+            .auth_provider_command
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+    }
+    auth_methods.iter().any(auth_method_is_external) || env_set() || config_set()
+}
+
 impl AppView {
     /// Cancel an automatic Kimi sampler refresh after an authoritative user or
     /// remote switch moved the tab to a different provider.
@@ -1710,7 +1756,9 @@ impl AppView {
                 .subscription_tier
                 .as_deref()
                 .is_some_and(is_api_key_label);
-        self.apply_usage_visibility(meta.team_name.is_none() && !self.is_api_key_auth);
+        self.apply_usage_visibility(
+            meta.team_name.is_none() && !self.is_api_key_auth && !self.has_external_auth_provider,
+        );
         self.apply_tier_restrictions();
         if self.is_api_key_auth {
             self.ensure_voice_for_api_key();
@@ -1988,6 +2036,7 @@ impl AppView {
             sharing_enabled: false,
             plugin_cta_enabled: false,
             usage_visible: true,
+            has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: false,
             credit_balance: None,
@@ -2064,6 +2113,11 @@ impl AppView {
     /// query. `usage_visible` remains the xAI billing/UI gate; Codex quota is
     /// independently available whenever its account is connected.
     pub(crate) fn usage_command_visible(&self) -> bool {
+        // External/enterprise auth has no consumer billing surface and must
+        // hide `/usage` even when a Codex account is also connected.
+        if self.has_external_auth_provider {
+            return false;
+        }
         self.usage_visible || self.startup_codex_account.is_some()
     }
 
@@ -6586,6 +6640,7 @@ pub(crate) mod tests {
             sharing_enabled: false,
             plugin_cta_enabled: false,
             usage_visible: true,
+            has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: true,
             credit_balance: None,
@@ -7849,6 +7904,20 @@ pub(crate) mod tests {
         assert!(agent.show_ephemeral_tip(tip(), &mut counts));
         assert_eq!(counts.get("t_seen"), Some(&2));
     }
+
+    #[test]
+    fn external_auth_provider_keeps_billing_off_after_auth_meta() {
+        let mut app = test_app();
+        app.has_external_auth_provider = true;
+        app.usage_visible = false;
+        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        // External/enterprise auth must keep the consumer billing surface and
+        // combined `/usage` command hidden even after a personal AuthMeta.
+        assert!(!app.usage_visible);
+        assert!(!app.welcome_prompt.slash_controller.billing_surface_visible());
+        assert!(!app.usage_command_visible());
+    }
+
     #[test]
     fn apply_auth_meta_disables_billing_surface_for_team_users() {
         let mut app = test_app();
