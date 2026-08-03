@@ -553,9 +553,7 @@ pub(in crate::app::dispatch) fn remove_session_from_pickers(
     {
         if pending_delete
             .as_ref()
-            .is_some_and(|(pending_source, pending_id, _)| {
-                pending_source == source && pending_id == session_id
-            })
+            .is_some_and(|pd| pd.source == source && pd.session_id == session_id)
         {
             *pending_delete = None;
         }
