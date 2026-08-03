@@ -141,8 +141,6 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(privacy::PrivacyCommand),
         Arc::new(rewind::RewindCommand),
         Arc::new(jump::JumpCommand),
-        Arc::new(login::LoginCommand),
-        Arc::new(logout::LogoutCommand),
         Arc::new(import_claude::ImportClaudeCommand),
         Arc::new(usage::UsageCommand),
         Arc::new(queue::QueueCommand),
@@ -167,6 +165,16 @@ mod tests {
     use crate::slash::command::{CommandExecCtx, CommandResult};
     use crate::slash::registry::CommandRegistry;
     use agent_client_protocol as acp;
+    #[test]
+    fn account_login_commands_are_not_registered() {
+        let names: Vec<_> = builtin_commands()
+            .into_iter()
+            .map(|command| command.name().to_string())
+            .collect();
+        assert!(!names.iter().any(|name| name == "login"));
+        assert!(!names.iter().any(|name| name == "logout"));
+    }
+
     /// Build a ModelState with two models for testing.
     fn sample_models() -> ModelState {
         let mut models = ModelState::default();
@@ -613,133 +621,6 @@ mod tests {
             result,
             CommandResult::Action(Action::EnterRememberMode)
         ));
-    }
-    fn run_login(args: &str) -> CommandResult {
-        let models = ModelState::default();
-        let mut ctx = make_ctx(&models);
-        login::LoginCommand.run(&mut ctx, args)
-    }
-    fn run_logout(args: &str) -> CommandResult {
-        let models = ModelState::default();
-        let mut ctx = make_ctx(&models);
-        logout::LogoutCommand.run(&mut ctx, args)
-    }
-    #[test]
-    fn login_bare_opens_provider_picker() {
-        assert!(matches!(
-            run_login(""),
-            CommandResult::Action(Action::OpenLoginProviderPicker)
-        ));
-    }
-    #[test]
-    fn login_xai_selects_existing_oauth_flow() {
-        for provider in [" xai ", "grok"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::Login)
-            ));
-        }
-    }
-    #[test]
-    fn login_codex_selects_independent_oauth_flow() {
-        for provider in [" codex ", "openai", "chatgpt"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::LoginCodex)
-            ));
-        }
-    }
-    #[test]
-    fn login_kimi_selects_secure_api_key_editor() {
-        for provider in [" kimi ", "moonshot"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::OpenKimiApiKeyEditor)
-            ));
-        }
-    }
-    #[test]
-    fn login_fireworks_selects_secure_api_key_editor() {
-        assert!(matches!(
-            run_login(" fireworks "),
-            CommandResult::Action(Action::OpenFireworksApiKeyEditor)
-        ));
-    }
-    #[test]
-    fn login_deepseek_selects_secure_api_key_editor() {
-        for provider in [" deepseek ", "deep-seek", "deepseek-api"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::OpenDeepSeekApiKeyEditor)
-            ));
-        }
-    }
-    #[test]
-    fn login_opencode_go_selects_secure_api_key_editor() {
-        for provider in [" opencode-go ", "opencode", "opencode_go", "go"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::OpenOpenCodeGoApiKeyEditor)
-            ));
-        }
-    }
-    #[test]
-    fn login_wafer_selects_secure_api_key_editor() {
-        for provider in [" wafer ", "wafer-ai", "wafer_ai"] {
-            assert!(matches!(
-                run_login(provider),
-                CommandResult::Action(Action::OpenWaferApiKeyEditor)
-            ));
-        }
-    }
-    #[test]
-    fn login_provider_picker_lists_all_providers_with_status() {
-        let items = login::provider_items(
-            Some(crate::settings::SecretStatus::Stored),
-            Some(crate::settings::SecretStatus::Missing),
-            Some(crate::settings::SecretStatus::Stored),
-            Some(crate::settings::SecretStatus::EnvironmentOverride),
-            Some(crate::settings::SecretStatus::Missing),
-        );
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| item.insert_text.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "xai",
-                "codex",
-                "kimi",
-                "fireworks",
-                "deepseek",
-                "opencode-go",
-                "wafer"
-            ]
-        );
-        assert_eq!(items[2].description, "API key · saved");
-        assert_eq!(items[3].description, "API key · not configured");
-        assert_eq!(items[4].description, "API key · saved");
-        assert_eq!(items[5].description, "API key · environment override");
-        assert_eq!(items[6].description, "API key · not configured");
-    }
-    #[test]
-    fn logout_bare_preserves_xai_flow() {
-        assert!(matches!(
-            run_logout(""),
-            CommandResult::Action(Action::Logout)
-        ));
-    }
-    #[test]
-    fn logout_codex_selects_independent_oauth_flow() {
-        assert!(matches!(
-            run_logout(" codex "),
-            CommandResult::Action(Action::LogoutCodex)
-        ));
-    }
-    #[test]
-    fn provider_login_and_logout_reject_unknown_accounts() {
-        assert!(matches!(run_login("other"), CommandResult::Error(_)));
-        assert!(matches!(run_logout("other"), CommandResult::Error(_)));
     }
     fn run_usage(args: &str, billing: bool) -> CommandResult {
         let models = ModelState::default();

@@ -441,18 +441,9 @@ fn auto_respond_to_permissions(
 }
 
 /// "Not signed in" error message, tailored to the session type.
-fn auth_required_message(interactive: bool) -> String {
-    if interactive {
-        "Not signed in. Run `open-grok login` to authenticate \
-         (or `open-grok login --device-code` if no browser is available)."
-            .to_string()
-    } else {
-        "Not signed in. To authenticate without a browser, run:\n  \
-         open-grok login --device-code\n\n\
-         Alternatively, set the XAI_API_KEY environment variable \
-         or run `open-grok login` on a machine with a browser."
-            .to_string()
-    }
+fn auth_required_message(_interactive: bool) -> String {
+    "No API key is configured for the selected model. Add `api_key` in      ~/.opengrok/config.toml."
+        .to_string()
 }
 
 /// Resolve non-xAI provider-local authentication before the legacy ACP/xAI
@@ -520,8 +511,8 @@ fn selected_provider_auth(
                 Ok(false)
             } else {
                 Err(anyhow::anyhow!(
-                    "Not signed in to Codex. Run `open-grok login --codex --device-auth` for a \
-                         headless login, or configure an API key on this model."
+                    "No API key is configured for the selected model. Add `api_key` in \
+                         ~/.opengrok/config.toml."
                 ))
             })
         }

@@ -1241,12 +1241,7 @@ async fn run_agent_command(
         Some(AgentCmd::Headless(a)) => {
             let mut agent_config = agent_config.clone();
             apply_headless_args_to_config(&a, &mut agent_config);
-            run_headless(
-                &agent_config,
-                agent_args.reauthenticate,
-                agent_memory_config,
-            )
-            .await
+            run_headless(&agent_config, false, agent_memory_config).await
         }
         Some(AgentCmd::Serve(a)) => {
             let mut agent_config = agent_config.clone();
@@ -1322,12 +1317,7 @@ async fn run_agent_command(
         None => {
             let mut agent_config = agent_config.clone();
             apply_headless_args_to_config(&agent_args.headless, &mut agent_config);
-            run_headless(
-                &agent_config,
-                agent_args.reauthenticate,
-                agent_memory_config,
-            )
-            .await
+            run_headless(&agent_config, false, agent_memory_config).await
         }
     }
 }
@@ -1938,57 +1928,6 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                     &update_config,
                 )
                 .await;
-            }
-            Command::Login {
-                legacy: _,
-                oauth,
-                codex,
-                device_auth,
-                devbox,
-            } => {
-                init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                if codex {
-                    let account = xai_grok_shell::codex_auth::run_cli_login(device_auth).await?;
-                    let label = account
-                        .email
-                        .as_deref()
-                        .or(account.account_id.as_deref())
-                        .unwrap_or("ChatGPT account");
-                    println!("Connected OpenAI Codex as {label}.");
-                    println!();
-                    xai_grok_shell::instrumentation::finalize_and_exit(0);
-                }
-                let config = xai_grok_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                xai_grok_shell::auth::run_cli_login(&config, oauth, device_auth, devbox).await?;
-                println!();
-                xai_grok_shell::instrumentation::finalize_and_exit(0);
-            }
-            Command::Logout { codex, all } => {
-                init_tracing_simple("cli");
-                if codex || all {
-                    let removed = xai_grok_shell::codex_auth::run_cli_logout().await?;
-                    println!(
-                        "{}",
-                        if removed {
-                            "Signed out of OpenAI Codex."
-                        } else {
-                            "OpenAI Codex was not signed in."
-                        }
-                    );
-                    if codex {
-                        xai_grok_shell::instrumentation::finalize_and_exit(0);
-                    }
-                }
-                let config = xai_grok_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                xai_grok_shell::auth::run_cli_logout(&config)?;
-                xai_grok_shell::instrumentation::finalize_and_exit(0);
             }
             Command::Wrap(ref wrap_args) => {
                 return xai_grok_pager::wrap_cmd::run(wrap_args);

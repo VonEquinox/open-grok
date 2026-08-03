@@ -17,41 +17,6 @@ pub enum Command {
     },
     /// Check terminal, clipboard, color, and input support without starting Open Grok
     Doctor(crate::doctor_cmd::DoctorArgs),
-    /// Sign out and clear cached credentials
-    Logout {
-        /// Sign out of the separate OpenAI Codex account instead of xAI.
-        #[arg(long, conflicts_with = "all")]
-        codex: bool,
-        /// Sign out of both xAI and OpenAI Codex.
-        #[arg(long, conflicts_with = "codex")]
-        all: bool,
-    },
-    /// Sign in to Open Grok
-    Login {
-        /// Ignored (kept for backwards compatibility). OAuth2 is now the only auth method.
-        #[arg(long, hide = true)]
-        legacy: bool,
-        /// Use Grok OAuth via auth.x.ai.
-        #[arg(long = "oauth", alias = "oidc", conflicts_with_all = ["device_auth"])]
-        oauth: bool,
-        /// Sign in to the separate OpenAI Codex account with ChatGPT OAuth.
-        #[arg(long, conflicts_with = "oauth")]
-        codex: bool,
-        /// Use device-code authentication for headless/remote environments.
-        #[arg(
-            long = "device-auth",
-            visible_alias = "device-code",
-            conflicts_with_all = ["oauth"]
-        )]
-        device_auth: bool,
-        /// Authenticate for remote development environments (hidden).
-        ///
-        /// Field is always present so match arms stay feature-unification-safe
-        /// across Bazel/cargo graphs; clap only registers `--devbox` when
-        /// `devbox-login` is enabled (`arg(skip)` otherwise → always false).
-        #[arg(skip)]
-        devbox: bool,
-    },
     /// Manage MCP server configurations
     Mcp(crate::mcp_cmd::McpArgs),
     /// Manage plugins and marketplace sources
@@ -236,13 +201,6 @@ pub struct WorkspaceStartArgs {
 /// Arguments for the `agent` subcommand.
 #[derive(Debug, clap::Args, Clone)]
 pub struct AgentArgs {
-    /// Run authentication before starting the agent
-    #[arg(
-        long = "reauth",
-        visible_alias = "--reauthenticate",
-        default_value = "false"
-    )]
-    pub reauthenticate: bool,
     /// Model ID to use
     #[arg(short = 'm', long = "model", value_name = "MODEL")]
     pub model: Option<String>,
@@ -391,7 +349,7 @@ fn open_grok_version() -> &'static str {
 }
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "open-grok",
+    name = "og",
     version = open_grok_version(),
     about = "Open Grok with ChatGPT Codex optimizations",
     disable_version_flag = true,
@@ -719,12 +677,6 @@ pub struct PagerArgs {
     /// Write sampling events to ~/.opengrok/logs/sampling.jsonl.
     #[arg(long = "log-sampling", env = "GROK_LOG_SAMPLING", hide = true)]
     pub log_sampling: bool,
-    /// Show the login screen even when credentials are already available.
-    #[arg(long = "force-login", hide = true)]
-    pub force_login: bool,
-    /// Use OAuth when the welcome screen starts authentication.
-    #[arg(long = "oauth")]
-    pub oauth: bool,
     /// Connect to a shared leader process.
     #[arg(long, conflicts_with = "no_leader", hide = true)]
     pub leader: bool,
@@ -976,6 +928,17 @@ impl PagerArgs {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn account_login_subcommands_are_absent() {
+        use clap::CommandFactory;
+        let command = super::PagerArgs::command();
+        let names: Vec<_> = command
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name())
+            .collect();
+        assert!(!names.contains(&"login"));
+        assert!(!names.contains(&"logout"));
+    }
     use super::*;
 
     #[test]
@@ -1307,41 +1270,6 @@ mod tests {
         assert_eq!(args.initial_prompt(), Some("spaced"));
         let blank = PagerArgs::try_parse_from(["grok", "   "]).expect("blank prompt parses");
         assert_eq!(blank.initial_prompt(), None);
-    }
-    #[test]
-    fn subcommand_takes_precedence_over_positional_prompt() {
-        let args = PagerArgs::try_parse_from(["grok", "logout"]).expect("subcommand parses");
-        assert!(matches!(
-            args.command,
-            Some(Command::Logout {
-                codex: false,
-                all: false
-            })
-        ));
-        assert!(args.prompt.is_none());
-    }
-    #[test]
-    fn codex_account_flags_parse_without_changing_bare_xai_behavior() {
-        let login = PagerArgs::try_parse_from(["grok", "login", "--codex", "--device-auth"])
-            .expect("Codex device login parses");
-        assert!(matches!(
-            login.command,
-            Some(Command::Login {
-                codex: true,
-                device_auth: true,
-                oauth: false,
-                ..
-            })
-        ));
-        let logout =
-            PagerArgs::try_parse_from(["grok", "logout", "--codex"]).expect("Codex logout parses");
-        assert!(matches!(
-            logout.command,
-            Some(Command::Logout {
-                codex: true,
-                all: false
-            })
-        ));
     }
     #[test]
     fn positional_prompt_conflicts_with_headless_single() {

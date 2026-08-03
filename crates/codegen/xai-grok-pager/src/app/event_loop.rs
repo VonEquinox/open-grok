@@ -68,6 +68,7 @@ pub(crate) struct RunResult {
     pub relaunch: Option<super::app_view::ScreenModeRelaunch>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupAuthPlan {
     Ready,
@@ -97,6 +98,7 @@ fn effective_startup_model<'a>(
     cli_model.or(configured_default)
 }
 
+#[cfg(test)]
 fn reusable_startup_codex_credential<'a, T>(
     freshness_required: bool,
     fresh: Option<&'a T>,
@@ -105,6 +107,7 @@ fn reusable_startup_codex_credential<'a, T>(
     if freshness_required { fresh } else { local }
 }
 
+#[cfg(test)]
 fn startup_codex_freshness_required(
     force_xai_login: bool,
     selected_provider: PrimaryProvider,
@@ -128,6 +131,7 @@ fn startup_codex_freshness_required(
     }
 }
 
+#[cfg(test)]
 fn plan_startup_auth(
     xai_needs_login: bool,
     force_xai_login: bool,
@@ -982,7 +986,6 @@ pub(crate) async fn run(
         app.startup_model_override = desired_startup_model;
     }
     app.cli_effort_token = args.reasoning_effort.clone();
-    app.auth_use_oauth = args.oauth;
     app.show_resolved_model = remote_settings
         .as_ref()
         .and_then(|s| s.show_resolved_model)
@@ -1046,140 +1049,14 @@ pub(crate) async fn run(
     app.cancel_rewind_enabled = connection.cancel_rewind_enabled;
     apply_session_recap_available(&mut app, connection.session_recap_available);
 
-    // Preserve auth methods so logout→re-login works without restarting.
-    app.auth_methods = connection.auth_methods.clone();
-
-    // Seed auth from both independent account stores. xAI remains the ACP
-    // authentication mechanism, while Codex OAuth is pager-owned and may open
-    // startup without any xAI credential or subscription.
-    let force_login = args.force_login && !connection.auth_methods.is_empty();
-    app.startup_xai_ready = !connection.needs_login;
-    app.startup_xai_auth_meta = connection.auth_meta.clone();
-    // Always seed independent Codex presence from Open Grok's isolated local
-    // store so an xAI-first launch can still expose Codex models and `/usage`.
-    // Only perform network freshness when Codex could own this startup; a
-    // transient refresh must not erase an otherwise valid side-by-side login.
-    let local_codex_credentials = match xai_grok_shell::codex_auth::load_credentials() {
-        Ok(credentials) => credentials,
-        Err(error) => {
-            tracing::warn!(%error, "could not read cached Codex credentials at startup");
-            None
-        }
-    };
-    let codex_required_for_startup = startup_codex_freshness_required(
-        force_login,
-        app.primary_provider,
-        connection.needs_login,
-        required_startup_provider,
-    );
-    let fresh_codex_credentials = if codex_required_for_startup {
-        match xai_grok_shell::codex_auth::fresh_credentials().await {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                tracing::warn!(%error, "could not refresh cached Codex credentials at startup");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let codex_credentials_ready = if codex_required_for_startup {
-        fresh_codex_credentials.is_some()
-    } else {
-        local_codex_credentials.is_some()
-    };
-    // A required Codex startup may reuse only the credential that passed the
-    // freshness check. Keeping an expired local summary here would let the
-    // chooser bypass OAuth and mark an unusable session authenticated.
-    let startup_codex_credentials = reusable_startup_codex_credential(
-        codex_required_for_startup,
-        fresh_codex_credentials.as_ref(),
-        local_codex_credentials.as_ref(),
-    );
-    app.startup_codex_account =
-        startup_codex_credentials.map(xai_grok_shell::codex_auth::CodexAccountSummary::from);
+    // Account login is disabled in this build. The selected model must carry
+    // its own API key in ~/.opengrok/config.toml, so enter the TUI directly.
+    app.auth_methods.clear();
+    app.startup_xai_ready = true;
+    app.startup_xai_auth_meta = None;
+    app.startup_codex_account = None;
     app.sync_usage_command_visibility();
-    let auth_plan = plan_startup_auth(
-        connection.needs_login,
-        force_login,
-        app.primary_provider,
-        codex_credentials_ready,
-        required_startup_provider,
-    );
-
-    // Preserve xAI login metadata even while the provider chooser is visible;
-    // choosing xAI later reuses the exact existing ACP login dispatcher.
-    if connection.needs_login {
-        app.login_label = connection.login_label;
-        app.login_method_id = connection.login_method_id;
-        app.auth_start_mode = match connection.auth_start_mode {
-            crate::acp::AuthStartMode::Pending => super::app_view::AuthMode::Pending,
-            crate::acp::AuthStartMode::Command => super::app_view::AuthMode::Command,
-        };
-    } else if matches!(auth_plan, StartupAuthPlan::ForceXaiLogin) {
-        let grok_com = connection
-            .auth_methods
-            .iter()
-            .find(|method| method.id().0.as_ref() == "grok.com");
-        if let Some(method) = grok_com {
-            app.login_label = Some(method.name().to_string());
-            app.login_method_id = Some(method.id().clone());
-            let is_external = method
-                .meta()
-                .as_ref()
-                .and_then(|value| value.get("external_provider"))
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
-            app.auth_start_mode = if is_external {
-                super::app_view::AuthMode::Command
-            } else {
-                super::app_view::AuthMode::Pending
-            };
-        } else if let Some(first) = connection.auth_methods.first() {
-            app.login_label = Some(first.name().to_string());
-            app.login_method_id = Some(first.id().clone());
-            app.auth_start_mode = super::app_view::AuthMode::Pending;
-        }
-    }
-
-    let mut post_render_effects = match auth_plan {
-        StartupAuthPlan::Ready => {
-            if !app.uses_xai_access_controls() {
-                app.clear_xai_access_controls();
-            }
-            vec![]
-        }
-        StartupAuthPlan::ReadyWithCodex => {
-            app.primary_provider = PrimaryProvider::Codex;
-            app.clear_xai_access_controls();
-            vec![]
-        }
-        StartupAuthPlan::ChooseProvider => {
-            app.clear_xai_access_controls();
-            app.auth_state = AuthState::ProviderChoice { error: None };
-            app.welcome_prompt_focused = false;
-            app.welcome_menu_index = Some(0);
-            vec![]
-        }
-        StartupAuthPlan::RequireCodexLogin => {
-            app.clear_xai_access_controls();
-            app.auth_state = AuthState::ProviderChoice { error: None };
-            dispatch::dispatch(Action::ChooseStartupCodex, &mut app)
-        }
-        StartupAuthPlan::RequireXaiLogin => {
-            app.auth_state = AuthState::ProviderChoice { error: None };
-            dispatch::dispatch(Action::ChooseStartupXai, &mut app)
-        }
-        StartupAuthPlan::ForceXaiLogin => {
-            app.primary_provider = PrimaryProvider::Xai;
-            app.welcome_prompt_focused = false;
-            tracing::info!(
-                method_id = ?app.login_method_id,
-                "force-login: auto-triggering xAI login at startup"
-            );
-            dispatch::dispatch(Action::Login, &mut app)
-        }
-    };
+    let mut post_render_effects = Vec::new();
 
     // xAI account metadata is useful only when xAI owns this launch. Keeping
     // it out of Codex/choice paths prevents stale xAI paywalls and ZDR state

@@ -215,9 +215,8 @@ impl SessionEvent {
                 }
             }
             SessionEvent::ReAuthRequired => {
-                "Authentication required \u{2014} your session has expired or your \
-                 credentials were rejected. Run /login to re-authenticate, then resend \
-                 your message."
+                "The configured API key was rejected. Check ~/.opengrok/config.toml, \
+                 then resend your message."
                     .to_string()
             }
             SessionEvent::ContextTooLarge => {
@@ -759,14 +758,10 @@ mod tests {
     }
 
     #[test]
-    fn reauth_required_message_points_at_login() {
+    fn reauth_required_message_points_at_config() {
         let msg = SessionEvent::ReAuthRequired.message();
-        assert!(msg.contains("/login"), "must tell the user to run /login");
-        assert!(
-            msg.to_lowercase().contains("authentication")
-                || msg.to_lowercase().contains("credentials"),
-            "must explain it is an auth problem: {msg}"
-        );
+        assert!(msg.contains("~/.opengrok/config.toml"));
+        assert!(!msg.contains("/login"));
     }
 
     #[test]
