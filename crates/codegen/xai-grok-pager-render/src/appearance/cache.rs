@@ -166,6 +166,15 @@ pub fn set_page_flip_on_send(enabled: bool) {
     PAGE_FLIP_ON_SEND_LOADED.with(|l| l.set(true));
 }
 
+/// Current cached `page_flip_on_send` WITHOUT the lazy disk seed: an unseeded
+/// thread reads the compiled default. `cfg(test)` call sites use this so unit
+/// tests never observe the developer's on-disk `[ui]` config while `set_*`
+/// pins keep working; production paths keep the seeding `load_*`. Plain
+/// getter — inert for the shared-rlib CI lanes (see `test-support`).
+pub fn peek_page_flip_on_send() -> bool {
+    PAGE_FLIP_ON_SEND_CURRENT.with(|c| c.get())
+}
+
 // -- Combine queued prompts ---------------------------------------------------
 
 thread_local! {
@@ -193,6 +202,15 @@ pub fn load_combine_queued_prompts() -> bool {
 pub fn set_combine_queued_prompts(enabled: bool) {
     COMBINE_QUEUED_PROMPTS_CURRENT.with(|c| c.set(enabled));
     COMBINE_QUEUED_PROMPTS_LOADED.with(|l| l.set(true));
+}
+
+/// Current cached `combine_queued_prompts` WITHOUT the lazy disk seed: an
+/// unseeded thread reads the compiled default (OFF). `cfg(test)` call sites
+/// use this so unit tests never observe the developer's on-disk `[ui]` config
+/// while `set_*` pins keep working; production paths keep the seeding
+/// `load_*`. Plain getter — inert for the shared-rlib CI lanes.
+pub fn peek_combine_queued_prompts() -> bool {
+    COMBINE_QUEUED_PROMPTS_CURRENT.with(|c| c.get())
 }
 
 // -- Simple mode --------------------------------------------------------------
