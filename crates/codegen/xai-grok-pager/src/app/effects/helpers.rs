@@ -1058,6 +1058,14 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "enter_steers" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("enter_steers", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_enter_steers(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "show_timeline" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("show_timeline", "Bool", &value));

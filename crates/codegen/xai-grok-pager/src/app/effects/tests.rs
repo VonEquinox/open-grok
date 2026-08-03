@@ -802,6 +802,16 @@ async fn persist_setting_type_mismatch_errors_combine_queued_prompts() {
             "got: {err}",
         );
 }
+#[tokio::test]
+async fn persist_setting_type_mismatch_errors_enter_steers() {
+    use crate::settings::SettingValue;
+    let r = persist_setting("enter_steers", SettingValue::String("nope".into())).await;
+    let err = r.expect_err("enter_steers with String payload must return Err");
+    assert!(
+        err.contains("persist_setting(enter_steers) expected Bool"),
+        "got: {err}",
+    );
+}
 /// Type-mismatch for `simple_mode`.
 #[tokio::test]
 async fn persist_setting_type_mismatch_errors_simple_mode() {

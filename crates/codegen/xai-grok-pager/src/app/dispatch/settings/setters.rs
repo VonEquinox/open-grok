@@ -1565,6 +1565,28 @@ pub(in crate::app::dispatch) fn set_combine_queued_prompts(
     }]
 }
 
+pub(super) fn set_enter_steers_inner(app: &mut AppView, new: bool) {
+    app.current_ui.enter_steers = Some(new);
+    crate::appearance::cache::set_enter_steers(new);
+}
+
+/// SHARED: cache + `[ui].enter_steers` via `Effect::PersistSetting`.
+pub(in crate::app::dispatch) fn set_enter_steers(app: &mut AppView, new: bool) -> Vec<Effect> {
+    let prev = crate::appearance::cache::load_enter_steers();
+    if prev == new {
+        return vec![];
+    }
+    set_enter_steers_inner(app, new);
+    refresh_open_settings_modals(app);
+    tracing::info!(target: "settings", key = "enter_steers", value = new, "setting changed");
+    app.show_toast(&save_success_toast("Enter steers mid-turn", new));
+    vec![Effect::PersistSetting {
+        key: "enter_steers",
+        value: crate::settings::SettingValue::Bool(new),
+        rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
 /// State-only mutation for `simple_mode`.
 ///
 /// Propagates to every agent's `input_mode` so the toggle takes

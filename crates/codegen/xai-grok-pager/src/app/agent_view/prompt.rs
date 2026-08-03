@@ -14,6 +14,21 @@ use crate::key;
 use crate::views::prompt_widget::PromptEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+/// Mid-turn Enter steers (send-now) when `[ui].enter_steers` is on.
+///
+/// Tests use [`peek_enter_steers`] so a developer's on-disk config cannot
+/// flip unit expectations; production seeds via [`load_enter_steers`].
+fn enter_steers_enabled() -> bool {
+    #[cfg(test)]
+    {
+        crate::appearance::cache::peek_enter_steers()
+    }
+    #[cfg(not(test))]
+    {
+        crate::appearance::cache::load_enter_steers()
+    }
+}
+
 impl AgentView {
     pub fn prompt_history_loading(&self) -> bool {
         self.session.prompt_history_loading && self.prompt.text().is_empty()
@@ -598,6 +613,24 @@ impl AgentView {
                         } else {
                             self.prompt_input_mode
                         };
+                        // Mid-turn + enter_steers: Enter sends now; Ctrl+Enter queues.
+                        // Only Normal mode swaps — bash/feedback/remember keep Enter.
+                        if matches!(action_mode, PromptInputMode::Normal)
+                            && self.session.state.is_turn_running()
+                            && enter_steers_enabled()
+                        {
+                            if self.paste_probe_in_flight > 0 {
+                                self.deferred_send = Some(AgentDeferredSend::Interject);
+                                return InputOutcome::Changed;
+                            }
+                            let images = self.prompt.drain_images();
+                            self.prompt.set_text("");
+                            self.prompt_input_mode = PromptInputMode::Normal;
+                            return InputOutcome::Action(Action::SendPromptNow {
+                                text: text.trim().to_string(),
+                                images,
+                            });
+                        }
                         let action = action_mode.send_action(text);
                         self.prompt_input_mode = PromptInputMode::Normal;
                         return InputOutcome::Action(action);
@@ -627,17 +660,28 @@ impl AgentView {
                     if let Some(outcome) = self.interject_editing_queued_intercept() {
                         return outcome;
                     }
-                    // Mid-turn send-now (cancel-and-send):
+                    // Mid-turn send-now (cancel-and-send) by default:
                     // 1) Non-empty composer → cancel the running turn and send
                     //    that text as the next prompt.
                     // 2) Empty composer + a visible follow-up in the queue →
                     //    same as bare Enter: send the top row now.
                     // 3) Idle / nothing to send → no-op (not send-like-Enter).
+                    // With `[ui].enter_steers = true`, non-empty mid-turn uses
+                    // the opposite of Enter: this chord queues instead.
                     let text = self.prompt.text().trim().to_string();
                     let turn_running = self.session.state.is_turn_running();
                     if !text.is_empty() {
                         if !turn_running {
                             return InputOutcome::Changed;
+                        }
+                        if enter_steers_enabled() {
+                            // Queue (Enter's default role). Leave chips on the
+                            // prompt so `dispatch_send_prompt` can drain them.
+                            if self.paste_probe_in_flight > 0 {
+                                self.deferred_send = Some(AgentDeferredSend::SendPrompt);
+                                return InputOutcome::Changed;
+                            }
+                            return InputOutcome::Action(Action::SendPrompt(text));
                         }
                         // Paste-then-immediate-send: an image probe is still
                         // off-thread. Stash (draft untouched) and re-issue on

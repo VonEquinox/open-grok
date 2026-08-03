@@ -576,6 +576,10 @@ pub enum Action {
     /// drain site) and persists to `[ui].combine_queued_prompts` via
     /// `Effect::PersistSetting`.
     SetCombineQueuedPrompts(bool),
+    /// Mid-turn Enter steers (send-now) vs queues. SHARED-owned cache +
+    /// `[ui].enter_steers` via `Effect::PersistSetting`. Default off: Enter
+    /// queues and Ctrl+Enter sends now.
+    SetEnterSteers(bool),
     /// Set simple mode (ASCII / minimal glyphs). Persists via `Effect::PersistSetting`.
     SetSimpleMode(bool),
     /// Set the per-tip contextual-hint user config (`[ui.contextual_hints]`).
@@ -1284,7 +1288,11 @@ impl PlanModeKind {
     }
     /// Construct from a bool (the inverse of [`Self::to_bool`]).
     pub fn from_bool(b: bool) -> Self {
-        if b { Self::On } else { Self::Off }
+        if b {
+            Self::On
+        } else {
+            Self::Off
+        }
     }
 }
 /// Async side effect produced by [`super::dispatch::dispatch`].

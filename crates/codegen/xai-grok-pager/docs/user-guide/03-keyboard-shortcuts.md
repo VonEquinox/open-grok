@@ -187,6 +187,8 @@ While the agent is generating:
   - **Idle**, or **empty composer with nothing queued** → no-op for that key.
 - While the agent is **blocked waiting** (on task output or a subagent), plain `Enter` with text also delivers immediately — the shell cancels the blocked turn and runs your message next.
 
+**Settings → Enter steers mid-turn** (`[ui].enter_steers`) swaps the mid-turn roles of plain Enter and the send-now chord: Enter sends now, and the chord queues. Empty-composer Enter (force-send the top queued row) is unchanged. This mirrors Codex's historical steer toggle, adapted to Open Grok's Enter ↔ Ctrl+Enter pair (Codex used Enter ↔ Tab).
+
 | Terminal | Primary | Alternates | Action |
 |----------|---------|------------|--------|
 | Default | `Ctrl+Enter` | `Ctrl+I` | Send now (cancels the current turn, runs your message next) |
