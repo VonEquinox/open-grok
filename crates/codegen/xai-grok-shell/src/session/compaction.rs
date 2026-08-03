@@ -1184,9 +1184,8 @@ impl SessionActor {
     async fn emit_compact_cancelled(&self, auto_trigger: bool) -> Result<(), acp::Error> {
         if auto_trigger {
             use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
-            // Fork notification shape uses a string reason (upstream has an enum).
             self.send_xai_notification(XaiSessionUpdate::AutoCompactCancelled {
-                reason: "user_cancelled".to_string(),
+                reason: crate::extensions::notification::AutoCompactCancelReason::UserCancelled,
             })
             .await;
         }
