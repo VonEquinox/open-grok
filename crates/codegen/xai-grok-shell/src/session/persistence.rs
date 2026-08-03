@@ -1192,6 +1192,7 @@ mod is_hidden_tests {
         assert!(boundary.allows_xai_export());
         assert!(boundary.observe(ModelProvider::Kimi));
         assert!(!boundary.allows_xai_export());
+        assert!(!boundary.observe(ModelProvider::Wafer));
         assert!(!boundary.observe(ModelProvider::Codex));
         assert!(!boundary.observe(ModelProvider::Xai));
         assert!(!boundary.allows_xai_export());

@@ -741,6 +741,49 @@ fn register_host_fns(engine: &mut rhai::Engine, ctx: &Rc<RefCell<Ctx>>) {
     );
 
     let c = ctx.clone();
+    engine.register_fn("escalate", move |message: &str| -> ScriptResult<Dynamic> {
+        let payload = serde_json::json!({ "message": message });
+        let hash = request_hash(crate::journal::ESCALATE_KIND, &payload);
+        let seq = c.borrow_mut().next_seq()?;
+        let replayed = c
+            .borrow()
+            .journal
+            .replay(seq, crate::journal::ESCALATE_KIND, &hash);
+        match replayed {
+            // Resumed past this gate: hand the script the fix note the resumer
+            // supplied (resume_note), or "" when it was resumed without one.
+            Ok(Some(serde_json::Value::String(note))) => Ok(Dynamic::from(note)),
+            Ok(Some(_)) => {
+                // Noteless resume: rewrite the null placeholder to "" so a
+                // trailing null always means "still waiting at this gate" —
+                // a later resume_note must not answer a question the script
+                // already moved past. The placeholder is necessarily the
+                // trailing entry here: nothing records between escalate's
+                // placeholder and its pause, and this replay runs before any
+                // later seq is recorded.
+                let mut ctx = c.borrow_mut();
+                if let Err(error) = ctx.journal.fulfill_pending_escalation("") {
+                    return Err(journal_fatal(error));
+                }
+                Ok(Dynamic::from(String::new()))
+            }
+            Ok(None) => {
+                c.borrow_mut().record(
+                    seq,
+                    crate::journal::ESCALATE_KIND,
+                    hash,
+                    serde_json::Value::Null,
+                )?;
+                Err(terminated(ControlToken::Pause(
+                    PauseKind::Verification,
+                    message.to_string(),
+                )))
+            }
+            Err(error) => Err(journal_fatal(error)),
+        }
+    });
+
+    let c = ctx.clone();
     engine.register_fn("budget", move || -> ScriptResult<Dynamic> {
         let value = host_call(
             &c,
@@ -1014,6 +1057,95 @@ mod tests {
             }
             other => panic!("expected Completed after resume, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn escalate_pauses_blocked_then_returns_fulfilled_note_on_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal_path = dir.path().join("journal.jsonl");
+        let script = r#"
+            let meta = #{ name: "t", description: "d" };
+            let fix = escalate("tests fail: sandbox denies network");
+            complete("note:" + fix);
+        "#;
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let outcome = run_workflow(params(script, Journal::new(Some(journal_path.clone())), tx));
+        match outcome {
+            WorkflowOutcome::Paused { kind, message } => {
+                assert_eq!(kind, PauseKind::Verification);
+                assert_eq!(message, "tests fail: sandbox denies network");
+            }
+            other => panic!("expected Paused, got {other:?}"),
+        }
+
+        let mut journal = Journal::load(journal_path.clone()).unwrap();
+        assert!(
+            journal
+                .fulfill_pending_escalation("network allowed; rerun")
+                .unwrap()
+        );
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let outcome = run_workflow(params(script, journal, tx));
+        match outcome {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("note:network allowed; rerun"));
+            }
+            other => panic!("expected Completed after fulfilled resume, got {other:?}"),
+        }
+
+        // The fulfilled note survives persistence: a fresh load replays it too.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let outcome = run_workflow(params(script, Journal::load(journal_path).unwrap(), tx));
+        match outcome {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("note:network allowed; rerun"));
+            }
+            other => panic!("expected Completed on reloaded journal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn escalate_resumed_without_note_returns_empty_string_and_consumes_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal_path = dir.path().join("journal.jsonl");
+        let script = r#"
+            let meta = #{ name: "t", description: "d" };
+            let fix = escalate("blocked");
+            if fix == "" {
+                complete("resumed-without-note");
+            }
+            complete("unexpected:" + fix);
+        "#;
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let outcome = run_workflow(params(script, Journal::new(Some(journal_path.clone())), tx));
+        assert!(matches!(outcome, WorkflowOutcome::Paused { .. }));
+        assert!(
+            Journal::load(journal_path.clone())
+                .unwrap()
+                .has_pending_escalation()
+        );
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let outcome = run_workflow(params(
+            script,
+            Journal::load(journal_path.clone()).unwrap(),
+            tx,
+        ));
+        match outcome {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("resumed-without-note"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // The noteless replay rewrote the placeholder: nothing is pending, so
+        // a late note can never answer a question the script already passed.
+        let mut reloaded = Journal::load(journal_path).unwrap();
+        assert!(!reloaded.has_pending_escalation());
+        assert!(!reloaded.fulfill_pending_escalation("too late").unwrap());
     }
 
     #[test]

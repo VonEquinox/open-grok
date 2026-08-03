@@ -32,8 +32,11 @@ Pick by the *shape* of the work, not the count:
 - **`workflow`** — scripted, multi-stage orchestration: loops, staged
   research-then-verify passes, judge panels, adversarial verification,
   loop-until-done discovery. Reach for the native Rhai `workflow` tool (see the
-  `create-workflow` skill) when control flow matters. Swarm has no branching,
-  no stages, no dependencies between members — every member is independent.
+  `create-workflow` skill) when control flow matters; for a substantive coding
+  task that deserves the full understand → design → implement → adversarial
+  verify treatment, the builtin `ultracode` workflow already packages it. Swarm
+  has no branching, no stages, no dependencies between members — every member
+  is independent.
 
 Swarm members are independent by construction. If members would need to hand
 work to each other, or run in phases, that is a workflow, not a swarm.

@@ -302,6 +302,16 @@ Kick off a background research workflow. It plans a bounded set of questions, ga
 
 The command returns right away — follow progress in `/workflows`, and the final report appears in the conversation on its own.
 
+### `/ultracode <task>`
+
+Kick off the maximum-rigor coding workflow. It scouts the codebase and fans out parallel readers, has two designers propose competing plans that a judge merges, implements the winning design in the workspace, then runs adversarial reviewers with distinct lenses (correctness, compliance, validation, blast radius) over bounded fix rounds. When a phase hits a genuine blocker — a broken environment, a missing decision, reviews that will not converge — the run **blocks and hands the issue back to the session agent** via `escalate()` instead of dying; fixing the cause and resuming (optionally with a resume note answering the question) continues the run from where it stopped.
+
+```
+/ultracode Add rate-limit retries to the sync client, with tests
+```
+
+The final report lands in the conversation with a `Verified`, `Partial`, `Needs attention`, or `Blocked` status plus any outstanding issues and coverage notes.
+
 Model-launched workflows may set `agent_budget` on the `workflow` tool. It's an absolute cumulative cap on logical child-agent calls: every `agent()` call and every item in a `parallel()` panel spends one slot, while schema-correction retries don't. The default is 128, explicit values run 1–1,024, and a panel that would cross the remaining budget is rejected before any of its children launch. `budget()` reports the cap as `total`, admitted calls as `spent`, `reserved` (always zero), and `remaining`. Named slash launches use the default budget.
 
 ### `/workflow`
@@ -317,6 +327,8 @@ Launch a saved workflow, or manage a running one by the session-unique display n
 ```
 
 Project workflows live in `.opengrok/workflows/*.rhai`; user workflows live in `~/.opengrok/workflows/*.rhai`. A same-process pause/resume continues the original immutable script, args, and `agent_budget` cap from committed host-call results — to iterate, edit the returned script copy and launch it as a new run.
+
+A run shown as **blocked** paused itself because it needs outside help. When it asked via `escalate()`, the session agent is told the blocking issue and usually fixes and resumes it on its own; a bare `/workflow resume <name>` pushes such a run past its question with an empty answer — to actually answer it, ask the agent to resume with a `resume_note`. A run blocked by a plain `pause` (for example a launch without the input it needs) cannot be satisfied by resuming, because the script and its launch args are immutable — start a new run with the corrected input instead.
 
 A budget-limited run is different: it only resumes through a model/tool resume request that supplies an `agent_budget` above the admitted agent count. A bare `/workflow resume <name>` can't raise the cap, so it rejects budget-limited runs. Runs interrupted by a process restart aren't resumed at all, because external effects have no stable cross-process identity. And resume is not exactly-once: an external effect whose result wasn't committed before a same-process pause can run again.
 

@@ -43,8 +43,12 @@ impl WorkflowRunStatus {
         )
     }
 
+    /// Statuses that wake the main model with a completion turn + reminder.
+    /// Script-initiated pauses count: a workflow that pauses itself is asking
+    /// for outside help (a blocker to fix, then resume), and silence would
+    /// strand it. Only a deliberate user pause stays quiet.
     pub fn is_completion_reportable(self) -> bool {
-        self.is_terminal() || self == Self::BudgetLimited
+        self.is_terminal() || (self.is_paused() && self != Self::UserPaused)
     }
 
     pub fn is_paused(self) -> bool {
@@ -1088,6 +1092,62 @@ mod tests {
         assert_eq!(state.agents_used, 1500);
         assert!(state.agent_usage_incomplete);
         assert_eq!(state.status, WorkflowRunStatus::Interrupted);
+    }
+
+    #[test]
+    fn script_pauses_wake_the_model_and_rearm_across_resumes() {
+        let (mut t, id) = tracker_with_run();
+        t.apply_outcome(
+            &id,
+            &WorkflowOutcome::Paused {
+                kind: PauseKind::Verification,
+                message: "need the fixtures dir".into(),
+            },
+        );
+        assert_eq!(t.get(&id).unwrap().status, WorkflowRunStatus::Blocked);
+        let (_, fresh) = t.take_unreported_terminal_runs();
+        assert_eq!(fresh.len(), 1, "a blocked run must wake the model");
+        assert_eq!(
+            fresh[0].pause_message.as_deref(),
+            Some("need the fixtures dir")
+        );
+        assert!(
+            t.take_unreported_terminal_runs().1.is_empty(),
+            "each block reports once"
+        );
+        assert!(
+            t.take_status_report().is_empty(),
+            "reportable runs leave the passive status feed"
+        );
+
+        t.resume_run(&id, None).unwrap();
+        t.apply_outcome(
+            &id,
+            &WorkflowOutcome::Paused {
+                kind: PauseKind::Infra,
+                message: "provider rate limited".into(),
+            },
+        );
+        assert_eq!(
+            t.take_unreported_terminal_runs().1.len(),
+            1,
+            "a later pause after resume re-reports"
+        );
+    }
+
+    #[test]
+    fn user_pause_stays_out_of_completion_reporting() {
+        let (mut t, id) = tracker_with_run();
+        t.pause_user(&id, Some("paused from /workflow".into()));
+        assert!(
+            t.take_unreported_terminal_runs().1.is_empty(),
+            "a deliberate user pause must not wake the model"
+        );
+        assert_eq!(
+            t.take_status_report().len(),
+            1,
+            "user-paused runs still appear in the passive status feed"
+        );
     }
 
     #[test]

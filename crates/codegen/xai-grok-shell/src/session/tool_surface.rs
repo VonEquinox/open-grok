@@ -213,10 +213,22 @@ impl EffectiveToolSurface {
             tool_mode,
             provider,
         );
-        // A non-native web-search source was selected (and resolved) for this
-        // provider: drop the provider's native hosted declaration so the
-        // client `web_search` tool is the one the model sees.
-        if suppress_native_web_search {
+        let replacement_search_registered = if code_mode_only {
+            nested_definitions
+                .iter()
+                .any(|tool| is_client_web_search_name(&tool.function.name))
+        } else {
+            function_tools
+                .iter()
+                .any(|tool| is_client_web_search_name(&tool.name))
+                || nested_definitions
+                    .iter()
+                    .any(|tool| is_client_web_search_name(&tool.function.name))
+        };
+        // Suppress hosted search only after the finalized tool surface proves
+        // that the selected client replacement survived registration and
+        // allowlist filtering. Otherwise fail open to hosted search.
+        if suppress_native_web_search && replacement_search_registered {
             hosted_tools.retain(|tool| {
                 !matches!(tool, xai_grok_sampling_types::HostedTool::WebSearch { .. })
             });
@@ -320,6 +332,10 @@ impl EffectiveToolSurface {
             .sum::<u64>();
         function_tokens.saturating_add(custom_tokens)
     }
+}
+
+fn is_client_web_search_name(name: &str) -> bool {
+    name == "web_search" || name == xai_grok_tools::implementations::grok_build::WEB_RUN_TOOL_NAME
 }
 
 pub(crate) fn tool_specs_as_definitions(tools: &[ToolSpec]) -> Vec<ToolDefinition> {
@@ -566,6 +582,171 @@ mod tests {
             HostedTool::ClientCustom(tool) if tool.name == "exec"
         )));
         assert!(surface.estimated_definition_tokens() > 0);
+    }
+
+    #[test]
+    fn agent_swarm_stays_direct_and_outside_exec_in_code_mode_only() {
+        for provider in [ModelProvider::Codex, ModelProvider::Xai] {
+            let tools = vec![tool("agent_swarm"), tool("read_file")];
+            let surface = EffectiveToolSurface::build(
+                tools.clone(),
+                &definitions(&tools),
+                &[],
+                ToolMode::CodeModeOnly,
+                provider,
+                &ApiBackend::Responses,
+                false,
+            )
+            .unwrap();
+
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "agent_swarm"),
+                "{provider:?} must expose agent_swarm directly"
+            );
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .all(|tool| tool.name != "read_file"),
+                "{provider:?} must keep ordinary tools nested"
+            );
+            let exec_description = surface
+                .function_tools
+                .iter()
+                .find(|tool| tool.name == "exec")
+                .and_then(|tool| tool.description.as_deref())
+                .or_else(|| {
+                    surface.hosted_tools.iter().find_map(|tool| match tool {
+                        HostedTool::ClientCustom(tool) if tool.name == "exec" => {
+                            tool.description.as_deref()
+                        }
+                        HostedTool::ClientCustom(_)
+                        | HostedTool::WebSearch { .. }
+                        | HostedTool::XSearch { .. } => None,
+                    })
+                })
+                .expect("Code Mode Only must expose exec");
+            assert!(
+                !exec_description.contains("agent_swarm"),
+                "{provider:?} must not expose agent_swarm through tools.*"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_swarm_is_not_duplicated_inside_exec_in_mixed_code_mode() {
+        for provider in [
+            ModelProvider::Codex,
+            ModelProvider::Xai,
+            ModelProvider::DeepSeek,
+        ] {
+            let tools = vec![tool("agent_swarm"), tool("read_file")];
+            let surface = EffectiveToolSurface::build(
+                tools.clone(),
+                &definitions(&tools),
+                &[],
+                ToolMode::CodeMode,
+                provider,
+                &ApiBackend::Responses,
+                false,
+            )
+            .unwrap();
+
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "agent_swarm"),
+                "{provider:?} must keep agent_swarm top-level"
+            );
+            assert!(
+                surface
+                    .function_tools
+                    .iter()
+                    .any(|tool| tool.name == "read_file"),
+                "{provider:?} mixed Code Mode must keep ordinary tools top-level"
+            );
+            let exec_description = surface
+                .function_tools
+                .iter()
+                .find(|tool| tool.name == "exec")
+                .and_then(|tool| tool.description.as_deref())
+                .or_else(|| {
+                    surface.hosted_tools.iter().find_map(|tool| match tool {
+                        HostedTool::ClientCustom(tool) if tool.name == "exec" => {
+                            tool.description.as_deref()
+                        }
+                        HostedTool::ClientCustom(_)
+                        | HostedTool::WebSearch { .. }
+                        | HostedTool::XSearch { .. } => None,
+                    })
+                })
+                .expect("mixed Code Mode must expose exec");
+            assert!(
+                !exec_description.contains("agent_swarm"),
+                "{provider:?} must not duplicate agent_swarm through tools.*"
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_search_survives_when_client_replacement_was_filtered_out() {
+        let tools = vec![tool("read_file")];
+        let surface = EffectiveToolSurface::build(
+            tools.clone(),
+            &definitions(&tools),
+            &[HostedTool::web_search(None)],
+            ToolMode::CodeModeOnly,
+            ModelProvider::Codex,
+            &ApiBackend::Responses,
+            true,
+        )
+        .unwrap();
+
+        assert!(
+            surface
+                .hosted_tools
+                .iter()
+                .any(|tool| matches!(tool, HostedTool::WebSearch { .. }))
+        );
+    }
+
+    #[test]
+    fn registered_standalone_search_replaces_hosted_search() {
+        let tools = vec![tool("web__run"), tool("read_file")];
+        let surface = EffectiveToolSurface::build(
+            tools.clone(),
+            &definitions(&tools),
+            &[HostedTool::web_search(None)],
+            ToolMode::CodeModeOnly,
+            ModelProvider::Codex,
+            &ApiBackend::Responses,
+            true,
+        )
+        .unwrap();
+
+        assert!(
+            surface
+                .hosted_tools
+                .iter()
+                .all(|tool| !matches!(tool, HostedTool::WebSearch { .. }))
+        );
+        let exec_description = surface
+            .hosted_tools
+            .iter()
+            .find_map(|tool| match tool {
+                HostedTool::ClientCustom(tool) if tool.name == "exec" => {
+                    tool.description.as_deref()
+                }
+                HostedTool::ClientCustom(_)
+                | HostedTool::WebSearch { .. }
+                | HostedTool::XSearch { .. } => None,
+            })
+            .expect("Codex Code Mode Only must expose native custom exec");
+        assert!(exec_description.contains("web__run"));
     }
 
     #[test]

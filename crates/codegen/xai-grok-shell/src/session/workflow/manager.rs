@@ -29,6 +29,9 @@ pub(crate) struct LaunchSpec {
     pub args: serde_json::Value,
     pub agent_budget: Option<u64>,
     pub resume_run_id: Option<String>,
+    /// Answer to a pending `escalate()` in the resumed run; the blocked call
+    /// returns this text to the script. Only valid with `resume_run_id`.
+    pub resume_note: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +49,11 @@ pub(crate) enum LaunchError {
          with an agent_budget above {used}"
     )]
     BudgetNotRaised { used: u64, limit: u64 },
+    #[error(
+        "resume_note has nowhere to go: the run is not blocked at an escalate() call; \
+         resume without a note"
+    )]
+    NoPendingEscalation,
     #[error(
         "session already has the maximum of {WORKFLOW_MAX_ACTIVE_RUNS_PER_SESSION} active workflow runs"
     )]
@@ -131,6 +139,17 @@ impl WorkflowManager {
                         existing.status.as_str().to_string(),
                     ));
                 }
+                // A note answers a pending escalate(); only a Blocked run can
+                // be waiting at one. Gating on status before any journal I/O
+                // keeps a rejected launch side-effect free and stops a stale
+                // note from rewriting a gate an earlier noteless resume
+                // already consumed (e.g. on a BudgetLimited run).
+                if spec.resume_note.is_some()
+                    && existing.status
+                        != crate::session::workflow::tracker::WorkflowRunStatus::Blocked
+                {
+                    return Err(LaunchError::NoPendingEscalation);
+                }
                 if existing.status
                     == crate::session::workflow::tracker::WorkflowRunStatus::BudgetLimited
                     && existing.agents_used >= xai_workflow::MAX_AGENT_BUDGET
@@ -171,6 +190,13 @@ impl WorkflowManager {
                     journal
                         .prune_trailing_host_error(existing.pause_message.as_deref().unwrap_or(""))
                         .map_err(|e| LaunchError::Journal(e.to_string()))?;
+                }
+                if let Some(note) = spec.resume_note.as_deref() {
+                    match journal.fulfill_pending_escalation(note) {
+                        Ok(true) => {}
+                        Ok(false) => return Err(LaunchError::NoPendingEscalation),
+                        Err(e) => return Err(LaunchError::Journal(e.to_string())),
+                    }
                 }
                 let state = {
                     let mut tracker = self.tracker.lock();
@@ -735,6 +761,7 @@ mod tests {
             args: serde_json::json!({}),
             agent_budget: None,
             resume_run_id: None,
+            resume_note: None,
         }
     }
 
@@ -792,6 +819,7 @@ mod tests {
                 .unwrap(),
                 LaunchSpec {
                     resume_run_id: Some(run_id),
+                    resume_note: None,
                     ..spec()
                 },
             )
@@ -876,6 +904,7 @@ mod tests {
                 resolved,
                 LaunchSpec {
                     resume_run_id: Some(run_id.clone()),
+                    resume_note: None,
                     ..spec()
                 },
             )
@@ -897,6 +926,202 @@ mod tests {
         match outcome {
             WorkflowOutcome::Completed { result } => {
                 assert_eq!(result, serde_json::json!("resumed output"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escalated_run_blocks_then_resume_note_reaches_the_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manager, _rx) = test_manager(Some(dir.path().to_path_buf()));
+        let script = "let meta = #{ name: \"t\", description: \"d\" };\nlet fix = escalate(\"cargo test needs the fixtures dir\");\ncomplete(\"fix:\" + fix);";
+        let (run_id, outcome_rx) = manager
+            .launch(resolve_inline(script.into()).unwrap(), spec())
+            .unwrap();
+        match outcome_rx.await.unwrap() {
+            WorkflowOutcome::Paused { kind, message } => {
+                assert_eq!(kind, xai_workflow::PauseKind::Verification);
+                assert_eq!(message, "cargo test needs the fixtures dir");
+            }
+            other => panic!("expected Paused, got {other:?}"),
+        }
+        let state = manager.tracker.lock().get(&run_id).unwrap();
+        assert_eq!(
+            state.status,
+            crate::session::workflow::tracker::WorkflowRunStatus::Blocked,
+            "escalate must land in the resumable Blocked status"
+        );
+        assert_eq!(
+            state.pause_message.as_deref(),
+            Some("cargo test needs the fixtures dir")
+        );
+
+        let (_same, outcome_rx) = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id.clone()),
+                    resume_note: Some("created fixtures/ and reran setup".into()),
+                    ..spec()
+                },
+            )
+            .unwrap();
+        match outcome_rx.await.unwrap() {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(
+                    result,
+                    serde_json::json!("fix:created fixtures/ and reran setup")
+                );
+            }
+            other => panic!("expected Completed after noted resume, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_note_cannot_rewrite_a_consumed_gate_after_budget_stop() {
+        use xai_grok_tools::implementations::grok_build::task::types::{
+            SubagentEvent, SubagentResult,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manager, mut subagent_rx) = test_manager(Some(dir.path().to_path_buf()));
+        // A note takes the note branch; a noteless resume proceeds to a second
+        // agent call. The stale-note bug let a note delivered AFTER a
+        // noteless-consume-then-budget-stop rewrite the consumed gate and flip
+        // the branch the previous execution had already taken.
+        let script = "let meta = #{ name: \"t\", description: \"d\" };\nlet a = agent(\"first\");\nlet fix = escalate(\"stuck\");\nif fix != \"\" { complete(\"note-branch:\" + fix); }\nlet b = agent(\"second\");\ncomplete(\"agent-branch:\" + b.output);";
+        let (run_id, outcome_rx) = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    agent_budget: Some(1),
+                    ..spec()
+                },
+            )
+            .unwrap();
+        let SubagentEvent::Spawn(first) = subagent_rx.recv().await.expect("first spawn") else {
+            panic!("expected spawn event");
+        };
+        let id = first.id.clone();
+        let _ = first.result_tx.send(SubagentResult {
+            success: true,
+            output: std::sync::Arc::from("done1"),
+            subagent_id: id,
+            ..Default::default()
+        });
+        assert!(matches!(
+            outcome_rx.await.unwrap(),
+            WorkflowOutcome::Paused { .. }
+        ));
+
+        // Noteless resume: the gate is consumed with "", then the second agent
+        // call cannot reserve past the 1-slot cap — the run parks
+        // BudgetLimited with the consumed gate as the journal's trailing entry.
+        let (_same, outcome_rx) = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id.clone()),
+                    ..spec()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            outcome_rx.await.unwrap(),
+            WorkflowOutcome::BudgetExceeded { .. }
+        ));
+        assert_eq!(
+            manager.tracker.lock().get(&run_id).unwrap().status,
+            crate::session::workflow::tracker::WorkflowRunStatus::BudgetLimited
+        );
+
+        // A late note must be rejected — the run is not waiting at a gate.
+        let err = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id.clone()),
+                    resume_note: Some("note meant for nobody".into()),
+                    agent_budget: Some(8),
+                    ..spec()
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, LaunchError::NoPendingEscalation),
+            "a note must not reach a run that is not Blocked: {err}"
+        );
+
+        // A noteless raised-budget resume continues on the branch the earlier
+        // execution actually took: the gate still answers "".
+        let (_same, outcome_rx) = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id.clone()),
+                    agent_budget: Some(8),
+                    ..spec()
+                },
+            )
+            .unwrap();
+        let SubagentEvent::Spawn(second) = subagent_rx.recv().await.expect("second spawn") else {
+            panic!("expected spawn event");
+        };
+        let id = second.id.clone();
+        let _ = second.result_tx.send(SubagentResult {
+            success: true,
+            output: std::sync::Arc::from("done2"),
+            subagent_id: id,
+            ..Default::default()
+        });
+        match outcome_rx.await.unwrap() {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("agent-branch:done2"));
+            }
+            other => panic!("expected Completed on the agent branch, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_note_without_pending_escalation_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manager, _rx) = test_manager(Some(dir.path().to_path_buf()));
+        let script = "let meta = #{ name: \"t\", description: \"d\" };\nawait_user(\"user\", \"waiting\");\ncomplete(\"after\");";
+        let (run_id, outcome_rx) = manager
+            .launch(resolve_inline(script.into()).unwrap(), spec())
+            .unwrap();
+        assert!(matches!(
+            outcome_rx.await.unwrap(),
+            WorkflowOutcome::Paused { .. }
+        ));
+
+        let err = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id.clone()),
+                    resume_note: Some("nothing is waiting for this".into()),
+                    ..spec()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, LaunchError::NoPendingEscalation), "{err}");
+
+        // A plain resume still works after the rejected attempt.
+        let (_same, outcome_rx) = manager
+            .launch(
+                resolve_inline(script.into()).unwrap(),
+                LaunchSpec {
+                    resume_run_id: Some(run_id),
+                    resume_note: None,
+                    ..spec()
+                },
+            )
+            .unwrap();
+        match outcome_rx.await.unwrap() {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("after"));
             }
             other => panic!("expected Completed, got {other:?}"),
         }
@@ -940,6 +1165,7 @@ mod tests {
                 resolve_inline(script.into()).unwrap(),
                 LaunchSpec {
                     resume_run_id: Some(run_id.clone()),
+                    resume_note: None,
                     ..spec()
                 },
             )
@@ -1008,6 +1234,7 @@ mod tests {
                 resolve_inline(script.into()).unwrap(),
                 LaunchSpec {
                     resume_run_id: Some(run_id.clone()),
+                    resume_note: None,
                     ..spec()
                 },
             )
@@ -1078,6 +1305,7 @@ mod tests {
                     resolve_inline(script.into()).unwrap(),
                     LaunchSpec {
                         resume_run_id: Some(run_id.clone()),
+                        resume_note: None,
                         ..spec()
                     },
                 )

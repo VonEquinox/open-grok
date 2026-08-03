@@ -78,6 +78,23 @@ open-grok
 
 Grok uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, run `open-grok logout` or delete `~/.opengrok/auth.json`.
 
+### Wafer AI
+
+Wafer AI uses an isolated API key with the OpenAI-compatible Chat Completions
+API. It does not use Open Grok's xAI or Codex login flows. Set the key before
+starting Open Grok:
+
+```bash
+export WAFER_API_KEY="wafer-..."
+open-grok
+```
+
+Wafer uses `https://pass.wafer.ai/v1` and discovers available models from
+`GET /v1/models`; model IDs are not hardcoded by this guide. Wafer supports
+standard client function tools but does not provide native hosted web search.
+Its key and model catalog remain isolated from other providers and Wafer
+sessions cannot export data to xAI-only services.
+
 ---
 
 ## OIDC (Customer SSO)

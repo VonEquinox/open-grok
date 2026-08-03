@@ -30,6 +30,7 @@ impl SessionActor {
             args,
             agent_budget: None,
             resume_run_id: None,
+            resume_note: None,
         };
         let launched = self.workflow_manager.lock().await.launch(resolved, spec);
         match launched {
@@ -195,6 +196,7 @@ impl SessionActor {
                     args,
                     agent_budget,
                     resume_run_id: Some(full_id.clone()),
+                    resume_note: None,
                 };
                 match self.workflow_manager.lock().await.launch(resolved, spec) {
                     Ok((rid, outcome_rx)) => {

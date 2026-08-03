@@ -2607,6 +2607,12 @@ impl SessionActor {
                     ));
                 }
                 SamplerTurnOutcome::RefreshAuthAndResubmit {
+                    provider: xai_grok_sampling_types::ModelProvider::Wafer,
+                } => {
+                    return Err(acp::Error::internal_error()
+                        .data("Wafer API-key authentication cannot be refreshed automatically"));
+                }
+                SamplerTurnOutcome::RefreshAuthAndResubmit {
                     provider: xai_grok_sampling_types::ModelProvider::OpenCodeGo,
                 } => {
                     return Err(acp::Error::internal_error().data(

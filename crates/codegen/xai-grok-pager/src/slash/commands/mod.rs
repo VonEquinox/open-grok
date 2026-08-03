@@ -684,12 +684,22 @@ mod tests {
         }
     }
     #[test]
+    fn login_wafer_selects_secure_api_key_editor() {
+        for provider in [" wafer ", "wafer-ai", "wafer_ai"] {
+            assert!(matches!(
+                run_login(provider),
+                CommandResult::Action(Action::OpenWaferApiKeyEditor)
+            ));
+        }
+    }
+    #[test]
     fn login_provider_picker_lists_all_providers_with_status() {
         let items = login::provider_items(
             Some(crate::settings::SecretStatus::Stored),
             Some(crate::settings::SecretStatus::Missing),
             Some(crate::settings::SecretStatus::Stored),
             Some(crate::settings::SecretStatus::EnvironmentOverride),
+            Some(crate::settings::SecretStatus::Missing),
         );
         assert_eq!(
             items
@@ -702,13 +712,15 @@ mod tests {
                 "kimi",
                 "fireworks",
                 "deepseek",
-                "opencode-go"
+                "opencode-go",
+                "wafer"
             ]
         );
         assert_eq!(items[2].description, "API key · saved");
         assert_eq!(items[3].description, "API key · not configured");
         assert_eq!(items[4].description, "API key · saved");
         assert_eq!(items[5].description, "API key · environment override");
+        assert_eq!(items[6].description, "API key · not configured");
     }
     #[test]
     fn logout_bare_preserves_xai_flow() {

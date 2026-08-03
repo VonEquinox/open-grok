@@ -29,6 +29,16 @@ a dedicated reconnect-during-turn correctness and security audit. It does not
 change MCP startup/runtime assembly, telemetry metadata, structured read/edit
 tools, or audio output.
 
+An August 2, 2026 parity audit reviewed upstream through
+`2b5bdcf67547860f2e5c5a605009a70026796b2b`. No web-search or `wait` protocol
+semantics changed after the July selective-sync baseline. A later runtime
+hardening commit made sandboxed V8 mandatory upstream. The pinned rusty_v8
+150.4.0 release does not publish sandbox-enabled archives for Open Grok's
+supported Apple Silicon or Windows targets, so enabling that feature would
+break normal and release builds. This remains an explicit hardening gap pending
+a reproducible source-built or upstream-published archive; the external
+`codex-code-mode-host` process also remains intentionally unported.
+
 ## Compatibility contract
 
 When Code Mode Only is effective:
@@ -63,6 +73,26 @@ When Code Mode Only is effective:
 An implementation that exposes Codex native `exec` as a JSON-schema function,
 sends unsupported native custom tools to xAI or DeepSeek, or starts a fresh
 JavaScript process for every call is not compatible with this contract.
+
+### Standalone web-search adapter
+
+Upstream registers a `web` namespace containing `run`; Open Grok's registry
+stores the equivalent flat name `web__run`. Both produce the same Code Mode
+JavaScript binding, `tools.web__run(...)`. The model-facing description mirrors
+upstream verbatim apart from that three-place name substitution, and optional
+command fields remain optional but non-null in the exported schema.
+
+The `/alpha/search` request keeps the previous and current visible user turns,
+shares a 1,000-token budget across intervening assistant text, omits `input`
+when no visible user message exists, and uses the 10,000-token output policy
+advertised by the latest Codex Code Mode models. Open Grok intentionally
+requests direct live external search. It reuses the active Codex route's bearer
+resolver, account and originator headers; it does not synthesize upstream's
+`x-codex-turn-metadata` payload, which Open Grok does not otherwise model.
+Structured result DTOs remain opaque and forward-compatible while the tool
+returns the endpoint's textual `output` to JavaScript.
+Supporting a future model with a different search-output policy requires
+explicit model metadata; the adapter must not infer that policy from a slug.
 
 ## Configuration behavior
 

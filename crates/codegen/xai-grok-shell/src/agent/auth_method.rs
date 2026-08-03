@@ -29,6 +29,10 @@ pub const XAI_API_KEY_ENV_VAR: &str = "XAI_API_KEY";
 /// so existing deployments that use the old name keep working.
 pub const LEGACY_XAI_API_KEY_ENV_VAR: &str = "GROK_CODE_XAI_API_KEY";
 
+pub const WAFER_API_KEY_ENV_VAR: &str = "WAFER_API_KEY";
+pub const WAFER_PROVIDER_ID: &str = "wafer";
+pub const WAFER_PROVIDER_NAME: &str = "Wafer AI";
+
 /// Read the API key from the environment.
 ///
 /// Checks `XAI_API_KEY` first, then falls back to the legacy
@@ -40,6 +44,26 @@ pub fn read_xai_api_key_env() -> Result<String, std::env::VarError> {
 /// Returns `true` if either `XAI_API_KEY` or `GROK_CODE_XAI_API_KEY` is set.
 pub fn has_xai_api_key_env() -> bool {
     read_xai_api_key_env().is_ok()
+}
+
+/// Read a non-empty Wafer AI API key from the process environment.
+pub fn read_wafer_api_key_env() -> Option<String> {
+    std::env::var(WAFER_API_KEY_ENV_VAR)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn has_wafer_api_key_env() -> bool {
+    read_wafer_api_key_env().is_some()
+}
+
+/// Accept the canonical provider id and its human-facing serialized alias.
+pub fn is_wafer_provider_id(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "wafer" | "wafer_ai"
+    )
 }
 
 /// Whether `xai.api_key` should be advertised (and pushed FIRST) when building
@@ -915,6 +939,27 @@ mod tests {
         let _new = EnvGuard::set(XAI_API_KEY_ENV_VAR, "new-key");
         let _legacy = EnvGuard::set(LEGACY_XAI_API_KEY_ENV_VAR, "old-key");
         assert_eq!(read_xai_api_key_env().unwrap(), "new-key");
+    }
+
+    #[test]
+    #[serial]
+    fn wafer_env_key_is_trimmed_and_empty_values_are_ignored() {
+        let _key = EnvGuard::set(WAFER_API_KEY_ENV_VAR, "  wafer-key  ");
+        assert_eq!(read_wafer_api_key_env().as_deref(), Some("wafer-key"));
+        assert!(has_wafer_api_key_env());
+
+        drop(_key);
+        let _empty = EnvGuard::set(WAFER_API_KEY_ENV_VAR, "   ");
+        assert_eq!(read_wafer_api_key_env(), None);
+        assert!(!has_wafer_api_key_env());
+    }
+
+    #[test]
+    fn wafer_provider_id_accepts_canonical_and_serialized_aliases_only() {
+        assert!(is_wafer_provider_id("wafer"));
+        assert!(is_wafer_provider_id(" WAFER_AI "));
+        assert!(!is_wafer_provider_id("waferai"));
+        assert!(!is_wafer_provider_id("fireworks"));
     }
 
     // -- grok login --legacy regression coverage ------------------------

@@ -224,10 +224,11 @@ impl SessionActor {
         }
         body.push_str(&format!(
             "\nIt runs in the background: status snapshots and the final result arrive as \
-             reminders at turn starts, and the user can watch it in /workflows. If it pauses, \
-             it can be resumed by calling the workflow tool with resume_from_run_id: \
-             \"{run_id}\". Keep run ids internal — the user knows runs by display name. No \
-             action needed unless the user asks."
+             reminders at turn starts, and the user can watch it in /workflows. If it blocks \
+             or fails you will be woken with the blocking issue — fix what you can, then \
+             resume by calling the workflow tool with resume_from_run_id: \"{run_id}\" \
+             (plus resume_note when it asked via escalate()). Keep run ids internal — the \
+             user knows runs by display name. No action needed unless the user asks."
         ));
         self.push_system_reminder(&body);
     }
@@ -453,7 +454,28 @@ fn format_workflow_completion_reminder(
             let _ = writeln!(
                 buf,
                 "  Resumable: call the workflow tool with resume_from_run_id: \"{}\" — \
-                 completed agents replay from the journal and the failed step re-executes.",
+                 completed agents replay from the journal and the failed step re-executes. \
+                 If the Detail points at a fixable cause (environment, auth, rate limit, \
+                 missing file), fix that first so the retried step can succeed.",
+                run.run_id
+            );
+        }
+        if run.status.is_paused()
+            && run.status != crate::session::workflow::tracker::WorkflowRunStatus::BudgetLimited
+            && run.status != crate::session::workflow::tracker::WorkflowRunStatus::UserPaused
+        {
+            let _ = writeln!(
+                buf,
+                "  Blocked awaiting help: this run paused itself — the Detail above says what \
+                 it needs. If it asked a question via escalate(), resolve or decide it now, \
+                 then call the workflow tool with resume_from_run_id: \"{}\" and resume_note \
+                 with a short answer — the script receives the note and continues (resuming \
+                 without a note passes an empty answer). For other pauses, fix the stated \
+                 cause first, then resume the same way — but a plain pause() replays \
+                 deterministically: the script and launch args are immutable, so a pause about \
+                 missing or invalid launch input can only be fixed by starting a NEW run with \
+                 corrected args. If only the user can resolve the blocker, surface it to them \
+                 instead of resuming.",
                 run.run_id
             );
         }
@@ -897,6 +919,27 @@ mod workflow_reminder_tests {
             agents: Vec::new(),
         }
     }
+    #[test]
+    fn blocked_run_reminder_carries_the_issue_and_fix_and_resume_instructions() {
+        let mut run = failed_run("cargo test needs the fixtures dir".to_owned());
+        run.status = WorkflowRunStatus::Blocked;
+        let session_dir = tempfile::tempdir().unwrap();
+        let reminder = format_workflow_completion_reminder(&[run], session_dir.path(), false, None);
+        assert!(reminder.contains("status: blocked"));
+        assert!(reminder.contains("Detail: cargo test needs the fixtures dir"));
+        assert!(reminder.contains("Blocked awaiting help"));
+        assert!(reminder.contains("resume_from_run_id: \"wf_1\""));
+        assert!(reminder.contains("resume_note"));
+        assert!(
+            reminder.contains("starting a NEW run"),
+            "the reminder must warn that plain pause() replays deterministically"
+        );
+        assert!(
+            !reminder.contains("failed step re-executes"),
+            "the Failed-run guidance must not leak into blocked runs"
+        );
+    }
+
     #[test]
     fn completion_detail_is_normalized_and_utf8_safely_capped_with_marker() {
         let detail = format!(

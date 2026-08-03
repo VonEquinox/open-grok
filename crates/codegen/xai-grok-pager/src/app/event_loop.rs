@@ -97,18 +97,6 @@ fn effective_startup_model<'a>(
     cli_model.or(configured_default)
 }
 
-fn codex_api_key_ready_for_startup(
-    selected_provider: PrimaryProvider,
-    required_provider: Option<PrimaryProvider>,
-    configured_default_model_has_own_credentials: bool,
-) -> bool {
-    if !configured_default_model_has_own_credentials {
-        return false;
-    }
-    required_provider == Some(PrimaryProvider::Codex)
-        || (required_provider.is_none() && selected_provider == PrimaryProvider::Codex)
-}
-
 fn reusable_startup_codex_credential<'a, T>(
     freshness_required: bool,
     fresh: Option<&'a T>,
@@ -122,12 +110,8 @@ fn startup_codex_freshness_required(
     selected_provider: PrimaryProvider,
     xai_needs_login: bool,
     required_provider: Option<PrimaryProvider>,
-    codex_api_key_ready: bool,
 ) -> bool {
     if force_xai_login {
-        return false;
-    }
-    if codex_api_key_ready {
         return false;
     }
     match required_provider {
@@ -138,7 +122,8 @@ fn startup_codex_freshness_required(
             PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
-            | PrimaryProvider::OpenCodeGo => false,
+            | PrimaryProvider::OpenCodeGo
+            | PrimaryProvider::Wafer => false,
         },
     }
 }
@@ -162,7 +147,8 @@ fn plan_startup_auth(
             PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
-            | PrimaryProvider::OpenCodeGo => StartupAuthPlan::Ready,
+            | PrimaryProvider::OpenCodeGo
+            | PrimaryProvider::Wafer => StartupAuthPlan::Ready,
         };
     }
     match selected_provider {
@@ -173,7 +159,8 @@ fn plan_startup_auth(
         | PrimaryProvider::Kimi
         | PrimaryProvider::Fireworks
         | PrimaryProvider::DeepSeek
-        | PrimaryProvider::OpenCodeGo => StartupAuthPlan::Ready,
+        | PrimaryProvider::OpenCodeGo
+        | PrimaryProvider::Wafer => StartupAuthPlan::Ready,
     }
 }
 
@@ -1079,17 +1066,11 @@ pub(crate) async fn run(
             None
         }
     };
-    let codex_api_key_ready = codex_api_key_ready_for_startup(
-        app.primary_provider,
-        required_startup_provider,
-        connection.configured_default_model_has_own_credentials,
-    );
     let codex_required_for_startup = startup_codex_freshness_required(
         force_login,
         app.primary_provider,
         connection.needs_login,
         required_startup_provider,
-        codex_api_key_ready,
     );
     let fresh_codex_credentials = if codex_required_for_startup {
         match xai_grok_shell::codex_auth::fresh_credentials().await {
@@ -1105,7 +1086,7 @@ pub(crate) async fn run(
     let codex_credentials_ready = if codex_required_for_startup {
         fresh_codex_credentials.is_some()
     } else {
-        local_codex_credentials.is_some() || codex_api_key_ready
+        local_codex_credentials.is_some()
     };
     // A required Codex startup may reuse only the credential that passed the
     // freshness check. Keeping an expired local summary here would let the
@@ -4042,58 +4023,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_byok_default_skips_oauth_freshness_and_enters_ready() {
-        assert!(codex_api_key_ready_for_startup(
-            PrimaryProvider::Xai,
-            Some(PrimaryProvider::Codex),
-            true,
-        ));
-        assert!(!startup_codex_freshness_required(
-            false,
-            PrimaryProvider::Xai,
-            false,
-            Some(PrimaryProvider::Codex),
-            true,
-        ));
-        assert_eq!(
-            plan_startup_auth(
-                false,
-                false,
-                PrimaryProvider::Xai,
-                true,
-                Some(PrimaryProvider::Codex),
-            ),
-            StartupAuthPlan::ReadyWithCodex
-        );
-    }
-
-    #[test]
-    fn codex_oauth_default_still_requires_login_without_api_key() {
-        assert!(!codex_api_key_ready_for_startup(
-            PrimaryProvider::Codex,
-            Some(PrimaryProvider::Codex),
-            false,
-        ));
-        assert!(startup_codex_freshness_required(
-            false,
-            PrimaryProvider::Codex,
-            false,
-            Some(PrimaryProvider::Codex),
-            false,
-        ));
-        assert_eq!(
-            plan_startup_auth(
-                false,
-                false,
-                PrimaryProvider::Xai,
-                false,
-                Some(PrimaryProvider::Codex),
-            ),
-            StartupAuthPlan::RequireCodexLogin
-        );
-    }
-
-    #[test]
     fn kimi_startup_is_ready_without_interactive_provider_login() {
         assert_eq!(
             plan_startup_auth(true, false, PrimaryProvider::Kimi, false, None),
@@ -4104,7 +4033,6 @@ mod tests {
             PrimaryProvider::Kimi,
             true,
             None,
-            false,
         ));
     }
 

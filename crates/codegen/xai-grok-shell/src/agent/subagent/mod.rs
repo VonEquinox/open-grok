@@ -1081,7 +1081,10 @@ fn refresh_kimi_sampling_config_for_spawn(
     let provider = config.provider;
     if !matches!(
         provider,
-        ModelProvider::Kimi | ModelProvider::Fireworks | ModelProvider::DeepSeek
+        ModelProvider::Kimi
+            | ModelProvider::Fireworks
+            | ModelProvider::DeepSeek
+            | ModelProvider::Wafer
     ) {
         return Ok(());
     }

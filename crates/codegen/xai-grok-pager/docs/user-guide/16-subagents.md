@@ -233,17 +233,18 @@ Key host functions:
 | `parallel([opts, ...])` | Runs many agent specs concurrently; order-preserving, failures become `()`. |
 | `phase(title)` / `log(msg)` | Progress grouping and narration in the workflow card and `/workflows` overlay. |
 | `complete(value?)` / `pause(kind, msg)` / `await_user(kind, msg)` | Terminate the run, pause it, or pause once for user input (resume passes through). |
+| `escalate(msg)` | Pause once as **blocked**, waking the session agent with `msg`; on resume it returns the resume note the agent supplied (empty string without one), so scripts can hand a blocker back instead of dying. |
 | `budget()` | `#{total, spent, reserved, remaining}` agent-call accounting. |
 | `write_scratch_file` / `read_scratch_file` / `render_template` / `git_diff_since` | Scratch artifacts, prompt templates, and a bounded diff of the workspace. |
 | `fingerprint(text)` / `json_encode(value)` | Hash and safely fence untrusted data into prompts. |
 
-Workflows always run **in the background**: the launch returns immediately, the conversation stays free while agents work, and completion is injected back into the session automatically — no polling. Watch and manage runs in the `/workflows` overlay (live phases, per-agent progress and tokens), or with `/workflow pause|resume|stop|save <name>`.
+Workflows always run **in the background**: the launch returns immediately, the conversation stays free while agents work, and completion is injected back into the session automatically — no polling. A run that pauses itself with any kind except `user`, or that fails, is handed back the same way: the session agent is woken with the blocking issue and resume instructions, so it can fix the cause and resume the run — a failed step re-executes live, an `await_user` gate is simply passed, and an `escalate()` gate receives the resume note as its return value (a plain `pause()` replays deterministically, so a pause about launch input needs a corrected new run). Only user-kind pauses — a deliberate `/workflow pause`, or a script pause with kind `user` — stay quiet until resumed. Watch and manage runs in the `/workflows` overlay (live phases, per-agent progress and tokens), or with `/workflow pause|resume|stop|save <name>`.
 
 Budgets are counted in **agent calls** (default 128, max 1024 per run): every `agent()` call and `parallel()` item consumes one slot. A budget-limited run can be resumed with a strictly higher `agent_budget`; journaled calls replay without re-running.
 
 Runs are journaled under the session directory. Resuming (`resume_from_run_id`, same process only) replays completed host calls instantly and re-runs only what hadn't finished; the script and `args` must be byte-identical to the original run. Wall-clock (`timestamp()`), `sleep()`, and `exit()` are unavailable inside scripts so replays stay deterministic — pass timestamps through `args`. A process restart marks active runs interrupted (start a new run; the launch persists an editable `script_path` for iteration).
 
-Reusable workflows live in a three-scope registry — builtin (`deep-research` ships in the binary), project (`<repo>/.opengrok/workflows/*.rhai`, folder-trust gated), and user (`~/.opengrok/workflows/*.rhai`) — and each registered workflow also surfaces as its own slash command (e.g. `/deep-research`). `/workflow save <name>` persists a run's script to the project scope.
+Reusable workflows live in a three-scope registry — builtin (`deep-research` and `ultracode` ship in the binary), project (`<repo>/.opengrok/workflows/*.rhai`, folder-trust gated), and user (`~/.opengrok/workflows/*.rhai`) — and each registered workflow also surfaces as its own slash command (e.g. `/deep-research`, `/ultracode`). `/workflow save <name>` persists a run's script to the project scope.
 
 A session runs at most 4 active workflows; a run is capped at 1024 agent calls; and workflow members follow the same flat tree: they cannot spawn `task`, `agent_swarm`, or another `workflow`.
 

@@ -22,6 +22,7 @@ use crate::opencode_go_models::{
 };
 use crate::remote::{FetchModelsResult, fetch_models_blocking};
 use crate::sampling::SamplerConfig as SamplingConfig;
+use crate::wafer_models::{WaferModelsCatalog, WaferModelsClient};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption, ToolMode};
 
@@ -111,7 +112,7 @@ pub(crate) fn task_model_error_for_catalog_with_provider_auth(
 
 /// Credential gate for spawning a child on an API-key-only provider.
 ///
-/// A Kimi / Fireworks AI child without a usable key is doomed: it dies during
+/// A provider API-key child without a usable key is doomed: it dies during
 /// spawn setup in `refresh_kimi_sampling_config_for_spawn`, AFTER a
 /// `background: true` task tool has already answered "Subagent started in
 /// background" — so the caller sees a silent 0-turn failure and tends to fall
@@ -129,6 +130,7 @@ fn task_model_credential_error(requested: &str, entry: &ModelEntry) -> Option<St
             | ModelProvider::Fireworks
             | ModelProvider::DeepSeek
             | ModelProvider::OpenCodeGo
+            | ModelProvider::Wafer
     ) {
         return None;
     }
@@ -171,6 +173,7 @@ struct Inner {
     /// DeepSeek credential.
     deepseek_catalog: RwLock<Option<DeepSeekModelsCatalog>>,
     opencode_go_catalog: RwLock<Option<OpenCodeGoModelsCatalog>>,
+    wafer_catalog: RwLock<Option<WaferModelsCatalog>>,
     models: RwLock<IndexMap<String, ModelEntry>>,
     current_model_id: RwLock<acp::ModelId>,
     current_reasoning_effort: RwLock<Option<ReasoningEffort>>,
@@ -191,6 +194,7 @@ struct Inner {
     fireworks_client: FireworksModelsClient,
     deepseek_client: DeepSeekModelsClient,
     opencode_go_client: OpenCodeGoModelsClient,
+    wafer_client: WaferModelsClient,
     /// Serialize Codex cache/network refreshes. Session startup waits for an
     /// already-running refresh so it resolves against the same catalog rather
     /// than racing past the initial `OnlineIfUncached` request.
@@ -199,6 +203,7 @@ struct Inner {
     fireworks_refresh_lock: tokio::sync::Mutex<()>,
     deepseek_refresh_lock: tokio::sync::Mutex<()>,
     opencode_go_refresh_lock: tokio::sync::Mutex<()>,
+    wafer_refresh_lock: tokio::sync::Mutex<()>,
     /// Invalidates a refresh result when Codex logout races an in-flight
     /// `/models` request. Logout increments this before clearing the cache;
     /// only a refresh that started in the current generation may publish.
@@ -210,6 +215,7 @@ struct Inner {
     fireworks_catalog_generation: AtomicU64,
     deepseek_catalog_generation: AtomicU64,
     opencode_go_catalog_generation: AtomicU64,
+    wafer_catalog_generation: AtomicU64,
     /// Guard to prevent overlapping retry loops.
     retry_in_flight: AtomicBool,
     /// Single-flight for the etag-triggered background refresh (`spawn_fetch`).
@@ -316,6 +322,7 @@ impl ModelsManager {
                 fireworks_catalog: RwLock::new(None),
                 deepseek_catalog: RwLock::new(None),
                 opencode_go_catalog: RwLock::new(None),
+                wafer_catalog: RwLock::new(None),
                 models: RwLock::new(models),
                 current_model_id: RwLock::new(current_model_id),
                 current_reasoning_effort: RwLock::new(current_reasoning_effort),
@@ -331,16 +338,19 @@ impl ModelsManager {
                 fireworks_client: FireworksModelsClient::new(),
                 deepseek_client: DeepSeekModelsClient::new(),
                 opencode_go_client: OpenCodeGoModelsClient::new(),
+                wafer_client: WaferModelsClient::new(),
                 codex_refresh_lock: tokio::sync::Mutex::new(()),
                 kimi_refresh_lock: tokio::sync::Mutex::new(()),
                 fireworks_refresh_lock: tokio::sync::Mutex::new(()),
                 deepseek_refresh_lock: tokio::sync::Mutex::new(()),
                 opencode_go_refresh_lock: tokio::sync::Mutex::new(()),
+                wafer_refresh_lock: tokio::sync::Mutex::new(()),
                 codex_catalog_generation: AtomicU64::new(0),
                 kimi_catalog_generation: AtomicU64::new(0),
                 fireworks_catalog_generation: AtomicU64::new(0),
                 deepseek_catalog_generation: AtomicU64::new(0),
                 opencode_go_catalog_generation: AtomicU64::new(0),
+                wafer_catalog_generation: AtomicU64::new(0),
                 retry_in_flight: AtomicBool::new(false),
                 refresh_in_flight: AtomicBool::new(false),
                 allowlist_excludes_all: AtomicBool::new(false),
@@ -397,11 +407,12 @@ impl ModelsManager {
         let codex_catalog = codex_client.load_fresh_cache();
         let kimi_client = KimiModelsClient::new(cfg.models.kimi_endpoint);
         let kimi_catalog = None;
-        let catalog = resolve_model_catalog_with_provider_catalogs(
+        let catalog = resolve_model_catalog_with_provider_catalogs_and_wafer(
             cfg,
             prefetched_models.clone(),
             codex_catalog.as_ref(),
             kimi_catalog.as_ref(),
+            None,
             None,
             None,
             None,
@@ -453,6 +464,7 @@ impl ModelsManager {
         self.start_fireworks_models_query();
         self.start_deepseek_models_query();
         self.start_opencode_go_models_query();
+        self.start_wafer_models_query();
     }
 
     /// Refresh the authenticated ChatGPT Codex catalog after the agent has a
@@ -839,6 +851,72 @@ impl ModelsManager {
         }
     }
 
+    fn start_wafer_models_query(&self) {
+        if !self.inner.wafer_client.has_usable_api_key() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!("Wafer model query deferred: no Tokio runtime");
+            return;
+        };
+        let manager = self.clone();
+        runtime.spawn(async move {
+            if let Err(error) = manager.refresh_wafer_models().await {
+                tracing::warn!(%error, "Wafer model query failed; keeping current models");
+            }
+        });
+    }
+
+    pub(crate) async fn refresh_wafer_models(&self) -> anyhow::Result<bool> {
+        let _refresh_guard = self.inner.wafer_refresh_lock.lock().await;
+        let generation = self.inner.wafer_catalog_generation.load(Ordering::Acquire);
+        let client = self.inner.wafer_client.clone();
+        let Some(refreshed) = client.query().await? else {
+            tracing::debug!("Wafer model query skipped: no Wafer API key");
+            return Ok(false);
+        };
+        if generation != self.inner.wafer_catalog_generation.load(Ordering::Acquire)
+            || !client.catalog_matches_current_credential(&refreshed)
+        {
+            tracing::debug!(
+                "discarded Wafer model query completed after catalog clear or credential change"
+            );
+            return Ok(false);
+        }
+        let count = refreshed.entries().len();
+        let authoritative = refreshed.is_authoritative();
+        *self.inner.wafer_catalog.write() = Some(refreshed);
+        let cfg = self.inner.cfg.read().clone();
+        let prefetched = self.inner.prefetched.read().clone();
+        self.rebuild(&cfg, prefetched);
+        self.reselect_current_model_if_missing(&cfg);
+        self.notify_models_updated();
+        tracing::info!(count, authoritative, "Wafer model catalog refreshed");
+        Ok(true)
+    }
+
+    pub(crate) fn clear_wafer_models(&self) -> bool {
+        self.inner
+            .wafer_catalog_generation
+            .fetch_add(1, Ordering::AcqRel);
+        let had_catalog = self.inner.wafer_catalog.write().take().is_some();
+        let cfg = self.inner.cfg.read().clone();
+        let prefetched = self.inner.prefetched.read().clone();
+        self.rebuild(&cfg, prefetched);
+        self.reselect_current_model_if_missing(&cfg);
+        self.notify_models_updated();
+        had_catalog
+    }
+
+    pub(crate) async fn apply_wafer_credential_change(&self) -> anyhow::Result<bool> {
+        if self.inner.wafer_client.has_usable_api_key() {
+            self.refresh_wafer_models().await
+        } else {
+            self.clear_wafer_models();
+            Ok(false)
+        }
+    }
+
     pub fn opencode_go_models(&self) -> Vec<OpenCodeGoModelDescriptor> {
         self.inner
             .opencode_go_catalog
@@ -904,8 +982,9 @@ impl ModelsManager {
             let kimi_catalog = self.inner.kimi_catalog.read();
             let fireworks_catalog = self.inner.fireworks_catalog.read();
             let deepseek_catalog = self.inner.deepseek_catalog.read();
+            let wafer_catalog = self.inner.wafer_catalog.read();
             let opencode_go_catalog = self.inner.opencode_go_catalog.read();
-            resolve_model_catalog_with_provider_catalogs(
+            resolve_model_catalog_with_provider_catalogs_and_wafer(
                 &new_config,
                 prefetched,
                 codex_catalog.as_ref(),
@@ -917,6 +996,7 @@ impl ModelsManager {
                 fireworks_catalog.as_ref(),
                 deepseek_catalog.as_ref(),
                 opencode_go_catalog.as_ref(),
+                wafer_catalog.as_ref(),
             )
         };
         let has_real_catalog = *self.inner.has_fetched_real_catalog.read();
@@ -1338,8 +1418,9 @@ impl ModelsManager {
             let kimi_catalog = self.inner.kimi_catalog.read();
             let fireworks_catalog = self.inner.fireworks_catalog.read();
             let deepseek_catalog = self.inner.deepseek_catalog.read();
+            let wafer_catalog = self.inner.wafer_catalog.read();
             let opencode_go_catalog = self.inner.opencode_go_catalog.read();
-            resolve_model_catalog_with_provider_catalogs(
+            resolve_model_catalog_with_provider_catalogs_and_wafer(
                 cfg,
                 prefetched,
                 codex_catalog.as_ref(),
@@ -1347,6 +1428,7 @@ impl ModelsManager {
                 fireworks_catalog.as_ref(),
                 deepseek_catalog.as_ref(),
                 opencode_go_catalog.as_ref(),
+                wafer_catalog.as_ref(),
             )
         };
         *self.inner.models.write() = catalog;
@@ -1660,6 +1742,7 @@ impl ModelsManager {
         self.start_kimi_models_query();
         self.start_fireworks_models_query();
         self.start_opencode_go_models_query();
+        self.start_wafer_models_query();
     }
 
     /// Refresh the model catalog on every auth token refresh.

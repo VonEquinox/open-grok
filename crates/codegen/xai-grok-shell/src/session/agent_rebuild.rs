@@ -829,6 +829,7 @@ mod tests {
         assert!(s.allowed_for_provider(ModelProvider::Kimi));
         assert!(s.allowed_for_provider(ModelProvider::Fireworks));
         assert!(s.allowed_for_provider(ModelProvider::DeepSeek));
+        assert!(s.allowed_for_provider(ModelProvider::Wafer));
         assert!(s.allowed_for_provider(ModelProvider::OpenCodeGo));
         assert!(!s.native_hosted_web_search_suppressed(ModelProvider::Codex));
         assert!(s.native_hosted_web_search_suppressed(ModelProvider::DeepSeek));
@@ -851,6 +852,7 @@ mod tests {
             ModelProvider::Kimi,
             ModelProvider::Fireworks,
             ModelProvider::DeepSeek,
+            ModelProvider::Wafer,
             ModelProvider::OpenCodeGo,
         ] {
             assert!(!s.allowed_for_provider(provider), "{provider:?}");

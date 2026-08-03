@@ -272,6 +272,27 @@ max_completion_tokens = 384000
 reasoning_effort = "high"
 ```
 
+### Wafer AI
+
+Wafer AI provides an OpenAI-compatible Chat Completions endpoint. Its provider
+catalog is dynamic: Open Grok queries `GET /v1/models` at
+`https://pass.wafer.ai/v1` rather than relying on a static model list. Set
+`WAFER_API_KEY` and select one of the model IDs returned by that endpoint:
+
+```toml
+[model.wafer-model]
+model = "your-wafer-model-id"
+name = "Wafer model"
+provider = "wafer"
+base_url = "https://pass.wafer.ai/v1"
+api_backend = "chat_completions"
+env_key = "WAFER_API_KEY"
+```
+
+Wafer accepts standard client function tools. It has no native hosted web
+search, Responses API, OAuth flow, or xAI-only export path. Keep the Wafer API
+key provider-local; do not use `XAI_API_KEY` or an xAI session as a substitute.
+
 ### Anthropic (Claude)
 
 Use Claude models directly via the Anthropic Messages API:

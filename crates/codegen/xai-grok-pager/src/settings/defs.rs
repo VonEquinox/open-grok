@@ -1122,6 +1122,17 @@ pub fn default_settings() -> Vec<SettingMeta> {
             hidden_in_minimal: false,
         },
         SettingMeta {
+            key: "wafer_api_key",
+            category: SettingCategory::Models,
+            owner: SettingOwner::Shell,
+            label: "Wafer AI API key",
+            description: "API key for Wafer AI. Saving refreshes its dynamic model catalog from pass.wafer.ai.",
+            keywords: &["wafer", "ai", "api", "key", "credential", "models", "chat"],
+            kind: SettingKind::Secret,
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
             key: "opencode_go_models",
             category: SettingCategory::Models,
             owner: SettingOwner::Shell,

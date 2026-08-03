@@ -1705,6 +1705,7 @@ pub(crate) async fn spawn_session_actor(
                     args,
                     agent_budget: input.agent_budget,
                     resume_run_id: input.resume_from_run_id.clone(),
+                    resume_note: input.resume_note.clone(),
                 };
                 let launch_outcome = {
                     let mut mgr = manager.lock().await;

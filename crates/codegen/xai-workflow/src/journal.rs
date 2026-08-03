@@ -8,6 +8,9 @@ pub const MAX_JOURNAL_ENTRIES: usize = crate::MAX_HOST_CALLS as usize;
 
 pub(crate) const HOST_ERROR_KEY: &str = "__xai_workflow_host_error";
 
+/// Journal kind recorded by the script-facing `escalate()` gate.
+pub(crate) const ESCALATE_KIND: &str = "escalate";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JournalEntry {
     pub seq: u64,
@@ -222,6 +225,48 @@ impl Journal {
         self.bytes = self.bytes.saturating_add(line.len() as u64);
         self.entries.push(entry);
         Ok(())
+    }
+
+    /// True when the run is paused at an `escalate()` gate awaiting an answer:
+    /// the trailing entry is an unconsumed (null) escalate placeholder.
+    /// Trailing-null is a real invariant — escalate pauses immediately after
+    /// recording, and a noteless resume rewrites the placeholder to `""` as it
+    /// replays past the gate.
+    pub fn has_pending_escalation(&self) -> bool {
+        self.entries
+            .last()
+            .is_some_and(|last| last.kind == ESCALATE_KIND && last.result.is_null())
+    }
+
+    /// Deliver the main model's fix note to a run paused at `escalate()`.
+    ///
+    /// The pending escalation is the trailing entry (escalate records its
+    /// null placeholder and immediately pauses, so nothing can follow it).
+    /// Rewrites that placeholder to the note so replay returns it to the
+    /// script. Returns false when the run is not paused at an escalation.
+    pub fn fulfill_pending_escalation(&mut self, note: &str) -> Result<bool, JournalError> {
+        if !self.has_pending_escalation() {
+            return Ok(false);
+        }
+        // A missing byte offset means the trailing entry was already popped
+        // and rewritten in-session; the placeholder it exposed belongs to an
+        // earlier, already-consumed gate — nothing is pending.
+        let Some(new_len) = self.last_line_start else {
+            return Ok(false);
+        };
+        if let Some(path) = &self.path {
+            truncate_tail(path, new_len)?;
+        }
+        let entry = self.entries.pop().expect("trailing entry checked above");
+        self.bytes = new_len;
+        self.last_line_start = None;
+        self.record(
+            entry.seq,
+            ESCALATE_KIND,
+            entry.req_hash,
+            serde_json::Value::String(note.to_string()),
+        )?;
+        Ok(true)
     }
 
     pub fn prune_trailing_host_error(
@@ -472,6 +517,56 @@ mod tests {
             .record(0, "spawn_agent", hash, serde_json::json!({"ok": true}))
             .unwrap();
         assert_eq!(journal.len(), 1);
+    }
+
+    #[test]
+    fn fulfill_pending_escalation_rewrites_only_a_trailing_null_escalate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.jsonl");
+        let mut journal = Journal::new(Some(path.clone()));
+
+        assert!(!journal.fulfill_pending_escalation("note").unwrap());
+
+        let agent_hash = request_hash("spawn_agent", &serde_json::json!({"prompt": "hi"}));
+        journal
+            .record(
+                0,
+                "spawn_agent",
+                agent_hash,
+                serde_json::json!({"ok": true}),
+            )
+            .unwrap();
+        assert!(
+            !journal.fulfill_pending_escalation("note").unwrap(),
+            "a trailing non-escalate entry must not be rewritten"
+        );
+
+        let escalate_hash = request_hash(ESCALATE_KIND, &serde_json::json!({"message": "stuck"}));
+        journal
+            .record(
+                1,
+                ESCALATE_KIND,
+                escalate_hash.clone(),
+                serde_json::Value::Null,
+            )
+            .unwrap();
+        assert!(journal.fulfill_pending_escalation("fixed it").unwrap());
+        assert_eq!(
+            journal.replay(1, ESCALATE_KIND, &escalate_hash).unwrap(),
+            Some(serde_json::json!("fixed it"))
+        );
+        assert!(
+            !journal.fulfill_pending_escalation("again").unwrap(),
+            "a fulfilled escalation is no longer pending"
+        );
+
+        // The rewrite is durable and keeps the journal dense on reload.
+        let reloaded = Journal::load(path).unwrap();
+        assert_eq!(reloaded.len(), 2);
+        assert_eq!(
+            reloaded.replay(1, ESCALATE_KIND, &escalate_hash).unwrap(),
+            Some(serde_json::json!("fixed it"))
+        );
     }
 
     #[test]

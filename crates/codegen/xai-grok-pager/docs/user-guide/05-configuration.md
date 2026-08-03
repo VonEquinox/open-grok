@@ -450,7 +450,7 @@ To pin the model a subagent uses, set its entry under `[subagents.models]`.
 
 `/goal` has two drivers, chosen by the background-workflows setting. With workflows enabled, the host-owned workflow engine evaluates rounds and drives completion verification; with them disabled, `/goal` falls back to the legacy model-facing `update_goal` tool. Whether `/goal` is available at all is a separate switch (the goal feature setting).
 
-Background workflows — the `workflow` tool, named `.opengrok/workflows/*.rhai` scripts, `/deep-research`, and `/workflow` launches — are **on by default** in Open Grok (upstream ships them off pending a remote feature flag Open Grok doesn't use). Disable with config or env.
+Background workflows — the `workflow` tool, named `.opengrok/workflows/*.rhai` scripts, `/deep-research`, `/ultracode`, and `/workflow` launches — are **on by default** in Open Grok (upstream ships them off pending a remote feature flag Open Grok doesn't use). Disable with config or env.
 
 ```toml
 [workflows]
