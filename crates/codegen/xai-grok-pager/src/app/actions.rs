@@ -151,6 +151,9 @@ pub enum Action {
     /// load effect; under `--chat`, local Build disk rows are refused in
     /// dispatch (never coerced).
     LoadSession(String, Option<std::path::PathBuf>, bool),
+    /// Welcome Local workspace ACK confirmed (y); write ack + start session.
+    #[cfg(feature = "local-workspace")]
+    ConfirmWelcomeLocalWorkspaceAck,
     /// Create a new session with a client-chosen session ID (`--session-id`).
     NewSessionWithId(String),
     /// Startup `--fork-session`: fork `parent` then load the child.
@@ -1715,6 +1718,10 @@ pub enum Effect {
         /// the response is dropped when no longer current, so out-of-order
         /// completions can't clobber newer results.
         seq: u64,
+        /// Optional unified-list `kind` facet filter (`"chat"` / `"build"`).
+        /// When set, stamped as `_meta["x.ai/facetFilters"].kind` so the shell
+        /// honors multi-source history under `--chat` instead of forcing chat-only.
+        kind_filter: Option<Vec<String>>,
     },
     /// Coalesce picker search keystrokes: fires
     /// [`TaskResult::SessionSearchDebounceExpired`] after a short sleep; the

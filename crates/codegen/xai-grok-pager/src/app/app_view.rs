@@ -1014,6 +1014,12 @@ pub struct AppView {
     pub welcome_privacy_banner_opt_out_rect: Option<ratatui::layout::Rect>,
     pub welcome_privacy_banner_terms_rect: Option<ratatui::layout::Rect>,
     pub welcome_privacy_banner_policy_rect: Option<ratatui::layout::Rect>,
+    /// Hit-test rects for the welcome workspace-mode picker.
+    #[cfg(feature = "local-workspace")]
+    pub welcome_workspace_mode_rects: crate::views::welcome::WorkspaceModeHitRects,
+    /// Sticky hover flag for the workspace-mode picker (redraw on enter/leave).
+    #[cfg(feature = "local-workspace")]
+    pub welcome_on_workspace_mode: bool,
     /// Transient welcome toast: (message, wall-clock expiry).
     pub welcome_toast: Option<(String, std::time::Instant)>,
     /// Sticky hover flag for the privacy banner buttons (redraw on enter/leave).
@@ -1067,6 +1073,9 @@ pub struct AppView {
     /// [`crate::views::session_picker::effective_filter_query`], skips the
     /// local fuzzy re-filter for server search results.
     pub session_picker_entries_query: Option<String>,
+    /// Armed welcome-screen session delete (`d` then `y`), shared shape with
+    /// the modal `/resume` picker.
+    pub session_picker_pending_delete: Option<crate::views::session_picker::PendingDelete>,
     /// Tick counter for welcome screen spinner animation.
     pub welcome_tick: u64,
     /// Last shimmer frame drawn on the welcome screen. Lets `tick` throttle the
@@ -1113,6 +1122,22 @@ pub struct AppView {
     /// profiles on create/load while set. `/chat` does **not** set this
     /// (uses [`Self::deferred_startup`] one-shot state instead).
     pub chat_mode: bool,
+    /// Welcome picker mode; ignored when `local_workspace_startup_locked`.
+    #[cfg(feature = "local-workspace")]
+    pub welcome_workspace_mode: crate::views::welcome::WelcomeWorkspaceMode,
+    /// CLI/env already stamped local workspace; welcome must not override.
+    #[cfg(feature = "local-workspace")]
+    pub local_workspace_startup_locked: bool,
+    /// One-shot next-session stamp: `Some(None)` sandbox, `Some(cfg)` local.
+    #[cfg(feature = "local-workspace")]
+    pub welcome_session_local_workspace:
+        Option<Option<crate::app::session_startup::LocalWorkspaceConfig>>,
+    /// First-run Local ACK still pending in the TUI.
+    #[cfg(feature = "local-workspace")]
+    pub welcome_local_workspace_ack_pending: bool,
+    /// Next welcome history load is local-disk/build (does not set `chat_mode`).
+    #[cfg(feature = "local-workspace")]
+    pub welcome_history_load_as_build: bool,
     /// Whether mouse capture is currently enabled. Disabled during the
     /// Authenticating state so the terminal handles native text selection.
     pub mouse_captured: bool,
@@ -1835,6 +1860,10 @@ impl AppView {
             welcome_privacy_banner_opt_out_rect: None,
             welcome_privacy_banner_terms_rect: None,
             welcome_privacy_banner_policy_rect: None,
+            #[cfg(feature = "local-workspace")]
+            welcome_workspace_mode_rects: Default::default(),
+            #[cfg(feature = "local-workspace")]
+            welcome_on_workspace_mode: false,
             welcome_toast: None,
             welcome_on_privacy_banner: false,
             welcome_on_upgrade_cta: false,
@@ -1858,6 +1887,7 @@ impl AppView {
             session_picker_lanes: Default::default(),
             session_picker_detail_generation: 0,
             session_picker_entries_query: None,
+            session_picker_pending_delete: None,
             welcome_tick: 0,
             welcome_shimmer_frame: 0,
             cli_model_override: None,
@@ -1873,6 +1903,16 @@ impl AppView {
             subagents: false,
             ask_user: false,
             chat_mode: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
+            #[cfg(feature = "local-workspace")]
+            local_workspace_startup_locked: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_session_local_workspace: None,
+            #[cfg(feature = "local-workspace")]
+            welcome_local_workspace_ack_pending: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_history_load_as_build: false,
             mouse_captured: true,
             new_worktree_dialog: None,
             contextual_hints: Default::default(),
@@ -4896,6 +4936,12 @@ impl AppView {
                             welcome_announcement_expanded: self.welcome_announcement.expanded,
                             upgrade_cta: hero_cta.map(|(_owner, label, _)| label),
                             privacy_banner,
+                            #[cfg(feature = "local-workspace")]
+                            workspace_mode: self.welcome_workspace_mode,
+                            #[cfg(feature = "local-workspace")]
+                            workspace_mode_startup_locked: self.local_workspace_startup_locked,
+                            #[cfg(feature = "local-workspace")]
+                            workspace_mode_ack_pending: self.welcome_local_workspace_ack_pending,
                         };
                         let result = crate::views::welcome::render_welcome(
                             view_area,
@@ -4918,6 +4964,10 @@ impl AppView {
                             result.privacy_banner_opt_out_rect;
                         self.welcome_privacy_banner_terms_rect = result.privacy_banner_terms_rect;
                         self.welcome_privacy_banner_policy_rect = result.privacy_banner_policy_rect;
+                        #[cfg(feature = "local-workspace")]
+                        {
+                            self.welcome_workspace_mode_rects = result.workspace_mode_rects;
+                        }
                         self.welcome_changelog_cta_rect = result.changelog_cta_rect;
                         if let Some((ref msg, _)) = self.welcome_toast {
                             crate::views::welcome::paint_welcome_toast(
@@ -6384,6 +6434,16 @@ pub(crate) mod tests {
             subagents: false,
             ask_user: false,
             chat_mode: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
+            #[cfg(feature = "local-workspace")]
+            local_workspace_startup_locked: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_session_local_workspace: None,
+            #[cfg(feature = "local-workspace")]
+            welcome_local_workspace_ack_pending: false,
+            #[cfg(feature = "local-workspace")]
+            welcome_history_load_as_build: false,
             mouse_captured: true,
             new_worktree_dialog: None,
             contextual_hints: Default::default(),
@@ -6475,6 +6535,10 @@ pub(crate) mod tests {
             welcome_privacy_banner_opt_out_rect: None,
             welcome_privacy_banner_terms_rect: None,
             welcome_privacy_banner_policy_rect: None,
+            #[cfg(feature = "local-workspace")]
+            welcome_workspace_mode_rects: Default::default(),
+            #[cfg(feature = "local-workspace")]
+            welcome_on_workspace_mode: false,
             welcome_toast: None,
             welcome_on_privacy_banner: false,
             welcome_on_upgrade_cta: false,
@@ -6498,6 +6562,7 @@ pub(crate) mod tests {
             session_picker_lanes: Default::default(),
             session_picker_detail_generation: 0,
             session_picker_entries_query: None,
+            session_picker_pending_delete: None,
             welcome_tick: 0,
             welcome_shimmer_frame: 0,
             startup_warnings: Vec::new(),

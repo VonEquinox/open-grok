@@ -926,6 +926,16 @@ pub(crate) async fn run(
     app.subagents = !args.no_subagents;
     app.ask_user = !args.no_ask_user;
     app.chat_mode = args.chat();
+    #[cfg(feature = "local-workspace")]
+    {
+        let stamp = crate::app::session_startup::active_local_workspace().unwrap_or(None);
+        app.local_workspace_startup_locked = stamp.is_some();
+        if app.local_workspace_startup_locked {
+            app.welcome_workspace_mode =
+                crate::views::welcome::workspace_mode::mode_from_active_stamp(stamp.as_ref());
+            crate::views::welcome::workspace_mode::log_cli_lock_applied(app.welcome_workspace_mode);
+        }
+    }
     app.restore_code = args.restore_code.then_some(true);
     if let Some(ref agent) = args.agent {
         match crate::headless::resolve_agent_arg(agent) {
@@ -3929,6 +3939,54 @@ fn merge_paste_fragments(events: Vec<TimedInputEvent>) -> Vec<TimedInputEvent> {
     result
 }
 
+
+
+/// Whether a welcome Local workspace one-shot should apply to this effect batch.
+#[cfg(feature = "local-workspace")]
+pub(crate) fn welcome_oneshot_applies_to_effects(effs: &[super::actions::Effect]) -> bool {
+    use super::actions::Effect;
+    effs.iter().any(|e| {
+        matches!(
+            e,
+            Effect::CreateSession { .. } | Effect::CreateWorktreeSession { .. }
+        )
+    })
+}
+
+/// Apply history bypass (`chat_mode = false`) for load/restore/worktree-create.
+#[cfg(feature = "local-workspace")]
+pub(crate) fn welcome_history_build_bypass_applies(
+    effs: &[super::actions::Effect],
+    flag: bool,
+) -> bool {
+    use super::actions::Effect;
+    flag
+        && effs.iter().any(|e| {
+            matches!(
+                e,
+                Effect::LoadSession { .. }
+                    | Effect::RestoreAndLoadSession { .. }
+                    | Effect::CreateWorktreeSession { .. }
+            )
+        })
+}
+
+/// Whether this batch should clear the welcome history bypass flag.
+#[cfg(feature = "local-workspace")]
+pub(crate) fn welcome_history_build_bypass_consume(
+    effs: &[super::actions::Effect],
+    flag: bool,
+) -> bool {
+    use super::actions::Effect;
+    flag
+        && effs.iter().any(|e| {
+            matches!(
+                e,
+                Effect::LoadSession { .. } | Effect::CreateWorktreeSession { .. }
+            )
+        })
+}
+
 /// Spawn effects into the task set. Returns `true` if the app should quit.
 fn process_effects(
     effs: Vec<super::actions::Effect>,
@@ -3948,10 +4006,32 @@ fn process_effects(
             matches!(app.current_ui.permission_mode.as_deref(), Some("auto")),
         ),
         swarm_mode: app.current_ui.swarm_mode.unwrap_or(false),
-        chat_mode: app.chat_mode,
+        chat_mode: {
+            #[cfg(feature = "local-workspace")]
+            {
+                if welcome_history_build_bypass_applies(&effs, app.welcome_history_load_as_build) {
+                    if welcome_history_build_bypass_consume(&effs, app.welcome_history_load_as_build)
+                    {
+                        app.welcome_history_load_as_build = false;
+                    }
+                    false
+                } else {
+                    app.chat_mode
+                }
+            }
+            #[cfg(not(feature = "local-workspace"))]
+            {
+                app.chat_mode
+            }
+        },
         screen_mode_label: Some(app.screen_mode.meta_label()),
         is_api_key_auth: app.is_api_key_auth,
         resume_local_miss: app.resume_local_miss.clone(),
+        #[cfg(feature = "local-workspace")]
+        local_workspace: match app.welcome_session_local_workspace.take() {
+            Some(one_shot) => one_shot,
+            None => crate::app::session_startup::active_local_workspace().unwrap_or(None),
+        },
     };
     for eff in effs {
         let (quit, meta) = effects::execute(eff, tasks, &app.acp_tx, &app.cwd, &flags, progress_tx);

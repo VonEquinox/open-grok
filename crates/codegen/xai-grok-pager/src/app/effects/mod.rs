@@ -11,6 +11,8 @@ use super::session_title_resolve::worktree_resume_failure_message;
 #[allow(unused_imports)]
 use super::{agent, dispatch};
 pub use helpers::ConversationsPartial;
+#[cfg(feature = "local-workspace")]
+pub(crate) use helpers::reject_non_fs_only_advertised_tools;
 pub(super) use helpers::{
     parse_session_load_running_prompt_id, parse_session_scheduler_background_loops,
 };
@@ -2253,7 +2255,7 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::FetchSessionList { query, seq } => {
+        Effect::FetchSessionList { query, seq, kind_filter } => {
             let tx = acp_tx.clone();
             let cwd = cwd.to_path_buf();
             tasks
@@ -2266,6 +2268,19 @@ pub(crate) fn execute(
                         params["query"] = serde_json::Value::String(q.clone());
                     } else {
                         params["allowRelax"] = serde_json::Value::Bool(true);
+                    }
+                    if let Some(kinds) = &kind_filter {
+                        params["_meta"] = serde_json::json!({
+                        "x.ai/facetFilters": { "kind": kinds },
+                    });
+                        tracing::info!(
+                        target: "opengrok.pager.workspace_mode",
+                        event = "session_list_fetch",
+                        kind_filter = ?kinds,
+                        query = ?query,
+                        seq,
+                        "FetchSessionList with kind facet filter"
+                    );
                     }
                     let request = acp::ExtRequest::new(
                         "x.ai/session/list",
