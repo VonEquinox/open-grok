@@ -3,6 +3,39 @@
 
 use super::*;
 
+use crate::session::SideQuestionError;
+use xai_grok_sampling_types::SamplingError;
+
+/// Retry policy for the one-shot `/btw` model call: 3 attempts total
+/// (1 try + 2 retries), 500ms → 1s jittered backoff. Deliberately short —
+/// nothing like the sampler actor's budget — so a fleet-wide capacity event
+/// can't multiply side-question traffic into a retry storm.
+fn side_question_retry_policy() -> backon::ExponentialBuilder {
+    backon::ExponentialBuilder::default()
+        .with_max_times(2)
+        .with_min_delay(std::time::Duration::from_millis(500))
+        .with_max_delay(std::time::Duration::from_secs(1))
+        .with_jitter()
+}
+
+/// Whether a failed `/btw` attempt is worth retrying: overload only (not
+/// every retryable 5xx / stream glitch), minus the shared retry vetoes
+/// (`x-should-retry: false`, context length — see
+/// [`SamplingError::is_retry_vetoed`], also enforced by the sampler actor's
+/// `classify_error`).
+fn should_retry_side_question(e: &SamplingError) -> bool {
+    e.is_overloaded() && !e.is_retry_vetoed()
+}
+
+/// Clone the base `/btw` request and stamp a fresh `req_id`, so retried
+/// attempts never collide in logs. Everything else is byte-identical.
+fn build_side_question_attempt(base: &ConversationRequest) -> ConversationRequest {
+    let mut request = base.clone();
+    request.x_grok_req_id = Some(format!("xai-btw-{}", uuid::Uuid::new_v4()));
+    request
+}
+
+
 impl SessionActor {
     /// Handle a /btw side question — single-turn model call using the
     /// parent session's full context.
@@ -16,7 +49,10 @@ impl SessionActor {
     ///
     /// Generates a unique btw session ID and persists the result to
     /// `btw_history.jsonl` in the session folder.
-    pub(super) async fn handle_side_question(&self, question: &str) -> Result<String, String> {
+    pub(super) async fn handle_side_question(
+        &self,
+        question: &str,
+    ) -> Result<String, SideQuestionError> {
         let btw_session_id = format!("btw-{}", uuid::Uuid::new_v4());
         let parent_session_id = self.session_info.id.to_string();
         let asked_at = chrono::Utc::now();
@@ -24,7 +60,7 @@ impl SessionActor {
         let sampling_client = self
             .prepare_chat_completion(false)
             .await
-            .map_err(|e| format!("failed to prepare client: {e}"))?;
+            .map_err(|e| SideQuestionError::PrepareClient(e.to_string()))?;
 
         // Full conversation snapshot including system prompt, tool calls, and results.
         // Strip reasoning/thinking blocks from assistant items so we don't send
@@ -76,7 +112,7 @@ impl SessionActor {
             .map(|c| c.model)
             .unwrap_or_default();
 
-        let persist = |answer: String, success: bool, error: Option<String>| {
+        let persist = |answer: String, success: bool, error: Option<String>, attempts: u32| {
             let _ = self.notifications.persistence_tx.send(PersistenceMsg::Btw(
                 crate::session::persistence::BtwEntry {
                     btw_session_id: btw_session_id.clone(),
@@ -87,6 +123,7 @@ impl SessionActor {
                     model: model.clone(),
                     success,
                     error,
+                    attempts,
                 },
             ));
         };
@@ -95,47 +132,60 @@ impl SessionActor {
         // `thinking` config via request_defaults for thinking-enabled models,
         // Anthropic requires temperature == 1 when thinking is enabled.
         // Leaving it None lets the provider defaults apply correctly.
-        let request = ConversationRequest {
+        //
+        // Built once; each attempt clones it and stamps a fresh req_id (the
+        // per-attempt clone is the cost of the owned-request API — retries
+        // are rare, so the success path pays exactly one clone).
+        let base_request = ConversationRequest {
             items,
             tools: tool_specs,
             model: Some(model.clone()),
             temperature: None,
             x_grok_conv_id: Some(btw_session_id.clone()),
-            x_grok_req_id: Some(format!("xai-btw-{}", uuid::Uuid::new_v4())),
             x_grok_session_id: Some(parent_session_id.clone()),
             x_grok_agent_id: Some(xai_grok_telemetry::id::agent_id()),
             ..Default::default()
         };
 
-        let response = sampling_client
-            .conversation_collect(request)
-            .await
-            .map_err(|e| {
-                let msg = format!("side question model call failed: {e}");
-                persist(String::new(), false, Some(msg.clone()));
-                msg
-            })?;
-        let content = response.assistant_text();
+        // conversation_collect is one-shot (no sampler-actor retry); /btw adds
+        // its own bounded overload-only retry (policy + predicate above).
+        // Keep using the session's prepare_chat_completion route so fork
+        // auxiliary/provider credential isolation stays intact.
+        use backon::Retryable as _;
+        let attempts = std::cell::Cell::new(1u32);
+        let result =
+            (|| sampling_client.conversation_collect(build_side_question_attempt(&base_request)))
+                .retry(side_question_retry_policy())
+                .when(should_retry_side_question)
+                .notify(|e: &SamplingError, backoff: std::time::Duration| {
+                    attempts.set(attempts.get() + 1);
+                    tracing::warn!(
+                        backoff_ms = backoff.as_millis() as u64,
+                        error = %e,
+                        "side question overload; retrying"
+                    );
+                })
+                .await;
 
-        if content.is_empty() {
-            persist(String::new(), false, Some("No response from model".into()));
-            return Err("No response from model".to_string());
+        match result {
+            Ok(response) => {
+                let content = response.assistant_text();
+                if content.is_empty() {
+                    let err = SideQuestionError::EmptyResponse;
+                    persist(String::new(), false, Some(err.to_string()), attempts.get());
+                    return Err(err);
+                }
+                persist(content.clone(), true, None, attempts.get());
+                Ok(content)
+            }
+            Err(e) => {
+                let err = SideQuestionError::from(e);
+                persist(String::new(), false, Some(err.to_string()), attempts.get());
+                Err(err)
+            }
         }
-        persist(content.clone(), true, None);
-        Ok(content)
     }
 
-    /// Generate a session recap and broadcast it via
-    /// [`SessionUpdate::SessionRecap`](crate::extensions::notification::SessionUpdate::SessionRecap).
-    ///
-    /// Snapshots the conversation, appends a single recap instruction turn
-    /// (reusing the prompt prefix verbatim so the provider cache stays warm),
-    /// makes one tool-free model call, and emits the cleaned one-line summary
-    /// for display only. It never mutates the conversation.
-    ///
-    /// Best-effort: a failed or empty generation is logged and dropped — a
-    ///
-    /// missing recap must never disrupt the session.
     pub(super) async fn handle_recap(&self, auto: bool) {
         use crate::session::helpers::session_recap;
 
@@ -691,5 +741,59 @@ impl SessionActor {
             "prompt suggest: response"
         );
         suggestion
+    }
+}
+
+#[cfg(test)]
+mod side_question_retry_tests {
+    use super::should_retry_side_question;
+    use reqwest::StatusCode;
+    use xai_grok_sampling_types::SamplingError;
+
+    fn api(status: u16, message: &str, should_retry: Option<bool>) -> SamplingError {
+        SamplingError::Api {
+            status: StatusCode::from_u16(status).unwrap(),
+            message: message.into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry,
+        }
+    }
+
+    #[test]
+    fn should_retry_side_question_is_overload_only() {
+        // Stream overload and its proxy-wrapped 500 shape retry; so does 529.
+        assert!(should_retry_side_question(&SamplingError::StreamError {
+            error_type: "overloaded_error".into(),
+            message: "Overloaded".into(),
+        }));
+        assert!(should_retry_side_question(&api(
+            500,
+            "stream error (overloaded_error): Overloaded",
+            None
+        )));
+        assert!(should_retry_side_question(&api(529, "capacity", None)));
+
+        // Server veto (`x-should-retry: false`) wins over overload.
+        assert!(!should_retry_side_question(&api(
+            529,
+            "capacity",
+            Some(false)
+        )));
+
+        // Deterministic context-length failures never retry, even on 529.
+        assert!(!should_retry_side_question(&api(
+            529,
+            "prompt is too long: 300000 tokens > 200000 maximum",
+            None
+        )));
+
+        // Rate limit and generic 5xx are not overload — no /btw retry.
+        assert!(!should_retry_side_question(&api(429, "slow down", None)));
+        assert!(!should_retry_side_question(&api(
+            500,
+            "upstream connect timeout",
+            None
+        )));
     }
 }

@@ -1838,6 +1838,7 @@ pub(crate) async fn spawn_session_actor(
             tool_choice: compaction_tool_choice,
             prefire: crate::session::compaction_config::PrefireState::default(),
             prefix_released: std::sync::atomic::AtomicBool::new(false),
+        cancel: Default::default(),
         },
         memory: super::memory_state::SessionMemory {
             embedding_provider: sampling_config.provider,
