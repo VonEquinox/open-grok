@@ -9,6 +9,14 @@
 
 #![cfg(unix)]
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
+
+/// Warmup so the window measures steady state, not first-session cost.
+#[cfg(feature = "dhat-heap")]
+const HEAP_WARMUP_CYCLES: u64 = 2;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,6 +77,24 @@ async fn rpc(client: &mut LeaderClient, payload: String, id: u64, what: &str) ->
             return json;
         }
     }
+}
+
+/// Per-registry entry counts. `x.ai/debug/agent` answers under the extension
+/// envelope's own `result`, nested inside the JSON-RPC `result`.
+async fn registry_counts(client: &mut LeaderClient, id: u64) -> serde_json::Value {
+    let resp = rpc(
+        client,
+        format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"_x.ai/debug/agent","params":{{}}}}"#),
+        id,
+        "x.ai/debug/agent",
+    )
+    .await;
+    let counts = resp["result"]["result"]["registries"].clone();
+    assert!(
+        counts.is_object(),
+        "x.ai/debug/agent returned no registries: {resp}"
+    );
+    counts
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -174,11 +200,14 @@ async fn leader_soak_churning_clients_no_leaks_no_zombies() {
             eprintln!(
                 "[soak] budgets: {soak_secs}s, rss {max_growth_mb} MB, threads {max_thread_growth}"
             );
+            #[cfg(feature = "dhat-heap")]
+            let mut heap_window: Option<(dhat::Profiler, dhat::HeapStats, u64)> = None;
             let rss_before = ResourceSnapshot::capture();
             let soak_deadline = tokio::time::Instant::now() + Duration::from_secs(soak_secs);
             let workdir_str = workdir.path().to_string_lossy().to_string();
             let mut cycles: u64 = 0;
             let mut turns: u64 = 0;
+            let mut baseline: Option<serde_json::Value> = None;
 
             while tokio::time::Instant::now() < soak_deadline {
                 cycles += 1;
