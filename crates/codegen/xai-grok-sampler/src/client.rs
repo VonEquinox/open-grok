@@ -143,6 +143,9 @@ fn is_unknown_top_level_response_event(error: &SamplingError, data: &str) -> boo
 /// optional `status` and provider extension fields remain on the raw object for
 /// deserialization by newer dependency versions.
 fn normalize_response_event_compat(value: &mut serde_json::Value) {
+    fill_missing_output_text_annotations(value);
+    fill_missing_output_message_fields(value);
+
     let Some(mut event_type) = value
         .get("type")
         .and_then(serde_json::Value::as_str)
@@ -263,10 +266,65 @@ fn normalize_actionless_web_search_item_added(value: &mut serde_json::Value) -> 
     true
 }
 
+/// OpenAI-compatible Responses servers may omit `annotations` from
+/// `output_text`; async-openai requires it, and the wire default is an empty list.
+fn fill_missing_output_text_annotations(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.get("type").and_then(serde_json::Value::as_str) == Some("output_text")
+                && !object.contains_key("annotations")
+            {
+                object.insert("annotations".to_owned(), serde_json::json!([]));
+            }
+            for child in object.values_mut() {
+                fill_missing_output_text_annotations(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                fill_missing_output_text_annotations(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Some compatible servers omit message `id` and `status`; supply typed-boundary
+/// defaults while preserving the returned text and tool content.
+fn fill_missing_output_message_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.get("type").and_then(serde_json::Value::as_str) == Some("message")
+                && object.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+                && object.contains_key("content")
+            {
+                object
+                    .entry("id".to_owned())
+                    .or_insert_with(|| serde_json::json!(""));
+                object
+                    .entry("status".to_owned())
+                    .or_insert_with(|| serde_json::json!("completed"));
+            }
+            for child in object.values_mut() {
+                fill_missing_output_message_fields(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                fill_missing_output_message_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Normalize a complete Responses object before handing it to async-openai.
 /// This supports both synchronous responses and response objects nested in SSE
 /// terminal frames without changing the provider-native conversation model.
 fn normalize_response_compat(value: &mut serde_json::Value, default_status: &str) {
+    fill_missing_output_text_annotations(value);
+    fill_missing_output_message_fields(value);
+
     let Some(response) = value.as_object_mut() else {
         return;
     };
@@ -5446,6 +5504,43 @@ mod tests {
                 if call.id == "xs_sync" && call.name == "x_search"
         ));
         assert_eq!(response.usage.unwrap().total_tokens, 5);
+    }
+
+    #[test]
+    fn deserialize_response_event_fills_missing_output_text_annotations() {
+        let sse = serde_json::json!({
+            "type": "response.completed",
+            "sequence_number": 1,
+            "response": {
+                "id": "resp_text_1",
+                "object": "response",
+                "created_at": 0,
+                "model": "compatible-model",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "OK"}]
+                }]
+            }
+        })
+        .to_string();
+
+        assert!(serde_json::from_str::<rs::ResponseStreamEvent>(&sse).is_err());
+        let event = deserialize_response_event(&sse).expect("compatibility response should parse");
+        let rs::ResponseStreamEvent::ResponseCompleted(event) = event else {
+            panic!("expected ResponseCompleted");
+        };
+        let value = serde_json::to_value(event.response).unwrap();
+        assert_eq!(value.pointer("/output/0/id"), Some(&serde_json::json!("")));
+        assert_eq!(
+            value.pointer("/output/0/status"),
+            Some(&serde_json::json!("completed"))
+        );
+        assert_eq!(
+            value.pointer("/output/0/content/0/annotations"),
+            Some(&serde_json::json!([]))
+        );
     }
 
     #[test]
