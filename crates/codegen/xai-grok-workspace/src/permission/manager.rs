@@ -5133,7 +5133,7 @@ mod tests {
                 for path in [
                     "/etc/hosts",
                     "/home/user/.opengrok/hooks/evil.json",
-                    "/home/user/.grok/hooks/evil.json",
+                    "/home/user/.opengrok/sandbox.toml",
                 ] {
                     let mut auto = crate::permission::types::PermissionConfig::new(vec![]);
                     auto.prompt_policy = PromptPolicy::Auto;
