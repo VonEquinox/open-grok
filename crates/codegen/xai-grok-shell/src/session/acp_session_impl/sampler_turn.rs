@@ -156,19 +156,33 @@ impl SessionTokenAuthGate {
 /// Opt-in for shell integration tests that exercise session-token 401 recovery
 /// against a loopback mock. Production and default test builds keep the fork
 /// first-party gate closed for loopback.
+///
+/// Ref-counted (not a bare bool) so parallel `#[test]`s that each enable the
+/// hook cannot clear it out from under each other on Drop — that race made
+/// `fail_closed_401_is_uncharged_and_turn_survives` surface Unauthorized
+/// instead of recovering when `authenticated_401s_*` finished first.
 #[cfg(test)]
-static TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 pub(crate) fn trust_loopback_session_auth_for_tests(trust: bool) {
-    TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.store(trust, std::sync::atomic::Ordering::SeqCst);
+    use std::sync::atomic::Ordering;
+    if trust {
+        TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.fetch_add(1, Ordering::SeqCst);
+    } else {
+        let _ = TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |v| Some(v.saturating_sub(1)),
+        );
+    }
 }
 
 fn trust_loopback_session_auth_for_tests_enabled() -> bool {
     #[cfg(test)]
     {
-        TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.load(std::sync::atomic::Ordering::SeqCst)
+        TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.load(std::sync::atomic::Ordering::SeqCst) > 0
     }
     #[cfg(not(test))]
     {
@@ -2137,6 +2151,29 @@ impl SessionActor {
 
 fn session_codex_multi_agent_v2(model_supports_policy: bool, session_policy_enabled: bool) -> bool {
     model_supports_policy && session_policy_enabled
+}
+
+#[cfg(test)]
+mod loopback_trust_tests {
+    use super::{
+        trust_loopback_session_auth_for_tests, trust_loopback_session_auth_for_tests_enabled,
+    };
+
+    #[test]
+    fn nested_enables_survive_partial_disable() {
+        // Other parallel tests may already hold permits; assert nesting only.
+        let before = trust_loopback_session_auth_for_tests_enabled();
+        trust_loopback_session_auth_for_tests(true);
+        trust_loopback_session_auth_for_tests(true);
+        assert!(trust_loopback_session_auth_for_tests_enabled());
+        trust_loopback_session_auth_for_tests(false);
+        assert!(
+            trust_loopback_session_auth_for_tests_enabled(),
+            "first Drop must not clear a still-active nested enable"
+        );
+        trust_loopback_session_auth_for_tests(false);
+        assert_eq!(trust_loopback_session_auth_for_tests_enabled(), before);
+    }
 }
 
 #[cfg(test)]
