@@ -79,6 +79,8 @@ async fn leader_soak_churning_clients_no_leaks_no_zombies() {
     let server = xai_grok_test_support::MockInferenceServer::start()
         .await
         .unwrap();
+    // Measure the leader, not the harness's copy of every conversation.
+    server.set_keep_requests(false);
     let grok_home = TempDir::new().unwrap();
     let workdir = TempDir::new().unwrap();
 
@@ -178,8 +180,6 @@ async fn leader_soak_churning_clients_no_leaks_no_zombies() {
             let mut cycles: u64 = 0;
             let mut turns: u64 = 0;
 
-            // Each cycle: 10 fresh clients, 2 sessions each, one scripted
-            // turn per session, then all disconnect.
             while tokio::time::Instant::now() < soak_deadline {
                 cycles += 1;
                 let mut clients = Vec::new();
@@ -252,6 +252,34 @@ async fn leader_soak_churning_clients_no_leaks_no_zombies() {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
 
+                // An entry that never drains names itself here, one cycle
+                // after it leaks.
+                let counts = registry_counts(&mut bootstrap, 1000 + cycles).await;
+                assert_eq!(
+                    counts["sessions"], 0,
+                    "cycle {cycles}: sessions outlived their close: {counts}"
+                );
+                match baseline.as_ref() {
+                    None => baseline = Some(counts),
+                    Some(first) => assert_eq!(
+                        &counts, first,
+                        "cycle {cycles}: registry counts left their baseline"
+                    ),
+                }
+
+                #[cfg(feature = "dhat-heap")]
+                if cycles == HEAP_WARMUP_CYCLES {
+                    let profiler = dhat::Profiler::builder()
+                        // The 10-frame default never reaches our own code.
+                        .trim_backtraces(Some(48))
+                        .file_name(
+                            std::env::var("LEADER_SOAK_DHAT_OUT")
+                                .unwrap_or_else(|_| "dhat-leader-soak.json".to_string()),
+                        )
+                        .build();
+                    heap_window = Some((profiler, dhat::HeapStats::get(), cycles));
+                }
+
                 // Linear in cycles is a leak; flattening is the allocator.
                 if let Some(rss) = ResourceSnapshot::capture().rss {
                     eprintln!(
@@ -270,6 +298,27 @@ async fn leader_soak_churning_clients_no_leaks_no_zombies() {
                     .await;
                     eprintln!("[soak] registries after cycle 1: {}", snap["result"]["registries"]);
                 }
+            }
+
+            // Retained heap is a leak; retained pages alone are the allocator.
+            #[cfg(feature = "dhat-heap")]
+            if let Some((profiler, before, start_cycle)) = heap_window.take() {
+                let after = dhat::HeapStats::get();
+                drop(profiler);
+                let measured = cycles.saturating_sub(start_cycle).max(1);
+                let net_bytes = after.curr_bytes as i64 - before.curr_bytes as i64;
+                let net_blocks = after.curr_blocks as i64 - before.curr_blocks as i64;
+                let per_cycle = net_bytes / measured as i64;
+                eprintln!(
+                    "[soak] heap over {measured} cycles: {net_bytes} bytes, {net_blocks} blocks \
+                     ({:.2} MB per cycle)",
+                    net_bytes as f64 / measured as f64 / (1024.0 * 1024.0)
+                );
+                let max_per_cycle = env_u64("LEADER_SOAK_MAX_HEAP_BYTES_PER_CYCLE", 1 << 20) as i64;
+                assert!(
+                    per_cycle <= max_per_cycle,
+                    "leader retained {per_cycle} heap bytes per cycle (bound {max_per_cycle})"
+                );
             }
 
             let snap = rpc(
