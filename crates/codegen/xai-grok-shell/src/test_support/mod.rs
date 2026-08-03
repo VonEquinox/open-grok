@@ -14,7 +14,7 @@ pub(crate) const TEST_MODEL: &str = "test-model";
 /// rather than a per-test helper. An explicitly exported `OPENGROK_HOME` is
 /// respected (that's a deliberate operator choice). Pre-main runs
 /// single-threaded, which is what makes `set_var` sound here.
-#[ctor::ctor(unsafe)]
+#[ctor::ctor]
 fn isolate_grok_home_from_real_home() {
     if std::env::var_os("OPENGROK_HOME").is_none() {
         let dir = std::env::temp_dir().join(format!("opengrok-test-home-{}", std::process::id()));

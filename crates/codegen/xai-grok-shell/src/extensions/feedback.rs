@@ -75,7 +75,12 @@ async fn handle_btw(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         Ok(answer) => super::to_ext_response(Ok(serde_json::json!({
             "answer": answer,
         }))),
-        Err(e) => Err(acp::Error::internal_error().data(e)),
+        // Prefer message-only internal errors: `internal_error().data(e)`
+        // rendered as `Internal error: "…"`, which made capacity failures
+        // look like client bugs in the TUI. (Upstream maps Sampling via
+        // SideQuestionError; fork SideQuestion still returns String until
+        // session/commands lands that type.)
+        Err(e) => Err(acp::Error::new(acp::ErrorCode::InternalError.into(), e)),
     }
 }
 

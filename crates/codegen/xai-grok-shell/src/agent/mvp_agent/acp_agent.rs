@@ -1207,6 +1207,25 @@ impl acp::Agent for MvpAgent {
             .as_ref()
             .and_then(|m| m.get("modelId").and_then(|v| v.as_str()))
             .filter(|s| !s.is_empty());
+        #[cfg(all(feature = "local-workspace", unix))]
+        let pending_local_workspace = self
+            .start_own_local_workspace_if_needed(
+                &mut session_meta_for_stamp,
+                cwd.as_path(),
+            )
+            .await?;
+        #[cfg(all(feature = "local-workspace", not(unix)))]
+        {
+            use crate::gateway_bridge::local_workspace_supervisor::parse_local_workspace_intent;
+            use crate::gateway_bridge::local_workspace_supervisor::LocalWorkspaceIntent;
+            use crate::gateway_bridge::local_workspace_supervisor::SupervisorError;
+            if matches!(
+                parse_local_workspace_intent(session_meta_for_stamp.as_ref()),
+                Some(LocalWorkspaceIntent::Own { .. })
+            ) {
+                return Err(SupervisorError::UnsupportedPlatform.into_acp_error());
+            }
+        }
         #[allow(unused_variables)]
         let session_computer_sessions = parse_session_computer_sessions(
             arguments.meta.as_ref(),
@@ -1240,6 +1259,15 @@ impl acp::Agent for MvpAgent {
             }
             None => acp::SessionId::new(uuid::Uuid::now_v7().to_string()),
         };
+        #[cfg(all(feature = "local-workspace", unix))]
+        let mut local_ws_reap_guard = self
+            .new_local_workspace_reap_guard(session_id.clone(), false);
+        #[cfg(all(feature = "local-workspace", unix))]
+        if let Some(handle) = pending_local_workspace {
+            self.register_local_workspace_supervisor(session_id.clone(), handle);
+            local_ws_reap_guard = self
+                .new_local_workspace_reap_guard(session_id.clone(), true);
+        }
         let mut session_timer = crate::instrumentation_timer!("session.new_session");
         session_timer.with_field("session_id", session_id.0.as_ref());
         session_timer.with_field("cwd", cwd.as_str());
@@ -1466,8 +1494,16 @@ impl acp::Agent for MvpAgent {
             };
             self.spawn_and_register_session(init, spawn_opts).await
         };
+        #[cfg(all(feature = "local-workspace", unix))]
+        if spawn_res.is_err() {
+            self.shutdown_gateway_bridge(&session_id);
+        }
         spawn_res?;
         tracing::debug!(session_id = %session_id.0, "new_session: spawn_session_actor");
+        #[cfg(feature = "local-workspace")]
+        if local_workspace_intent_present(arguments.meta.as_ref()) {
+            self.mark_local_workspace_bound(session_id.clone());
+        }
         self.maybe_spawn_interactive_trust_prompt(
             &session_id,
             cwd.as_path(),
@@ -1604,6 +1640,7 @@ impl acp::Agent for MvpAgent {
             );
             insert_applied_tool_overrides(obj, applied_tool_overrides.as_ref());
         }
+        #[cfg(all(feature = "local-workspace", unix))] local_ws_reap_guard.disarm();
         Ok(
             acp::NewSessionResponse::new(session_id)
                 .models(Some(models))
@@ -2246,7 +2283,7 @@ impl acp::Agent for MvpAgent {
         let persisted_model = startup_model_id;
         let models = self.models_manager.models();
         let available = self.models_manager.available();
-        self.model_unavailable_sessions.borrow_mut().remove(session_id.0.as_ref());
+        self.session_registry.take_unavailable_model(&session_id);
         let resolved_catalog_key = resolve_catalog_key(&models, &persisted_model);
         tracing::debug!(
             session_id = %session_id.0,
@@ -2363,9 +2400,8 @@ impl acp::Agent for MvpAgent {
                     &reason,
                 )
                 .await;
-            self.model_unavailable_sessions
-                .borrow_mut()
-                .insert(session_id.0.to_string(), persisted_model.clone());
+            self.session_registry
+                .set_unavailable_model(&session_id, persisted_model.clone());
             (fallback, LoadModelSelectionOrigin::UnavailableFallback)
         };
         tracing::debug!(
@@ -2591,10 +2627,8 @@ impl acp::Agent for MvpAgent {
             return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
         }
         let latched_model = self
-            .model_unavailable_sessions
-            .borrow()
-            .get(arguments.session_id.0.as_ref())
-            .cloned();
+            .session_registry
+            .unavailable_model(&arguments.session_id);
         if let Some(unavailable_model) = latched_model {
             let models = self.models_manager.models();
             let available = self.models_manager.available();
@@ -2619,9 +2653,7 @@ impl acp::Agent for MvpAgent {
                     }),
                     ),
                 );
-                self.model_unavailable_sessions
-                    .borrow_mut()
-                    .remove(arguments.session_id.0.as_ref());
+                self.session_registry.take_unavailable_model(&arguments.session_id);
                 if let Err(e) = crate::agent::handlers::model_switch::apply(
                         self,
                         acp::SetSessionModelRequest::new(
@@ -3780,9 +3812,8 @@ impl acp::Agent for MvpAgent {
         let res = crate::agent::handlers::model_switch::apply(self, args).await;
         if res.is_ok()
             && let Some(unavailable) = self
-                .model_unavailable_sessions
-                .borrow_mut()
-                .remove(session_id.0.as_ref())
+                .session_registry
+                .take_unavailable_model(&session_id)
         {
             tracing::info!(
                 session_id = %session_id.0,
@@ -4133,6 +4164,10 @@ impl acp::Agent for MvpAgent {
             | "x.ai/session/rehydrate" => {
                 let ops = self.resolve_workspace_ops()?;
                 crate::extensions::worktree::handle(self, &ops, &args).await
+            }
+            #[cfg(feature = "local-workspace")]
+            "x.ai/session/add_local_workspace" => {
+                crate::extensions::session_admin::handle(self, &args).await
             }
             "x.ai/session/rename" | "x.ai/session/delete"
             | "x.ai/session/update_mcp_servers" | "x.ai/session/fork"
