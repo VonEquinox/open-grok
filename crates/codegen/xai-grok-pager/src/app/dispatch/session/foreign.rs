@@ -138,7 +138,6 @@ impl PickerSurface<'_> {
     }
 }
 
-
 /// Kind facet for welcome multi-source history under `--chat`.
 ///
 /// Sandbox → `chat` (gateway); Local → `build` (local-disk). Modal / non-welcome

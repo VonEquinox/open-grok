@@ -35,7 +35,6 @@ fn build_side_question_attempt(base: &ConversationRequest) -> ConversationReques
     request
 }
 
-
 impl SessionActor {
     /// Handle a /btw side question — single-turn model call using the
     /// parent session's full context.

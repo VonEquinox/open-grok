@@ -2066,7 +2066,8 @@ fn chat_mode_force_search_fetches_immediately_and_empty_query_unfilters() {
             [Effect::FetchSessionList {
                 query: None,
                 seq: 2,
-             kind_filter: None }]
+                kind_filter: None
+            }]
         ),
         "cleared query must refetch the unfiltered list immediately (no debounce), got {effects:?}"
     );
@@ -2747,7 +2748,8 @@ fn build_mode_rapid_plain_fetches_keep_last_write_wins() {
                 [Effect::FetchSessionList {
                     query: None,
                     seq: 0,
-                 kind_filter: None }]
+                    kind_filter: None
+                }]
             ),
             "Build-mode plain fetch must not bump the seq, got {effects:?}"
         );
@@ -2806,7 +2808,8 @@ fn plain_picker_fetch_carries_no_query_and_bumps_seq() {
             [Effect::FetchSessionList {
                 query: None,
                 seq: 2,
-             kind_filter: None }]
+                kind_filter: None
+            }]
         ),
         "picker fetch must be unfiltered and supersede the search, got {effects:?}"
     );

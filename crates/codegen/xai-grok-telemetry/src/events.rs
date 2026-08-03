@@ -2220,7 +2220,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn login_failed_serializes_kind_and_os_code() {
         let v = serde_json::to_value(LoginFailed {

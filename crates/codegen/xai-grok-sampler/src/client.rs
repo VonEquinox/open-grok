@@ -29,8 +29,8 @@ use xai_grok_sampling_types::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, CodeModeTransport,
     ConversationRequest, ConversationResponse, CreateResponseWrapper, DOOM_LOOP_CHECK_HEADER,
     MessagesRequestWrapper, ModelProvider, NamedCustomToolOutputOccurrence,
-    OriginalDetailCustomOutputImageOccurrence, ResponseModelMetadata, Result, SamplingError, SentCredential,
-    build_messages_request, is_check_event, messages, rs,
+    OriginalDetailCustomOutputImageOccurrence, ResponseModelMetadata, Result, SamplingError,
+    SentCredential, build_messages_request, is_check_event, messages, rs,
 };
 
 use crate::attribution::bearer_tail_fragment;
@@ -1248,7 +1248,6 @@ pub fn user_agent_string_for(origin: &OriginClientInfo) -> String {
 // =============================================================================
 // SamplingClient
 // =============================================================================
-
 
 /// A request builder coupled to the credential state it was built with, so
 /// a 401 arm cannot classify from anything but the build-time capture. The
@@ -4215,7 +4214,9 @@ mod tests {
         turn_state
             .set("captured-turn-state".to_owned())
             .expect("empty turn state should accept its first value");
-        let SentRequest { builder: second, .. } = client.post("http://localhost/second");
+        let SentRequest {
+            builder: second, ..
+        } = client.post("http://localhost/second");
         let second = second.build().expect("second request should build");
         let values = second
             .headers()
@@ -4599,7 +4600,8 @@ mod tests {
             xai_grok_sampling_types::ModelProvider::Codex
         );
 
-        let SentRequest { builder, .. } = client.post("https://example.test/backend-api/codex/responses");
+        let SentRequest { builder, .. } =
+            client.post("https://example.test/backend-api/codex/responses");
         let request = builder.build().expect("request should build");
         assert_eq!(
             request
@@ -4634,7 +4636,8 @@ mod tests {
             },))
         );
 
-        let SentRequest { builder, .. } = client.post("https://example.test/backend-api/codex/responses");
+        let SentRequest { builder, .. } =
+            client.post("https://example.test/backend-api/codex/responses");
         let request = builder.build().expect("request should build");
         assert_eq!(
             request
@@ -4669,7 +4672,10 @@ mod tests {
             ..minimal_config()
         };
         let client = SamplingClient::new(cfg).expect("client should build");
-        let SentRequest { sent_bearer: bearer, .. } = client.post("https://example.test/v1/chat/completions");
+        let SentRequest {
+            sent_bearer: bearer,
+            ..
+        } = client.post("https://example.test/v1/chat/completions");
         assert_eq!(bearer.as_deref(), Some("r-1234567890"));
         assert_eq!(
             bearer.as_deref().map(str::len),
@@ -4688,7 +4694,10 @@ mod tests {
             ..minimal_config()
         };
         let client = SamplingClient::new(cfg).expect("client should build");
-        let SentRequest { sent_bearer: bearer, .. } = client.post("https://example.test/v1/messages");
+        let SentRequest {
+            sent_bearer: bearer,
+            ..
+        } = client.post("https://example.test/v1/messages");
         assert_eq!(bearer.as_deref(), Some("c-key-abc123"));
         assert_eq!(
             bearer.as_deref().map(str::len),
@@ -4705,7 +4714,10 @@ mod tests {
             ..minimal_config()
         };
         let client = SamplingClient::new(cfg).expect("client should build");
-        let SentRequest { sent_bearer: bearer, .. } = client.post("https://example.test/v1/chat/completions");
+        let SentRequest {
+            sent_bearer: bearer,
+            ..
+        } = client.post("https://example.test/v1/chat/completions");
         assert!(bearer.is_none());
     }
 
@@ -4734,7 +4746,10 @@ mod tests {
         };
         let client = SamplingClient::new(cfg).expect("client should build");
 
-        let SentRequest { builder, sent_bearer: sent_at_build } = client.post("https://example.test/v1/responses");
+        let SentRequest {
+            builder,
+            sent_bearer: sent_at_build,
+        } = client.post("https://example.test/v1/responses");
         let request = builder.build().expect("request should build");
         let auth = request
             .headers()

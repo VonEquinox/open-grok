@@ -2489,7 +2489,10 @@ mod welcome_workspace_mode {
             .flatten()
             .expect("welcome Local must set one-shot own override");
         assert_eq!(override_cfg.mode, LocalWorkspaceMode::Own);
-        let expected = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
+        let expected = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf());
         let actual = override_cfg
             .cwd
             .as_ref()

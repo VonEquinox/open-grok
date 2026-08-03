@@ -57,7 +57,6 @@ pub struct AsyncCompactionCache {
     pub pass1_latency_ms: u64,
 }
 
-
 /// Cancel gate for an in-flight compact / prefire sample.
 ///
 /// Holder count (not a bool): prefire and compact can overlap. The first

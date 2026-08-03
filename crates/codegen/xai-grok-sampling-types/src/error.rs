@@ -407,7 +407,6 @@ impl SamplingError {
     }
 }
 
-
 /// Codex/OpenAI Responses: `Invalid '…image_url'. Expected a base64-encoded data URL…`
 /// (invalid base64, missing image MIME, or similar).
 fn is_codex_invalid_image_url_error(message: &str) -> bool {

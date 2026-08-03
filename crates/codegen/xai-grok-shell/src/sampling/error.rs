@@ -511,7 +511,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn overload_maps_to_display_message_without_data() {
         let err = SamplingError::StreamError {

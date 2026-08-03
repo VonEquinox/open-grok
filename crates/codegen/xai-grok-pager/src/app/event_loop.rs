@@ -3948,8 +3948,6 @@ fn merge_paste_fragments(events: Vec<TimedInputEvent>) -> Vec<TimedInputEvent> {
     result
 }
 
-
-
 /// Whether a welcome Local workspace one-shot should apply to this effect batch.
 #[cfg(feature = "local-workspace")]
 pub(crate) fn welcome_oneshot_applies_to_effects(effs: &[super::actions::Effect]) -> bool {
@@ -3969,15 +3967,14 @@ pub(crate) fn welcome_history_build_bypass_applies(
     flag: bool,
 ) -> bool {
     use super::actions::Effect;
-    flag
-        && effs.iter().any(|e| {
-            matches!(
-                e,
-                Effect::LoadSession { .. }
-                    | Effect::RestoreAndLoadSession { .. }
-                    | Effect::CreateWorktreeSession { .. }
-            )
-        })
+    flag && effs.iter().any(|e| {
+        matches!(
+            e,
+            Effect::LoadSession { .. }
+                | Effect::RestoreAndLoadSession { .. }
+                | Effect::CreateWorktreeSession { .. }
+        )
+    })
 }
 
 /// Whether this batch should clear the welcome history bypass flag.
@@ -3987,13 +3984,12 @@ pub(crate) fn welcome_history_build_bypass_consume(
     flag: bool,
 ) -> bool {
     use super::actions::Effect;
-    flag
-        && effs.iter().any(|e| {
-            matches!(
-                e,
-                Effect::LoadSession { .. } | Effect::CreateWorktreeSession { .. }
-            )
-        })
+    flag && effs.iter().any(|e| {
+        matches!(
+            e,
+            Effect::LoadSession { .. } | Effect::CreateWorktreeSession { .. }
+        )
+    })
 }
 
 /// Spawn effects into the task set. Returns `true` if the app should quit.
@@ -4019,8 +4015,10 @@ fn process_effects(
             #[cfg(feature = "local-workspace")]
             {
                 if welcome_history_build_bypass_applies(&effs, app.welcome_history_load_as_build) {
-                    if welcome_history_build_bypass_consume(&effs, app.welcome_history_load_as_build)
-                    {
+                    if welcome_history_build_bypass_consume(
+                        &effs,
+                        app.welcome_history_load_as_build,
+                    ) {
                         app.welcome_history_load_as_build = false;
                     }
                     false

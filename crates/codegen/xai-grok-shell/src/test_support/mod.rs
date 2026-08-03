@@ -11,7 +11,6 @@ fn redirect_unified_log_for_tests() {
     xai_grok_telemetry::unified_log::redirect_to_temp_for_tests();
 }
 
-
 /// Pre-main guard: point `OPENGROK_HOME` at a per-process temp directory so
 /// unit tests can never touch the real `~/.opengrok`.
 ///

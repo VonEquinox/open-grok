@@ -1418,7 +1418,10 @@ pub(crate) fn detect_external_auth_provider(
             .unwrap_or(false)
     }
     fn env_set() -> bool {
-        for key in ["OPENGROK_AUTH_PROVIDER_COMMAND", "GROK_AUTH_PROVIDER_COMMAND"] {
+        for key in [
+            "OPENGROK_AUTH_PROVIDER_COMMAND",
+            "GROK_AUTH_PROVIDER_COMMAND",
+        ] {
             if std::env::var(key)
                 .ok()
                 .is_some_and(|s| !s.trim().is_empty())
@@ -7914,7 +7917,11 @@ pub(crate) mod tests {
         // External/enterprise auth must keep the consumer billing surface and
         // combined `/usage` command hidden even after a personal AuthMeta.
         assert!(!app.usage_visible);
-        assert!(!app.welcome_prompt.slash_controller.billing_surface_visible());
+        assert!(
+            !app.welcome_prompt
+                .slash_controller
+                .billing_surface_visible()
+        );
         assert!(!app.usage_command_visible());
     }
 

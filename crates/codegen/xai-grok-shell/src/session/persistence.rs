@@ -78,7 +78,6 @@ pub struct BtwEntry {
     /// field existed deserialize as 1.
     #[serde(default = "default_btw_attempts")]
     pub attempts: u32,
-
 }
 
 fn default_btw_attempts() -> u32 {

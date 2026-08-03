@@ -3093,7 +3093,7 @@ mod inline_auto_compact_flow_tests {
                 tool_choice: crate::util::config::CompactionToolChoice::Auto,
                 prefire: crate::session::compaction_config::PrefireState::default(),
                 prefix_released: std::sync::atomic::AtomicBool::new(false),
-            cancel: Default::default(),
+                cancel: Default::default(),
             },
             memory: crate::session::memory_state::SessionMemory {
                 embedding_provider: xai_grok_sampling_types::ModelProvider::Xai,
@@ -4516,7 +4516,7 @@ mod inline_auto_compact_flow_tests {
                     empty_response_context: None,
                     doom_loop_triggers: None,
                     doom_loop_aborted_at_chunk: None,
-            credential: xai_grok_sampling_types::SentCredential::Unknown,
+                    credential: xai_grok_sampling_types::SentCredential::Unknown,
                 };
                 assert!(!actor.should_compact_on_error(&err).await);
             })

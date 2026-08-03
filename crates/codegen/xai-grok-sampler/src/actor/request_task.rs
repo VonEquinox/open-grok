@@ -881,7 +881,7 @@ mod tests {
             empty_response_context: None,
             doom_loop_triggers: None,
             doom_loop_aborted_at_chunk: None,
-        credential: SentCredential::Unknown,
+            credential: SentCredential::Unknown,
         };
         let err = synthesize_from_info(&info);
         match err {
@@ -902,7 +902,7 @@ mod tests {
             empty_response_context: None,
             doom_loop_triggers: None,
             doom_loop_aborted_at_chunk: None,
-        credential: SentCredential::Unknown,
+            credential: SentCredential::Unknown,
         };
         let err = synthesize_from_info(&info);
         match err {
@@ -928,7 +928,7 @@ mod tests {
             empty_response_context: None,
             doom_loop_triggers: None,
             doom_loop_aborted_at_chunk: None,
-        credential: SentCredential::Unknown,
+            credential: SentCredential::Unknown,
         };
         let err = synthesize_from_info(&info);
         match err {

@@ -188,7 +188,6 @@ pub fn redirect_to_temp_for_tests() {
     }
 }
 
-
 fn log_path() -> PathBuf {
     if TEST_REDIRECT.load(std::sync::atomic::Ordering::Relaxed) {
         return test_log_dir().join(LOG_FILE);
@@ -603,7 +602,6 @@ mod tests {
             log_path().display()
         );
     }
-
 
     #[test]
     fn log_entry_serializes_minimal() {

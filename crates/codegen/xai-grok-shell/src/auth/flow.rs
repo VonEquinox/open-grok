@@ -414,7 +414,6 @@ pub async fn run_auth_flow_with_stderr_bridge(
 /// costs one event per attempt — a retried request, or the discovery cache
 /// background token refresh shares, can't inflate it. Never changes the result.
 pub async fn run_auth_flow(
-
     auth_manager: &Arc<AuthManager>,
     grok_com_config: &GrokComConfig,
     reauth: bool,
@@ -422,10 +421,15 @@ pub async fn run_auth_flow(
     url_tx: Option<Rc<RefCell<Option<oneshot::Sender<AuthUrlInfo>>>>>,
     code_rx: Option<mpsc::Receiver<String>>,
     login_override: LoginTransportOverride,
-
 ) -> anyhow::Result<(GrokAuth, bool)> {
     let result = run_auth_flow_steps(
-        auth_manager, grok_com_config, reauth, on_stderr, url_tx, code_rx, login_override,
+        auth_manager,
+        grok_com_config,
+        reauth,
+        on_stderr,
+        url_tx,
+        code_rx,
+        login_override,
     )
     .await;
     if let Err(err) = &result
