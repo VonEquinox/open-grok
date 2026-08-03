@@ -111,6 +111,7 @@ mod workflow_run;
 pub(crate) use interjection::*;
 #[path = "acp_session_impl/laziness.rs"]
 mod laziness;
+#[cfg(test)]
 pub(crate) use laziness::*;
 #[path = "acp_session_impl/hooks_plugins.rs"]
 mod hooks_plugins;

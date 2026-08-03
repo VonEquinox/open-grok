@@ -37,12 +37,12 @@ impl PartialReason {
     }
 }
 static FACET_REGISTRY: LazyLock<FacetRegistry> = LazyLock::new(build_facet_registry);
-pub fn facet_registry() -> &'static FacetRegistry {
+pub(crate) fn facet_registry() -> &'static FacetRegistry {
     &FACET_REGISTRY
 }
 /// Hard-off in release builds so they can't enable the
 /// conversations lane via env.
-pub fn conversations_lane_enabled() -> bool {
+pub(crate) fn conversations_lane_enabled() -> bool {
     if true {
         return false;
     }
@@ -195,7 +195,7 @@ fn value_list(v: &serde_json::Value) -> Vec<serde_json::Value> {
 /// Welcome history may send an explicit `kind` (`chat` / `build`) that must
 /// not be rewritten when the feature is on. Other facet filters and `_meta`
 /// keys are left untouched.
-pub fn force_kind_chat(req: &mut ListReq) {
+pub(crate) fn force_kind_chat(req: &mut ListReq) {
     let mut meta = match req.meta.take() {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -467,7 +467,7 @@ fn excludes_build(filters: &BTreeMap<String, Vec<serde_json::Value>>) -> bool {
     }
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtListResponse {
+pub(crate) struct ExtListResponse {
     pub sessions: Vec<ExtSupersetRow>,
     #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -475,7 +475,7 @@ pub struct ExtListResponse {
     pub meta: ExtListResponseMeta,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtListResponseMeta {
+pub(crate) struct ExtListResponseMeta {
     #[serde(rename = "x.ai/facets")]
     pub facets: FacetSummary,
     #[serde(rename = "x.ai/partial")]
@@ -485,12 +485,12 @@ pub struct ExtListResponseMeta {
     pub list_scope: Option<&'static str>,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct PartialInfo {
+pub(crate) struct PartialInfo {
     pub conversations: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
 }
-pub fn ext_list_response(result: UnifiedListResult) -> ExtListResponse {
+pub(crate) fn ext_list_response(result: UnifiedListResult) -> ExtListResponse {
     let UnifiedListResult {
         rows,
         next_cursor,

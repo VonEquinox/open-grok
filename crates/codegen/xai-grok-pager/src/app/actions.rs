@@ -925,13 +925,6 @@ pub enum Action {
         plan: Box<crate::diagnostics::FixPlan>,
     },
     DoctorFixCancelled(DoctorFixTarget),
-    /// User selected a project directory from the project picker.
-    ProjectSelected {
-        path: std::path::PathBuf,
-        stashed_prompt: String,
-        /// "Don't ask me again" was chosen: persist the opt-out.
-        disable_picker: bool,
-    },
     /// Persist the memory modal fullscreen preference to config.toml.
     PersistMemoryFullscreen(bool),
     /// Open the Agent Dashboard view (`/dashboard`, `Ctrl+\`, `open-grok dashboard`).
@@ -1658,7 +1651,7 @@ pub enum Effect {
         effort: Option<ReasoningEffort>,
         generation: u64,
     },
-    /// Change the process working directory (project-picker selection).
+    /// Change the process working directory (dashboard location picker, `/cd`).
     SetWorkingDir {
         path: std::path::PathBuf,
     },
@@ -1861,10 +1854,6 @@ pub enum Effect {
     /// Persist memory modal fullscreen preference to `[hints]` in config.toml.
     PersistMemoryFullscreen {
         fullscreen: bool,
-    },
-    /// Persist the project-picker opt-out to `[hints] project_picker_disabled`.
-    PersistProjectPickerDisabled {
-        disabled: bool,
     },
     /// Persist the dashboard's `[dashboard]` configuration to `~/.opengrok/config.toml`.
     /// Edge case 15: multi-pager safe via `config_toml_edit::read_config_document_for_edit`,
