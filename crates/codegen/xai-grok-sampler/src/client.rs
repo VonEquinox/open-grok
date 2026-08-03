@@ -411,8 +411,24 @@ fn insert_json_default(
 fn normalize_response_output_item(item: &mut serde_json::Value) {
     normalize_x_search_call(item);
     fill_missing_custom_tool_call_id(item);
+    fill_missing_reasoning_output_id(item);
     fill_missing_compaction_output_id(item);
     fill_missing_web_search_action(item);
+}
+
+/// Some OpenAI-compatible Responses servers omit the reasoning item `id` in
+/// terminal response arrays even though async-openai 0.33.1 requires it. Use
+/// the same empty typed-boundary sentinel as other provider-optional IDs so the
+/// terminal frame does not abort an otherwise valid tool-calling turn.
+fn fill_missing_reasoning_output_id(item: &mut serde_json::Value) {
+    let Some(item) = item.as_object_mut() else {
+        return;
+    };
+    if item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
+        && item.get("id").is_none_or(serde_json::Value::is_null)
+    {
+        item.insert("id".to_owned(), serde_json::Value::String(String::new()));
+    }
 }
 
 /// async-openai 0.33.1 requires `CompactionBody.id`, while the Responses
@@ -5541,6 +5557,55 @@ mod tests {
             value.pointer("/output/0/content/0/annotations"),
             Some(&serde_json::json!([]))
         );
+    }
+
+    #[test]
+    fn deserialize_response_event_fills_missing_reasoning_id_in_terminal_output() {
+        let sse = serde_json::json!({
+            "type": "response.completed",
+            "sequence_number": 102,
+            "response": {
+                "id": "resp_compatible_reasoning",
+                "object": "response",
+                "created_at": 0,
+                "model": "compatible-model",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Inspecting status"}]
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "I will inspect it."}]
+                    },
+                    {
+                        "type": "function_call",
+                        "arguments": "{\"command\":\"git status\"}",
+                        "call_id": "call_status_1",
+                        "name": "run_terminal_command"
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert!(serde_json::from_str::<rs::ResponseStreamEvent>(&sse).is_err());
+        let event =
+            deserialize_response_event_for_adapter(&sse, provider_adapter(ModelProvider::Codex))
+                .expect("a terminal reasoning item without id should parse");
+        let rs::ResponseStreamEvent::ResponseCompleted(event) = event else {
+            panic!("expected ResponseCompleted");
+        };
+        let rs::OutputItem::Reasoning(reasoning) = &event.response.output[0] else {
+            panic!("expected Reasoning");
+        };
+        assert_eq!(reasoning.id, "");
+        let rs::OutputItem::FunctionCall(call) = &event.response.output[2] else {
+            panic!("expected FunctionCall");
+        };
+        assert_eq!(call.call_id, "call_status_1");
     }
 
     #[test]
