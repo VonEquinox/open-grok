@@ -35,7 +35,7 @@ use super::dashboard::{
     dispatch_dashboard_overlay_exit, dispatch_dashboard_overlay_stop,
     dispatch_dashboard_peek_reply, dispatch_dashboard_permission_followup,
     dispatch_dashboard_permission_select, dispatch_dashboard_question_answer,
-    dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard,
+    dispatch_dashboard_delete, dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard,
     dispatch_open_dashboard, ensure_dashboard_state, resolve_location_input,
 };
 use super::modes::{

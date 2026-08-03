@@ -595,7 +595,7 @@ impl PendingAction {
     }
     /// Like [`Self::new`] but with an explicit confirm window. Used by
     /// the dashboard-overlay stop (Ctrl+X), which mirrors the
-    /// dashboard's [`crate::views::dashboard::state::STOP_CONFIRM_WINDOW`]
+    /// dashboard's [`crate::views::dashboard::state::CONFIRM_WINDOW`]
     /// rather than the default double-press TTL.
     pub fn with_ttl(
         action: Action,
@@ -3066,7 +3066,7 @@ impl AppView {
                                     Action::DashboardOverlayStop,
                                     KeyShortcut::from(*key),
                                     Some("close this session"),
-                                    crate::views::dashboard::state::STOP_CONFIRM_WINDOW,
+                                    crate::views::dashboard::state::CONFIRM_WINDOW,
                                 ));
                                 return InputOutcome::Changed;
                             }

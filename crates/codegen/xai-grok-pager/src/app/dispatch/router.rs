@@ -19,7 +19,7 @@ use super::dashboard::{
     dispatch_dashboard_peek_cycle_mode, dispatch_dashboard_peek_reply,
     dispatch_dashboard_permission_followup, dispatch_dashboard_permission_select,
     dispatch_dashboard_question_answer, dispatch_dashboard_reorder, dispatch_dashboard_select,
-    dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve,
+    dispatch_dashboard_delete, dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve,
     dispatch_dashboard_toggle_grouping, dispatch_dashboard_toggle_pin,
     dispatch_dashboard_toggle_worktree, dispatch_exit_dashboard, dispatch_open_dashboard,
 };
@@ -1412,6 +1412,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::DashboardStop => dispatch_dashboard_stop(app),
+        Action::DashboardDelete => dispatch_dashboard_delete(app),
         Action::DashboardCycleMode => {
             let policy_block = app.yolo_policy_block;
             if let Some(d) = app.dashboard.as_mut() {

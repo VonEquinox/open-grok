@@ -961,9 +961,12 @@ pub enum Action {
     DashboardCommitRename,
     /// Cancel an in-progress rename without committing.
     DashboardCancelRename,
-    /// Stop / kill the selected row (top-level: cancel turn → close;
-    /// subagent: kill). Double-press protected for top-level rows.
+    /// Ctrl+X on the selected row. Top-level: cancels a running turn on a
+    /// busy row, else double-press permanently deletes an idle row.
+    /// Subagent: kills the subagent.
     DashboardStop,
+    /// Confirm permanent delete of the armed dashboard row.
+    DashboardDelete,
     /// Cycle the dispatch input's mode for the next spawned agent
     /// (Normal → Plan → Always-Approve → Normal). Bound to Shift+Tab.
     DashboardCycleMode,
@@ -1532,6 +1535,8 @@ pub enum AfterSessionDelete {
     Stay,
     /// `/delete` — return to welcome.
     Welcome,
+    /// Stay on the dashboard.
+    Dashboard,
 }
 #[derive(Debug)]
 pub enum Effect {
