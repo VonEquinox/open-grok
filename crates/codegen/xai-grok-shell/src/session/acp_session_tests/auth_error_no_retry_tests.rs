@@ -60,6 +60,7 @@ fn auth_error() -> xai_grok_sampler::SamplingErrorInfo {
         empty_response_context: None,
         doom_loop_triggers: None,
         doom_loop_aborted_at_chunk: None,
+        credential: xai_grok_sampling_types::SentCredential::Unknown,
     }
 }
 
@@ -541,6 +542,7 @@ fn model_not_found_error() -> xai_grok_sampler::SamplingErrorInfo {
             empty_response_context: None,
             doom_loop_triggers: None,
             doom_loop_aborted_at_chunk: None,
+        credential: xai_grok_sampling_types::SentCredential::Unknown,
         }
 }
 
@@ -608,6 +610,7 @@ fn unauthorized_401_error() -> xai_grok_sampler::SamplingErrorInfo {
             empty_response_context: None,
             doom_loop_triggers: None,
             doom_loop_aborted_at_chunk: None,
+        credential: xai_grok_sampling_types::SentCredential::Unknown,
         }
 }
 

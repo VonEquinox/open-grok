@@ -134,7 +134,14 @@ impl SessionTokenAuthGate {
             is_session_based: auth_method_id
                 .is_some_and(crate::agent::auth_method::is_session_based_method),
             model_byok,
-            endpoint_is_first_party: crate::util::is_xai_api_url(base_url),
+            // Fork gate requires a first-party host even for `NotByok` (session
+            // tokens must not cross to custom endpoints). Integration tests that
+            // drive a loopback mock can opt in via
+            // [`trust_loopback_session_auth_for_tests`].
+            endpoint_is_first_party: crate::util::is_xai_api_url(base_url)
+                || (cfg!(test)
+                    && trust_loopback_session_auth_for_tests_enabled()
+                    && is_loopback_base_url(base_url)),
         }
     }
     fn active(self) -> bool {
@@ -143,6 +150,41 @@ impl SessionTokenAuthGate {
             self.model_byok,
             self.endpoint_is_first_party,
         )
+    }
+}
+
+/// Opt-in for shell integration tests that exercise session-token 401 recovery
+/// against a loopback mock. Production and default test builds keep the fork
+/// first-party gate closed for loopback.
+#[cfg(test)]
+static TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn trust_loopback_session_auth_for_tests(trust: bool) {
+    TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.store(trust, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn trust_loopback_session_auth_for_tests_enabled() -> bool {
+    #[cfg(test)]
+    {
+        TRUST_LOOPBACK_SESSION_AUTH_FOR_TESTS.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+fn is_loopback_base_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -1441,6 +1483,8 @@ impl SessionActor {
                         self.prepare_sampler_for_turn().await;
                         return Ok(SamplerFailureRecovery::RefreshAuthAndResubmit {
                             provider: request_provider,
+                            credential: error.credential,
+                            store: RecoveredStore::AuthProvider,
                         });
                     }
                     tracing::warn!(
@@ -1478,6 +1522,8 @@ impl SessionActor {
                     self.prepare_sampler_for_turn().await;
                     return Ok(SamplerFailureRecovery::RefreshAuthAndResubmit {
                         provider: request_provider,
+                        credential: error.credential,
+                        store: RecoveredStore::SessionToken,
                     });
                 }
                 Err(e) => {
@@ -1511,6 +1557,8 @@ impl SessionActor {
                 self.prepare_sampler_for_turn().await;
                 return Ok(SamplerFailureRecovery::RefreshAuthAndResubmit {
                     provider: request_provider,
+                    credential: error.credential,
+                    store: RecoveredStore::SessionToken,
                 });
             }
             tracing::warn!(session_id = %self.session_info.id.0, "auth recovery: sampler 401, refresh failed");
@@ -1526,6 +1574,8 @@ impl SessionActor {
             self.prepare_sampler_for_turn().await;
             return Ok(SamplerFailureRecovery::RefreshAuthAndResubmit {
                 provider: request_provider,
+                credential: error.credential,
+                store: RecoveredStore::AuthProvider,
             });
         }
         if matches!(error.kind, SamplingErrorKind::IdleTimeout) {
@@ -1763,9 +1813,15 @@ impl SessionActor {
                     SamplerFailureRecovery::CompactAndResubmit => {
                         Ok(SamplerTurnOutcome::CompactAndResubmit)
                     }
-                    SamplerFailureRecovery::RefreshAuthAndResubmit { provider } => {
-                        Ok(SamplerTurnOutcome::RefreshAuthAndResubmit { provider })
-                    }
+                    SamplerFailureRecovery::RefreshAuthAndResubmit {
+                        provider,
+                        credential,
+                        store,
+                    } => Ok(SamplerTurnOutcome::RefreshAuthAndResubmit {
+                        provider,
+                        credential,
+                        store,
+                    }),
                 }
             }
         }
