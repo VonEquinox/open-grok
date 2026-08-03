@@ -44,6 +44,12 @@ pub struct WorkflowToolInput {
 
     #[serde(default)]
     #[schemars(
+        description = "Only with resume_from_run_id, for a run that is blocked at escalate(): a short note describing how the blocking issue was resolved. The script's pending escalate() call returns this text and the run continues. Rejected when the run is not waiting at an escalation."
+    )]
+    pub resume_note: Option<String>,
+
+    #[serde(default)]
+    #[schemars(
         description = "Run a path-specific smoke check without launching: validate metadata, compile the full script, and execute the single path selected by the supplied args and canned host results. It does not exercise every branch or prove live tools and agent outputs work."
     )]
     pub validate_only: bool,
@@ -51,12 +57,16 @@ pub struct WorkflowToolInput {
 
 impl WorkflowToolInput {
     pub const MAX_AGENT_BUDGET: u64 = 1_024;
+    pub const MAX_RESUME_NOTE_BYTES: usize = 16 * 1024;
 
     pub fn normalize(&mut self) {
         self.name = blank_to_none(self.name.take());
         self.script = blank_to_none(self.script.take());
         self.script_path = blank_to_none(self.script_path.take());
         self.resume_from_run_id = blank_to_none(self.resume_from_run_id.take());
+        // resume_note is deliberately NOT blanked to None: "" would silently
+        // become a noteless resume, which consumes the escalation with an
+        // empty answer. validate() rejects blank notes instead.
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -68,6 +78,35 @@ impl WorkflowToolInput {
                 return Err(format!(
                     "`agent_budget` must be at most {} agents",
                     Self::MAX_AGENT_BUDGET
+                ));
+            }
+        }
+        if let Some(note) = self.resume_note.as_deref() {
+            if note.trim().is_empty() {
+                return Err(
+                    "`resume_note` must not be blank; omit it entirely to resume without \
+                     answering the escalation"
+                        .into(),
+                );
+            }
+            if self.resume_from_run_id.as_deref().is_none() {
+                return Err(
+                    "`resume_note` answers a blocked run's escalate(); it requires \
+                     `resume_from_run_id`"
+                        .into(),
+                );
+            }
+            if self.validate_only {
+                return Err(
+                    "`resume_note` answers a real blocked run; it cannot be combined with \
+                     `validate_only`"
+                        .into(),
+                );
+            }
+            if note.len() > Self::MAX_RESUME_NOTE_BYTES {
+                return Err(format!(
+                    "`resume_note` must be at most {} bytes",
+                    Self::MAX_RESUME_NOTE_BYTES
                 ));
             }
         }
@@ -173,7 +212,7 @@ impl crate::types::tool_metadata::ToolMetadata for WorkflowTool {
 
 Prefer a registered workflow when one fits; author a script for bounded fan-out over a known work list, staged research and verification, or several independent perspectives, and confirm unusually large fan-out first. Before writing or editing a script, read the `create-workflow` skill's SKILL.md. `validate_only: true` runs a path-specific smoke check (metadata, compile, one canned-host path) — not proof that every branch or live tool works.
 
-A started run gets a session-unique display name (e.g. `review-changes`, `review-changes-2`) — the handle to show the user and use with `/workflow pause|resume|stop <name>`; keep run IDs internal. Each launch persists an editable `script_path`; edit it and launch as a new run to iterate. Use `resume_from_run_id` only for a same-process paused run (process restarts are terminal); a budget-limited run resumes only with a higher `agent_budget`. Save reusable scripts to `.opengrok/workflows/<name>.rhai`."##
+A started run gets a session-unique display name (e.g. `review-changes`, `review-changes-2`) — the handle to show the user and use with `/workflow pause|resume|stop <name>`; keep run IDs internal. Each launch persists an editable `script_path`; edit it and launch as a new run to iterate. A run that pauses itself (any kind except `user`), blocks on `escalate()`, or fails does NOT just stop: you are woken with the blocking issue and resume instructions. Fix what you can (environment, missing input, open decision), then resume with `resume_from_run_id` — completed agents replay from the journal, a failed step re-executes, and when the run asked via `escalate()` pass `resume_note` so the script receives your answer and continues (`resume_note` is only accepted while the run is blocked at an escalation). A plain `pause()` replays deterministically — a pause about missing launch input needs a corrected NEW run, not a resume. A budget-limited run resumes only with a higher `agent_budget`; process-restart interruptions are terminal. Save reusable scripts to `.opengrok/workflows/<name>.rhai`."##
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
@@ -333,6 +372,7 @@ mod tests {
             script_path: None,
             args: None,
             resume_from_run_id: None,
+            resume_note: None,
             validate_only: false,
         };
         assert!(base.validate().is_err());
@@ -355,6 +395,45 @@ mod tests {
             ..base.clone()
         };
         assert!(resume_only.validate().is_ok());
+
+        let noted_resume = WorkflowToolInput {
+            resume_from_run_id: Some("wf_123".into()),
+            resume_note: Some("moved the fixture into place".into()),
+            ..base.clone()
+        };
+        assert!(noted_resume.validate().is_ok());
+
+        let orphan_note = WorkflowToolInput {
+            resume_note: Some("no run to deliver this to".into()),
+            name: Some("deep-research".into()),
+            ..base.clone()
+        };
+        assert!(orphan_note.validate().is_err());
+
+        let blank_note = WorkflowToolInput {
+            resume_from_run_id: Some("wf_123".into()),
+            resume_note: Some("   ".into()),
+            ..base.clone()
+        };
+        assert!(
+            blank_note.validate().is_err(),
+            "a blank note must be rejected, not silently downgraded to a noteless resume"
+        );
+
+        let smoke_checked_note = WorkflowToolInput {
+            resume_from_run_id: Some("wf_123".into()),
+            resume_note: Some("real answer".into()),
+            validate_only: true,
+            ..base.clone()
+        };
+        assert!(smoke_checked_note.validate().is_err());
+
+        let oversized_note = WorkflowToolInput {
+            resume_from_run_id: Some("wf_123".into()),
+            resume_note: Some("x".repeat(WorkflowToolInput::MAX_RESUME_NOTE_BYTES + 1)),
+            ..base.clone()
+        };
+        assert!(oversized_note.validate().is_err());
 
         let edited_resume = WorkflowToolInput {
             script_path: Some("edited.rhai".into()),

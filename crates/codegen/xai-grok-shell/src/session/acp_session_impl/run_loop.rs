@@ -2036,7 +2036,7 @@ pub(super) async fn run_session(
                                 continue;
                             }
                             let prompt_id = format!("workflow-completed-{run_id}-{revision}");
-                            let prompt_text = "A background workflow stopped. Review the workflow completion reminder, report the result to the user, and take any appropriate next action.";
+                            let prompt_text = "A background workflow stopped or is blocked. Review the workflow completion reminder and report the result to the user. If it is blocked, the reminder states what it needs — resolve the blocker yourself when you can and resume the run; otherwise surface it to the user.";
                             let (respond_to, _) = tokio::sync::oneshot::channel();
                             {
                                 let mut state = session.state.lock().await;

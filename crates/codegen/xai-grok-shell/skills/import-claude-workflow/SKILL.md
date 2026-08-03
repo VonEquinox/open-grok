@@ -123,6 +123,15 @@ nondeterminism that was discouraged in Claude Code is now enforced: `timestamp()
   start only from a top-level session; a workflow's own child agents are refused.
   Inline the sub-workflow's logic instead.
 
+## Bonus primitive with no Claude Code equivalent
+
+- **`escalate(message)`** — a journaled one-shot pause that hands a blocking
+  issue back to the session model instead of dying: the run stops as `blocked`,
+  the model is woken with `message`, and when it resumes the run with
+  `resume_note`, `escalate` returns that note to the script (`""` without one).
+  Claude Code workflows that simply threw on a blocker translate better to
+  `escalate` + a bounded retry (see the builtin `ultracode` workflow).
+
 ## Full before / after
 
 **Before — Claude Code (`review.js`):**

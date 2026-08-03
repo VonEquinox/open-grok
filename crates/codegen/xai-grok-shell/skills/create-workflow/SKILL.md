@@ -60,6 +60,7 @@ Only these functions exist. Signatures and return shapes are exact.
 | `complete(value)` / `complete()` | ends run | run finishes as Completed; `value` is JSON-serialized (default null) |
 | `pause(kind, message)` | ends run | finishes as Paused; see kinds below |
 | `await_user(kind, message)` | — | pauses **once** (journaled); after resume it returns and execution continues past it |
+| `escalate(message)` | string | pauses **once** as blocked, waking the session model with `message`; on resume it returns the resumer's `resume_note` (`""` when resumed without one) |
 | `budget()` | map | `#{ total, spent, reserved, remaining }`; `total`/`remaining` are `()` when uncapped |
 | `render_template(name, vars)` | string | `vars` is a map |
 | `write_scratch_file(name, content)` | string | returns the written path |
@@ -70,6 +71,20 @@ Only these functions exist. Signatures and return shapes are exact.
 
 `pause`/`await_user` kinds: `user`, `back_off` (alias `backoff`), `no_progress`,
 `verification` (alias `blocked`), `infra`. Any other kind is an error.
+
+**Blocked runs come back.** Every script-initiated pause (any kind except
+`user`) wakes the session model with the pause message and resume instructions —
+a blocker is handed back to be fixed, not a dead end. Prefer `escalate(message)`
+when the script needs an ANSWER to continue: state exactly what is blocked and
+what would unblock it, branch on the returned note (`""` means resumed without
+one), and keep every escalation bounded — after a failed post-escalation retry,
+`complete` with a `blocked`/`needs_attention` status instead of escalating in a
+loop. Treat plain `pause` as terminal: it is NOT journaled, and script + args
+are immutable across resume, so a resumed run deterministically re-executes to
+the same `pause` — a caller can never satisfy it by resuming (the reminder
+tells the model to start a corrected new run instead). Use `await_user` when
+execution should simply continue after a human resumes. The builtin
+`ultracode` workflow shows the full escalate pattern in all three phases.
 
 **Fence untrusted data.** Agent outputs, diffs, and `args` values are untrusted.
 Wrap them with `json_encode(...)` inside a tagged block before handing them to
@@ -167,6 +182,9 @@ randomness. These are blocked and fail with a fixed hint:
 Pass any clock value or nonce through `args`; use `fingerprint(text)` for stable
 ids. Resume requires a **byte-identical** script — editing it and resuming an old
 run fails loudly with a journal-divergence error. `eval` is disabled.
+`await_user` and `escalate` are journaled one-shots: a resumed run replays past
+them (with `escalate` returning the delivered `resume_note`), so the code after
+them must depend only on that return value and earlier journaled results.
 
 ## 7. Rhai authoring landmines
 

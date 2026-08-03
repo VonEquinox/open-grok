@@ -865,6 +865,7 @@ impl SessionActor {
                     args: serde_json::json!({ "query": query }),
                     agent_budget: None,
                     resume_run_id: None,
+                    resume_note: None,
                 };
                 let launched = self.workflow_manager.lock().await.launch(resolved, spec);
                 match launched {
