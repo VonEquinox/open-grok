@@ -171,15 +171,16 @@ reasoning include, and a final `{"type":"compaction_trigger"}` input item. The
 request advertises `x-codex-beta-features: remote_compaction_v2`.
 
 The dedicated collector requires `response.completed` and exactly one durable
-`response.output_item.done` item of type `compaction`; unrelated stream items do
-not become assistant history. On success, replacement history contains the
-newest real-user messages within the same 64,000 approximate-token text budget,
-followed by the opaque encrypted compaction carrier. User metadata wrappers are
-removed, images and prompt markers are preserved, and a concurrent human steer
-is retained only when the in-flight snapshot remains an exact prefix. Failed or
-partial attempts install nothing. Three total attempts and one Codex auth
-refresh are allowed, without retrying a partial V2 operation against a different
-endpoint.
+`response.output_item.done` item of type `compaction`; the Codex-compatible
+`compaction_summary` alias is normalized to `compaction`, and unrelated stream
+items do not become assistant history. On success, replacement history contains
+the newest real-user messages within the same 64,000 approximate-token text
+budget, followed by the opaque encrypted compaction carrier. User metadata
+wrappers are removed, images and prompt markers are preserved, and a concurrent
+human steer is retained only when the in-flight snapshot remains an exact
+prefix. Failed or partial attempts install nothing. Three total attempts and one
+Codex auth refresh are allowed, without retrying a partial V2 operation against
+a different endpoint.
 
 Setting `[features] remote_compaction_v2 = false` selects the retained legacy
 unary `POST /responses/compact` implementation. Its provider-native output is

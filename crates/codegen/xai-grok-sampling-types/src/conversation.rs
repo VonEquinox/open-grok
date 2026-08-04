@@ -3690,15 +3690,27 @@ pub fn codex_compact_output_to_conversation_items(
     output: Vec<serde_json::Value>,
 ) -> std::result::Result<Vec<ConversationItem>, String> {
     let mut retained = Vec::new();
-    for (index, raw) in output.into_iter().enumerate() {
+    for (index, mut raw) in output.into_iter().enumerate() {
         let object = raw
-            .as_object()
+            .as_object_mut()
             .ok_or_else(|| format!("compact output item {index} is not an object"))?;
         let item_type = object
             .get("type")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("compact output item {index} has no type"))?;
+            .ok_or_else(|| format!("compact output item {index} has no type"))?
+            .to_owned();
+        if item_type == "compaction_summary" {
+            object.insert(
+                "type".to_owned(),
+                serde_json::Value::String("compaction".to_owned()),
+            );
+        }
+        let item_type = if item_type == "compaction_summary" {
+            "compaction"
+        } else {
+            item_type.as_str()
+        };
         // Match codex-rs's post-endpoint retention boundary. Base developer
         // instructions are reattached locally, while transient reasoning and
         // tool plumbing from the compaction operation must not become live
@@ -13069,6 +13081,23 @@ mod tests {
         assert!(
             compaction.estimated_content_len() > compaction.text_summary().len(),
             "context accounting must include the hidden encrypted payload"
+        );
+    }
+
+    #[test]
+    fn codex_compact_output_normalizes_compaction_summary_alias() {
+        let output = serde_json::json!({
+            "type": "compaction_summary",
+            "encrypted_content": "opaque-server-summary"
+        });
+        let items = codex_compact_output_to_conversation_items(vec![output]).unwrap();
+        let request = ConversationRequest::from_items(items);
+        let replacements = request.raw_codex_input_replacements();
+
+        assert_eq!(replacements[0].value["type"], "compaction");
+        assert_eq!(
+            replacements[0].value["encrypted_content"],
+            "opaque-server-summary"
         );
     }
 

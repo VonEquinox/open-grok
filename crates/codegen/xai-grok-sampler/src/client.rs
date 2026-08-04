@@ -974,9 +974,16 @@ impl CodexRemoteCompactionV2Collector {
                             "Codex remote compaction v2 output_item.done contained no item",
                         )
                     })?;
-                if item.get("type").and_then(serde_json::Value::as_str) == Some("compaction") {
-                    self.compaction_items
-                        .push(serde_json::Value::Object(item.clone()));
+                if matches!(
+                    item.get("type").and_then(serde_json::Value::as_str),
+                    Some("compaction" | "compaction_summary")
+                ) {
+                    let mut item = item.clone();
+                    item.insert(
+                        "type".to_owned(),
+                        serde_json::Value::String("compaction".to_owned()),
+                    );
+                    self.compaction_items.push(serde_json::Value::Object(item));
                 }
             }
             "response.completed" => {
@@ -3945,6 +3952,42 @@ mod tests {
         let replay = request.raw_codex_input_replacements();
         assert_eq!(replay[0].value["encrypted_content"], "opaque");
         assert!(replay[0].value.get("id").is_none());
+    }
+
+    #[test]
+    fn remote_compaction_v2_collector_accepts_compaction_summary_alias() {
+        let mut collector = CodexRemoteCompactionV2Collector::default();
+        collector
+            .absorb(
+                "response.output_item.done",
+                &serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction_summary",
+                        "encrypted_content": "opaque"
+                    }
+                })
+                .to_string(),
+                None,
+            )
+            .unwrap();
+        collector
+            .absorb(
+                "response.completed",
+                &serde_json::json!({
+                    "type": "response.completed",
+                    "response": {"id": "resp_completed"}
+                })
+                .to_string(),
+                None,
+            )
+            .unwrap();
+
+        let result = collector.finish().unwrap();
+        let request = ConversationRequest::from_items(vec![result.compaction_item]);
+        let replay = request.raw_codex_input_replacements();
+        assert_eq!(replay[0].value["type"], "compaction");
+        assert_eq!(replay[0].value["encrypted_content"], "opaque");
     }
 
     #[test]
