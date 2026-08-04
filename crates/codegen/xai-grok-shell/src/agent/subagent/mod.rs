@@ -2466,7 +2466,7 @@ async fn cancel_pending_shell_child(
     persist_subagent_completion(subagent_meta_dir, &result, gcs_ctx);
     result
 }
-fn emit_subagent_notification(
+pub(crate) fn emit_subagent_notification(
     gateway: &GatewaySender,
     parent_session_id: &str,
     update: SessionUpdate,

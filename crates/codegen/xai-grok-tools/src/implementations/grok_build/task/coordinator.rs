@@ -296,9 +296,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                 );
             }
             SubagentEvent::ListAgents(request) => {
-                let _ = request
-                    .respond_to
-                    .send(self.list_agents(&request.identity));
+                let _ = request.respond_to.send(self.list_agents(&request.identity));
             }
             SubagentEvent::SendAgentMessage(request) => {
                 let result =
@@ -626,12 +624,14 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                 .completed
                 .get(&target)
                 .is_some_and(|child| child.request.parent_session_id == identity.team_scope_id);
-        belongs_to_team.then_some(target).ok_or_else(|| {
-            format!(
+        if belongs_to_team {
+            Ok(target)
+        } else {
+            Err(format!(
                 "Agent '{target}' was not found in team '{}'",
                 identity.team_scope_id
-            )
-        })
+            ))
+        }
     }
 
     fn send_agent_message(
@@ -1139,11 +1139,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     .flatten()
                     .map(|waiter| waiter.deadline),
             )
-            .chain(
-                self.mailbox_waiters
-                    .values()
-                    .map(|waiter| waiter.deadline),
-            )
+            .chain(self.mailbox_waiters.values().map(|waiter| waiter.deadline))
             .min()
     }
 

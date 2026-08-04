@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::implementations::grok_build::task::backend::SubagentBackendResource;
 use crate::implementations::grok_build::task::types::{
@@ -29,10 +29,10 @@ pub struct FollowupAgentTaskTool;
 #[derive(Debug, Default)]
 pub struct WaitAgentTool;
 
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ListAgentsInput {}
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendAgentMessageInput {
     #[schemars(description = "Agent ID from list_agents, or \"root\" for the team root.")]
@@ -41,7 +41,7 @@ pub struct SendAgentMessageInput {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WaitAgentInput {
     #[schemars(
@@ -53,13 +53,7 @@ pub struct WaitAgentInput {
 
 async fn collaboration_resources_async(
     ctx: &xai_tool_runtime::ToolCallContext,
-) -> Result<
-    (
-        SubagentBackendResource,
-        AgentMailboxIdentity,
-    ),
-    xai_tool_runtime::ToolError,
-> {
+) -> Result<(SubagentBackendResource, AgentMailboxIdentity), xai_tool_runtime::ToolError> {
     let resources = shared_resources(ctx)?;
     let resources = resources.lock().await;
     let backend = resources
@@ -246,9 +240,7 @@ macro_rules! message_tool {
                     .backend()
                     .send_agent_message(identity, &target, message)
                     .await
-                    .map_err(|error| {
-                        xai_tool_runtime::ToolError::custom("agent_mailbox", error)
-                    })
+                    .map_err(|error| xai_tool_runtime::ToolError::custom("agent_mailbox", error))
             }
         }
     };
@@ -358,4 +350,3 @@ mod tests {
         assert_eq!(MAX_WAIT_MS, 600_000);
     }
 }
-
