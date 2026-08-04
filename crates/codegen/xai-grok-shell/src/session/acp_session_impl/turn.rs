@@ -840,6 +840,9 @@ impl SessionActor {
                 super::super::PromptOrigin::SubagentCompleted { .. } => {
                     ConversationItem::subagent_completed(user_message)
                 }
+                super::super::PromptOrigin::AgentMessage { .. } => {
+                    ConversationItem::agent_message(user_message)
+                }
                 super::super::PromptOrigin::WorkflowCompleted { .. } => {
                     ConversationItem::notification_drain(user_message)
                 }
