@@ -3648,11 +3648,7 @@ pub(crate) fn execute(
                         {
                             return (ProbedAttachment::ProbeDropped, None);
                         }
-                        if probe_bracketed
-                            && crate::terminal::terminal_context()
-                                .brand
-                                .delivers_ime_as_bracketed_paste()
-                        {
+                        if probe_bracketed {
                             match crate::clipboard::bracketed_payload_came_from_clipboard_result(
                                 probe_text.as_deref().unwrap_or(""),
                             ) {

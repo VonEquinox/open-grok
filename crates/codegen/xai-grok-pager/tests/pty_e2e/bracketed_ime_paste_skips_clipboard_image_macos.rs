@@ -3,9 +3,8 @@
 use super::common::*;
 
 /// Regression, macOS-only, REAL host pasteboard — the exact reported
-/// surface: under Otty (`TERM_PROGRAM=otty`, the only terminal known to
-/// deliver macOS IME commits as bracketed paste), with an image on the
-/// clipboard, an IME commit must not attach that image to the agent prompt.
+/// surface: under Ghostty, with an image on the clipboard, an IME commit
+/// delivered as bracketed paste must not attach that image to the agent prompt.
 ///
 /// Skips (loudly) when the session has no usable clipboard — a CI runner
 /// without a pasteboard shouldn't fail on environment.
@@ -40,14 +39,13 @@ async fn bracketed_ime_paste_skips_clipboard_image_macos() {
 
     let content = ContentController::start().await.expect("start content");
     let binary = pager_binary().expect("resolve pager binary");
-    // The payload-origin gate only runs under Otty (TERM_PROGRAM=otty).
     let mut harness = PtyHarness::spawn_with_content_env_ops(
         &binary,
         DEFAULT_ROWS,
         DEFAULT_COLS,
         &content,
         &[],
-        &[EnvOp::set("TERM_PROGRAM", "otty")],
+        &[EnvOp::set("TERM_PROGRAM", "ghostty")],
     )
     .expect("spawn pager");
 

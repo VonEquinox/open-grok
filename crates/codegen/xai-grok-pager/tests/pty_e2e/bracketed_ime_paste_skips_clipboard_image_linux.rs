@@ -2,14 +2,11 @@
 #[allow(unused_imports)]
 use super::common::*;
 
-/// Regression, Linux-hermetic: under Otty (`TERM_PROGRAM=otty` — the
-/// only terminal known to deliver macOS IME commits as bracketed paste),
-/// bracketed text that did not come from the system clipboard must not attach
-/// the unrelated clipboard image. Any other terminal keeps the historical
-/// probe behavior, asserted here with a second, TERM_PROGRAM-less spawn. A
-/// fake `wl-paste`/`wl-copy` pair on `PATH` plays the clipboard; the sibling
-/// `bracketed_ime_paste_skips_clipboard_image_macos` covers the reported
-/// agent-prompt surface on a real pasteboard.
+/// Regression, Linux-hermetic: bracketed text that did not come from the
+/// system clipboard must not attach the unrelated clipboard image, regardless
+/// of terminal brand. A fake `wl-paste`/`wl-copy` pair on `PATH` plays the
+/// clipboard; the sibling `bracketed_ime_paste_skips_clipboard_image_macos`
+/// covers the reported Ghostty agent-prompt surface on a real pasteboard.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
@@ -129,19 +126,21 @@ async fn bracketed_ime_paste_skips_clipboard_image_linux() {
     );
     harness.quit().expect("clean quit");
 
-    // ── No TERM_PROGRAM (any other terminal): historical behavior intact —
-    //    the same mismatched bracketed payload still attaches the image ──
+    // ── No TERM_PROGRAM: the same source check applies to every terminal ──
     std::fs::write(&text_file, b"").expect("reset clipboard text");
     let mut harness = spawn_on_dashboard(&content, &base_env, &[]);
     harness
         .inject_keys(format!("\x1b[200~{IME_PAYLOAD}\x1b[201~").as_bytes())
         .expect("bracketed payload without otty");
     harness
-        .wait_for_text("[Image #1", Duration::from_secs(10))
-        .expect(
-            "outside Otty the payload-origin gate must not run — the historical \
-             bracketed-paste image probe attaches the clipboard image unchanged",
-        );
+        .wait_for_text(IME_PAYLOAD, Duration::from_secs(10))
+        .expect("IME text reaches the dispatch input without a terminal brand");
+    harness.update(Duration::from_millis(500));
+    assert!(
+        !harness.contains_text("[Image #"),
+        "mismatched bracketed text must not attach a clipboard image on any terminal\nscreen:\n{}",
+        harness.screen_contents()
+    );
     assert!(
         !harness.contains_text("panicked"),
         "pager panicked\nscreen:\n{}",
