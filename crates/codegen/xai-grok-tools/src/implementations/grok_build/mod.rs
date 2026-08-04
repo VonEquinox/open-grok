@@ -9,6 +9,7 @@
 //! the standard toolset. It inserts shared resources (`Terminal`,
 //! `AvailableSkills`, `BashParams`) and registers every built-in tool.
 pub mod agent_swarm;
+pub mod agent_collaboration;
 pub mod ask_user_question;
 pub mod bash;
 #[path = "deploy_app_stub.rs"]
@@ -38,6 +39,9 @@ pub mod web_search;
 pub mod workflow;
 pub mod x_search;
 pub use agent_swarm::AgentSwarmTool;
+pub use agent_collaboration::{
+    FollowupAgentTaskTool, ListAgentsTool, SendAgentMessageTool, WaitAgentTool,
+};
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use deploy_app::{AppBuilderDeployerConfig, DEPLOY_APP_TOOL_NAME};

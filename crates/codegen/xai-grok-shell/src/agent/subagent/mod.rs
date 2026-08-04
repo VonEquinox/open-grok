@@ -464,6 +464,17 @@ impl ChildControl for ShellChildRuntime {
         });
         let _ = self.child_handle.cmd_tx.send(SessionCommand::Shutdown);
     }
+    fn deliver_followup(
+        &self,
+        message: &xai_grok_tools::implementations::grok_build::task::types::AgentMailboxMessage,
+    ) -> bool {
+        self.child_handle
+            .cmd_tx
+            .send(SessionCommand::AgentMessage {
+                message: message.clone(),
+            })
+            .is_ok()
+    }
 }
 #[derive(Default)]
 pub(crate) struct ShellCompletionData {
