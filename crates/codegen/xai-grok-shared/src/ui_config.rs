@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use xai_grok_config_types::DisplayRefreshSettings;
 
-pub use xai_grok_config_types::ImageGenerationProvider;
+pub use xai_grok_tools::types::ImageGenerationProvider;
 
 /// User-selected tool presentation for Responses-backed sessions.
 ///

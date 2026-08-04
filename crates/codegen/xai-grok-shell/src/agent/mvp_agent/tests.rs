@@ -3049,47 +3049,27 @@ async fn prepare_image_gen_config_sends_client_identifier_header() {
     );
 }
 
+/// The OpenAI image config is built from the isolated Codex OAuth identity:
+/// Codex originator + account/FedRAMP headers, the Codex inference base URL,
+/// no static token copy, and a mandatory live identity-anchored resolver.
+/// Hermetic by construction: the credential load (process-global home) is
+/// covered by `codex_auth`'s own tests, so this test injects credentials.
 #[tokio::test(flavor = "current_thread")]
-#[serial_test::serial]
-async fn prepare_image_gen_config_routes_openai_through_isolated_codex_auth() {
-    use base64::Engine as _;
-    use xai_grok_config_types::ImageGenerationProvider;
-    use xai_grok_test_support::EnvGuard;
+async fn openai_image_gen_config_uses_isolated_codex_identity() {
+    use crate::agent::config::ImageGenerationProvider;
     use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
 
-    let home = tempfile::tempdir().unwrap();
-    let _env = EnvGuard::set("OPENGROK_HOME", home.path());
-    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
-    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&serde_json::json!({
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": "account-123",
-                "chatgpt_plan_type": "plus"
-            }
-        }))
-        .unwrap(),
-    );
-    let id_token = format!("{header}.{claims}.signature");
-    std::fs::write(
-        home.path().join(crate::codex_auth::CODEX_AUTH_FILE_NAME),
-        serde_json::to_vec(&crate::codex_auth::CodexAuthStore {
-            auth_mode: Some("chatgpt".to_owned()),
-            openai_api_key: None,
-            tokens: Some(crate::codex_auth::CodexTokenData {
-                id_token,
-                access_token: "codex-image-token".to_owned(),
-                refresh_token: "refresh".to_owned(),
-                account_id: Some("account-123".to_owned()),
-            }),
-            last_refresh: None,
-        })
-        .unwrap(),
-    )
-    .unwrap();
+    let credentials = crate::codex_auth::CodexCredentials {
+        access_token: "codex-image-token".to_owned(),
+        account_id: Some("account-123".to_owned()),
+        chatgpt_user_id: Some("user-123".to_owned()),
+        email: None,
+        plan_type: Some("plus".to_owned()),
+        is_workspace_account: false,
+        account_is_fedramp: true,
+    };
 
     let agent = build_minimal_agent_for_tests();
-    agent.cfg.borrow_mut().ui.image_generation_provider =
-        Some(ImageGenerationProvider::OpenAi);
     let ImageGenConfig::Enabled {
         provider,
         api_key,
@@ -3098,26 +3078,31 @@ async fn prepare_image_gen_config_routes_openai_through_isolated_codex_auth() {
         api_key_provider,
         tier_restricted,
         ..
-    } = agent.prepare_image_gen_config()
+    } = agent.openai_image_gen_config(&credentials)
     else {
         panic!("expected OpenAI image generation to be enabled");
     };
     assert_eq!(provider, ImageGenerationProvider::OpenAi);
-    assert_eq!(api_key, "codex-image-token");
+    assert!(
+        api_key.is_empty(),
+        "the OAuth-only OpenAI route must not copy the token into the unused static field"
+    );
     assert_eq!(base_url, crate::codex_auth::inference_base_url());
     assert_eq!(
         extra_headers.get("ChatGPT-Account-ID").map(String::as_str),
         Some("account-123")
     );
     assert_eq!(
+        extra_headers.get("X-OpenAI-Fedramp").map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
         extra_headers.get("originator").map(String::as_str),
         Some(crate::codex_auth::CODEX_ORIGINATOR)
     );
-    assert_eq!(
-        api_key_provider
-            .expect("OpenAI image route must keep a live Codex bearer")
-            .current_api_key(),
-        Some("codex-image-token".to_owned())
+    assert!(
+        api_key_provider.is_some(),
+        "OpenAI image route must keep a live identity-anchored Codex resolver"
     );
     assert!(!tier_restricted);
 }

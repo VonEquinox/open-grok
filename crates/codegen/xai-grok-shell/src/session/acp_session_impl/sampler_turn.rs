@@ -203,14 +203,13 @@ fn is_loopback_base_url(url: &str) -> bool {
 }
 
 fn image_tool_allowed_for_provider(
-    image_provider: Option<xai_grok_config_types::ImageGenerationProvider>,
+    image_provider: Option<crate::agent::config::ImageGenerationProvider>,
     active_provider: xai_grok_sampling_types::ModelProvider,
 ) -> bool {
+    use crate::agent::config::ImageGenerationProvider;
     match image_provider {
-        Some(xai_grok_config_types::ImageGenerationProvider::OpenAi) => true,
-        Some(xai_grok_config_types::ImageGenerationProvider::Grok) => {
-            active_provider.profile().allows_xai_services()
-        }
+        Some(ImageGenerationProvider::OpenAi) => true,
+        Some(ImageGenerationProvider::Grok) => active_provider.profile().allows_xai_services(),
         None => false,
     }
 }
@@ -230,10 +229,10 @@ pub(super) enum ToolAuthRefreshRoute {
 
 fn tool_auth_refresh_route_for_provider(
     tool_name: &str,
-    image_provider: Option<xai_grok_config_types::ImageGenerationProvider>,
+    image_provider: Option<crate::agent::config::ImageGenerationProvider>,
 ) -> ToolAuthRefreshRoute {
     if matches!(tool_name, "image_gen" | "image_edit")
-        && image_provider == Some(xai_grok_config_types::ImageGenerationProvider::OpenAi)
+        && image_provider == Some(crate::agent::config::ImageGenerationProvider::OpenAi)
     {
         ToolAuthRefreshRoute::CodexOAuth
     } else {
@@ -2223,7 +2222,7 @@ mod image_tool_provider_tests {
     use super::{
         ToolAuthRefreshRoute, image_tool_allowed_for_provider, tool_auth_refresh_route_for_provider,
     };
-    use xai_grok_config_types::ImageGenerationProvider;
+    use crate::agent::config::ImageGenerationProvider;
     use xai_grok_sampling_types::ModelProvider;
 
     #[test]

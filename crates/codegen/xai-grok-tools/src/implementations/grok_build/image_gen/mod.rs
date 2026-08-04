@@ -18,10 +18,9 @@
 
 use base64::Engine as _;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
-use xai_grok_config_types::ImageGenerationProvider;
 
 use crate::attribution::{SharedAttributionCallback, ToolConsumer};
-use crate::types::SharedApiKeyProvider;
+use crate::types::{ImageGenerationProvider, SharedApiKeyProvider};
 
 use crate::types::output::{MediaGenOutput, ToolOutput};
 use crate::types::requirements::{Expr, ToolRequirement};
@@ -122,11 +121,13 @@ impl ImageGenClient {
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        // OpenAI's identity-anchored live resolver fails closed on logout or
-        // account drift, so it must never fall back to the construction-time
-        // bearer. Static OpenAI test/BYOK configurations and the existing xAI
-        // path retain the baked fallback.
-        if *provider != ImageGenerationProvider::OpenAi || config_api_key_provider.is_none() {
+        // Grok Imagine bakes the static key as the fallback Authorization;
+        // the live provider overrides per request. OpenAI Images is
+        // ChatGPT-OAuth-only (matching upstream's `uses_codex_backend` gate,
+        // which excludes API-key auth): no static bearer is ever baked, the
+        // identity-anchored live resolver is mandatory, and it fails closed
+        // on logout or account drift.
+        if *provider == ImageGenerationProvider::Grok {
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| {
@@ -166,6 +167,14 @@ impl ImageGenClient {
             ))
         })?;
 
+        // The legacy session-wide provider supplies the xAI bearer, so it may
+        // only ever back the Grok route; the OpenAI route accepts just its
+        // config-level Codex resolver and must fail closed without it.
+        let api_key_provider = match provider {
+            ImageGenerationProvider::Grok => config_api_key_provider.clone().or(api_key_provider),
+            ImageGenerationProvider::OpenAi => config_api_key_provider.clone(),
+        };
+
         Ok(Self {
             http,
             provider: *provider,
@@ -173,9 +182,8 @@ impl ImageGenClient {
             model,
             edit_model,
             writer: super::storage::SessionFileWriter::new(DEFAULT_IMAGE_DIR, extension),
-            api_key_provider: config_api_key_provider.clone().or(api_key_provider),
-            require_live_bearer: *provider == ImageGenerationProvider::OpenAi
-                && config_api_key_provider.is_some(),
+            api_key_provider,
+            require_live_bearer: *provider == ImageGenerationProvider::OpenAi,
             attribution_callback: None,
             tier_restricted: *provider == ImageGenerationProvider::Grok && *tier_restricted,
         })
@@ -213,10 +221,6 @@ impl ImageGenClient {
 
     pub(crate) fn writer(&self) -> &super::storage::SessionFileWriter {
         &self.writer
-    }
-
-    pub(crate) fn edit_model(&self) -> &str {
-        &self.edit_model
     }
 
     pub async fn generate(
@@ -399,12 +403,17 @@ pub enum ImageGenConfig {
     Disabled,
     Enabled {
         provider: ImageGenerationProvider,
+        /// Static credential baked as the fallback Authorization header for
+        /// the Grok route. Ignored for OpenAI, which is ChatGPT-OAuth-only
+        /// and resolves every bearer live from `api_key_provider`.
         api_key: String,
         base_url: String,
         extra_headers: indexmap::IndexMap<String, String>,
-        /// Provider-specific live bearer source. OpenAI images use the
-        /// identity-anchored Codex resolver; Grok Imagine uses the xAI auth
-        /// manager. This always wins over the legacy session-wide provider.
+        /// Provider-specific live bearer source. OpenAI images require the
+        /// identity-anchored Codex resolver (mandatory — requests fail closed
+        /// without it); Grok Imagine uses the xAI auth manager. For Grok this
+        /// wins over the legacy session-wide provider; the legacy provider is
+        /// never consulted for OpenAI.
         api_key_provider: Option<SharedApiKeyProvider>,
         image_gen_enabled: bool,
         image_edit_enabled: bool,
@@ -666,15 +675,25 @@ mod tests {
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[derive(Debug)]
+    struct StaticBearer(&'static str);
+    impl crate::types::ApiKeyProvider for StaticBearer {
+        fn current_api_key(&self) -> Option<String> {
+            Some(self.0.to_owned())
+        }
+    }
+
     fn openai_config(base_url: String) -> ImageGenConfig {
         let mut headers = indexmap::IndexMap::new();
         headers.insert("originator".to_owned(), "codex_cli_rs".to_owned());
         ImageGenConfig::Enabled {
             provider: ImageGenerationProvider::OpenAi,
-            api_key: "codex-token".into(),
+            // Never sent: the OpenAI route is OAuth-only and resolves the
+            // bearer live from `api_key_provider`.
+            api_key: "ignored-static-key".into(),
             base_url,
             extra_headers: headers,
-            api_key_provider: None,
+            api_key_provider: Some(Arc::new(StaticBearer("codex-token"))),
             image_gen_enabled: true,
             image_edit_enabled: true,
             model_override: Some("must-not-cross-providers".into()),
@@ -849,6 +868,43 @@ mod tests {
         assert!(requests.is_empty(), "no prompt may leave without live auth");
     }
 
+    #[tokio::test]
+    async fn openai_without_live_resolver_never_falls_back_to_static_or_legacy_bearer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/images/generations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"b64_json": base64::engine::general_purpose::STANDARD.encode(b"png")}]
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let mut config = openai_config(server.uri());
+        let ImageGenConfig::Enabled {
+            api_key_provider, ..
+        } = &mut config
+        else {
+            unreachable!()
+        };
+        // API-key-style configuration: only a static key, no live resolver.
+        *api_key_provider = None;
+
+        // The legacy session-wide provider (xAI bearer) must also be ignored
+        // for the OpenAI route — no credential may cross providers.
+        let error =
+            ImageGenClient::new(&config, Some(Arc::new(StaticBearer("xai-session-bearer"))))
+                .unwrap()
+                .generate("test", "auto", "turn")
+                .await
+                .expect_err("OpenAI images are OAuth-only; static and legacy keys are off-limits");
+        assert!(error.to_string().contains("login --codex"));
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.is_empty(),
+            "no prompt may leave with a static or legacy-provider bearer"
+        );
+    }
+
     #[test]
     fn per_tool_gates_are_independent() {
         let cfg = ImageGenConfig::Enabled {
@@ -959,17 +1015,17 @@ mod tests {
             tier_restricted: false,
         };
         assert_eq!(
-            ImageGenClient::new(&mk(None), None).unwrap().edit_model(),
+            ImageGenClient::new(&mk(None), None).unwrap().edit_model,
             super::super::image_edit::XAI_IMAGINE_EDIT_MODEL
         );
         assert_eq!(
             ImageGenClient::new(&mk(Some("  ")), None)
                 .unwrap()
-                .edit_model(),
+                .edit_model,
             super::super::image_edit::XAI_IMAGINE_EDIT_MODEL
         );
         let client = ImageGenClient::new(&mk(Some("grok-imagine-image-v2")), None).unwrap();
-        assert_eq!(client.edit_model(), "grok-imagine-image-v2");
+        assert_eq!(client.edit_model, "grok-imagine-image-v2");
         assert_eq!(client.model, XAI_IMAGINE_MODEL);
     }
 

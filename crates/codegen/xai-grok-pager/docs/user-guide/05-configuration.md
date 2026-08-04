@@ -119,8 +119,10 @@ direct mode.
 `"grok"` (default) uses xAI Imagine and xAI credentials. `"openai"` uses
 `gpt-image-2` through the Codex Images API and the isolated
 `~/.opengrok/codex-auth.json` credential; run `open-grok login --codex` first.
-Known ChatGPT Free accounts are not eligible. Restart Open Grok after changing
-the setting. Video generation remains xAI-only.
+Only ChatGPT account login (OAuth) is eligible — an OpenAI API key cannot be
+used for image generation. Known ChatGPT Free accounts are not eligible.
+Restart Open Grok after changing the setting. Video generation remains
+xAI-only.
 
 #### Input Mode
 

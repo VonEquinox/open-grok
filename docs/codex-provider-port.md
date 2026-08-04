@@ -228,10 +228,18 @@ advertising the hosted Responses `image_generation` tool. Settings can select
 - OpenAI Images calls `POST /images/generations` and `/images/edits` below the
   Codex inference base, uses `gpt-image-2`, includes the Codex originator,
   account/FedRAMP headers, and `x-codex-image-turn-id`, and resolves the live
-  bearer only from the identity-anchored `codex-auth.json` credential.
+  bearer only from the identity-anchored `codex-auth.json` credential. The
+  request/response shape mirrors `codex-api/src/endpoint/images.rs` and
+  `ext/image-generation` at the pinned refresh.
+- OpenAI Images is ChatGPT-OAuth-only. Upstream's `image_generation_available`
+  gate (`core/src/tools/spec_plan.rs`) requires auth that `uses_codex_backend`,
+  which excludes `AuthMode::ApiKey`; the fork mirrors this by surfacing only
+  the isolated OAuth token store and by having the tool client refuse any
+  static or legacy-provider bearer — no OpenAI API key path is offered.
 - Known ChatGPT Free accounts do not receive the OpenAI image tools, matching
-  codex-rs's plan gate. Unknown plan labels fail open to the server's
-  authoritative entitlement check.
+  codex-rs's plan gate (`account_plan_type() == Some(PlanType::Free)`).
+  Unknown plan labels fail open to the server's authoritative entitlement
+  check.
 - The OpenAI selection is an explicit cross-provider opt-in, so an xAI or
   third-party chat model may use OpenAI Images without credential crossover.
   Video generation remains xAI-only.

@@ -138,9 +138,10 @@ Also isolated:
 11. **Image generation is explicitly routed.** The default `grok` route uses
     xAI Imagine credentials and remains hidden outside eligible xAI sessions.
     Selecting `openai` in Settings is an explicit cross-provider opt-in: it
-    uses only the isolated Codex OAuth store, calls the Codex Images endpoint,
-    blocks known ChatGPT Free accounts, and never reuses an xAI credential.
-    Video generation remains xAI-only.
+    uses only the isolated Codex OAuth store (ChatGPT login — no OpenAI API
+    key path, mirroring upstream's `uses_codex_backend` gate), calls the Codex
+    Images endpoint, blocks known ChatGPT Free accounts, and never reuses an
+    xAI credential. Video generation remains xAI-only.
 12. **Hosted search** is dialect-scoped: xAI web/X search vs OpenAI `web_search`. Optional client search fallbacks are declared only when the provider profile permits them. Never infer this from model names or URLs.
 13. **Opaque history** (e.g. Codex compaction carriers, xAI-only items) is projected only by the matching dialect.
 14. **Standalone search is route-scoped.** Official Codex OAuth Responses
