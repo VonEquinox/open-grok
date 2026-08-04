@@ -7,9 +7,9 @@
 use super::registry::{
     DynamicEnumSource, EnumChoice, SettingCategory, SettingKind, SettingMeta, SettingOwner,
 };
-use crate::appearance::permission_cursor::DefaultSelectedPermission;
 use crate::appearance::ScrollMode;
 use crate::appearance::TextSelection;
+use crate::appearance::permission_cursor::DefaultSelectedPermission;
 
 use xai_grok_shell::agent::config::UiConfig;
 use xai_grok_tools::implementations::grok_build::ask_user_question;
@@ -110,8 +110,7 @@ const PERMISSION_MODE_CHOICES: &[EnumChoice] = &[
     EnumChoice {
         canonical: "auto",
         display: "Auto",
-        description:
-            "LLM classifier approves safe tools; dangerous actions may still prompt or deny.",
+        description: "LLM classifier approves safe tools; dangerous actions may still prompt or deny.",
     },
     EnumChoice {
         canonical: "always-approve",
@@ -369,8 +368,7 @@ const VOICE_CAPTURE_MODE_CHOICES: &[EnumChoice] = &[
     EnumChoice {
         canonical: "hold",
         display: "Hold to talk",
-        description:
-            "Hold Ctrl+Space / F8 to record, release to stop. Needs a Kitty-protocol terminal.",
+        description: "Hold Ctrl+Space / F8 to record, release to stop. Needs a Kitty-protocol terminal.",
     },
 ];
 
@@ -390,8 +388,7 @@ const VOICE_STT_LANGUAGE_CHOICES: &[EnumChoice] = &[
     EnumChoice {
         canonical: "auto",
         display: "System",
-        description:
-            "Use the system locale when it is a supported STT language; otherwise English.",
+        description: "Use the system locale when it is a supported STT language; otherwise English.",
     },
     EnumChoice {
         canonical: "ar",
@@ -2116,6 +2113,26 @@ pub fn default_settings() -> Vec<SettingMeta> {
             hidden_in_minimal: false,
         },
         SettingMeta {
+            key: "features.telemetry",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Product telemetry",
+            description: "Opt in to anonymous product-analytics telemetry \
+                          (`[features] telemetry` / GROK_TELEMETRY_ENABLED). \
+                          Separate from coding-data sharing under Privacy.",
+            keywords: &[
+                "telemetry",
+                "analytics",
+                "metrics",
+                "product",
+                "usage",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
             key: "features.lsp_tools",
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
@@ -2133,6 +2150,27 @@ pub fn default_settings() -> Vec<SettingMeta> {
             label: "Web fetch tool",
             description: "Enable fetching and reading specific web pages from new sessions.",
             keywords: &["web", "fetch", "url", "research", "tool", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "toolset.web_fetch.allow_local",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Web fetch allow localhost",
+            description: "Allow web_fetch to explicit loopback hosts only \
+                          (localhost / 127.0.0.0/8 / ::1). Private and cloud-metadata \
+                          ranges stay blocked. Requires Web fetch tool.",
+            keywords: &[
+                "web",
+                "fetch",
+                "localhost",
+                "loopback",
+                "ssrf",
+                "local",
+                "flag",
+            ],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
             hidden_in_minimal: false,
@@ -2160,13 +2198,29 @@ pub fn default_settings() -> Vec<SettingMeta> {
             hidden_in_minimal: false,
         },
         SettingMeta {
+            key: "features.remember_mode",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Remember-mode shortcut",
+            description: "Enable `#` on an empty prompt to enter remember mode \
+                          (same as /remember with no args).",
+            keywords: &[
+                "remember", "memory", "hash", "#", "shortcut", "mode", "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            // Gated by a live config.toml read on each `#` keypress.
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
             key: "doom_loop_recovery.enabled",
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Doom-loop recovery",
-            description: "Detect repetitive model loops and retry the turn with recovery guidance.",
+            description: "Detect repetitive model loops and retry the turn with recovery guidance. \
+                          On by default; turn off to disable recovery retries.",
             keywords: &["doom loop", "repetition", "recovery", "retry", "flag"],
-            kind: SettingKind::Bool { default: false },
+            kind: SettingKind::Bool { default: true },
             restart_required: true,
             hidden_in_minimal: false,
         },
@@ -2179,6 +2233,90 @@ pub fn default_settings() -> Vec<SettingMeta> {
             keywords: &[
                 "subagent", "worktree", "snapshot", "git ref", "resume", "flag",
             ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "diagnostics.crash_handler",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Crash handler",
+            description: "Install the opt-in crash handler for richer panic/crash reports.",
+            keywords: &["crash", "handler", "panic", "diagnostics", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "ui.mouse_reporting_toggle",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Mouse reporting toggle",
+            description: "Enable Ctrl+R (scrollback) and /toggle-mouse-reporting to flip \
+                          terminal mouse capture for native click-drag copy/paste.",
+            keywords: &[
+                "mouse",
+                "reporting",
+                "toggle",
+                "ctrl+r",
+                "capture",
+                "copy",
+                "paste",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "suggestions.enabled",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Shell command suggestions",
+            description: "Enable the shell command suggestion pipeline (history/path completions).",
+            keywords: &[
+                "suggestions",
+                "shell",
+                "completion",
+                "history",
+                "path",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "suggestions.ai_enabled",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "AI shell suggestions",
+            description: "Allow AI-backed shell command suggestions when shell suggestions \
+                          are enabled.",
+            keywords: &["suggestions", "ai", "shell", "completion", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "sandbox.auto_allow_bash",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Sandbox auto-allow bash",
+            description: "Skip bash permission prompts when an OS sandbox profile is active.",
+            keywords: &["sandbox", "bash", "auto", "allow", "permissions", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "tools.respect_gitignore",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Respect .gitignore in tools",
+            description: "Make search and file tools skip gitignored paths by default.",
+            keywords: &["gitignore", "tools", "search", "ignore", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
             hidden_in_minimal: false,
