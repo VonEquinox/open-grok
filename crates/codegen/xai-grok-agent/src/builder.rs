@@ -878,13 +878,13 @@ impl AgentBuilder {
                     }
                 }
                 if self.prompt_audience == crate::prompt::context::PromptAudience::Subagent {
-                if let Some(task_tc) = tool_config
-                    .tools
-                    .iter_mut()
-                    .find(|tc| tc.id == task_tool_id)
-                {
-                    task_tc.description_override = Some(CHILD_TASK_DESCRIPTION.to_string());
-                }
+                    if let Some(task_tc) = tool_config
+                        .tools
+                        .iter_mut()
+                        .find(|tc| tc.id == task_tool_id)
+                    {
+                        task_tc.description_override = Some(CHILD_TASK_DESCRIPTION.to_string());
+                    }
                 } else if let Some(task_tc) = tool_config
                     .tools
                     .iter_mut()
