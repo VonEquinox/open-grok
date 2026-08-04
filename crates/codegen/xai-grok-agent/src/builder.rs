@@ -839,10 +839,18 @@ impl AgentBuilder {
             xai_grok_tools::types::tool::ToolNamespace::GrokBuild,
             "workflow"
         );
+        let collaboration_tools = crate::config::collaboration_tool_configs();
+        let collaboration_tool_ids: Vec<_> = collaboration_tools
+            .iter()
+            .map(|tool| tool.id.clone())
+            .collect();
         let mut task_stripped = false;
         if !self.subagents_enabled {
             tool_config.tools.retain(|tc| {
-                tc.id != task_tool_id && tc.id != agent_swarm_tool_id && tc.id != workflow_tool_id
+                tc.id != task_tool_id
+                    && tc.id != agent_swarm_tool_id
+                    && tc.id != workflow_tool_id
+                    && !collaboration_tool_ids.contains(&tc.id)
             });
             task_stripped = true;
         } else {
@@ -856,9 +864,20 @@ impl AgentBuilder {
                     tc.id != task_tool_id
                         && tc.id != agent_swarm_tool_id
                         && tc.id != workflow_tool_id
+                        && !collaboration_tool_ids.contains(&tc.id)
                 });
                 task_stripped = true;
-            } else if self.prompt_audience == crate::prompt::context::PromptAudience::Subagent {
+            } else {
+                for collaboration_tool in collaboration_tools {
+                    if !tool_config
+                        .tools
+                        .iter()
+                        .any(|tool| tool.id == collaboration_tool.id)
+                    {
+                        tool_config.tools.push(collaboration_tool);
+                    }
+                }
+                if self.prompt_audience == crate::prompt::context::PromptAudience::Subagent {
                 if let Some(task_tc) = tool_config
                     .tools
                     .iter_mut()
@@ -866,13 +885,14 @@ impl AgentBuilder {
                 {
                     task_tc.description_override = Some(CHILD_TASK_DESCRIPTION.to_string());
                 }
-            } else if let Some(task_tc) = tool_config
-                .tools
-                .iter_mut()
-                .find(|tc| tc.id == task_tool_id)
-            {
-                task_tc.description_override =
-                    Some(build_task_description(&subagents, &self.task_model_slugs));
+                } else if let Some(task_tc) = tool_config
+                    .tools
+                    .iter_mut()
+                    .find(|tc| tc.id == task_tool_id)
+                {
+                    task_tc.description_override =
+                        Some(build_task_description(&subagents, &self.task_model_slugs));
+                }
             }
         }
         if self.standalone_web_search_backend.is_some() {

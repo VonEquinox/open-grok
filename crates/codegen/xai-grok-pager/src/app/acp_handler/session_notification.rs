@@ -693,6 +693,26 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
             }
             true
         }
+        XaiSessionUpdate::SubagentMessage {
+            from_agent_id,
+            to_agent_id,
+            kind,
+            body,
+            status,
+            ..
+        } => {
+            let preview = if body.chars().count() > 500 {
+                format!("{}…", body.chars().take(500).collect::<String>())
+            } else {
+                body
+            };
+            agent.scrollback.push_block(RenderBlock::System(
+                crate::scrollback::blocks::SystemMessageBlock::new(format!(
+                    "Agent {kind} ({status}) · {from_agent_id} → {to_agent_id}\n{preview}"
+                )),
+            ));
+            true
+        }
         XaiSessionUpdate::SubagentFinished {
             child_session_id,
             status,
