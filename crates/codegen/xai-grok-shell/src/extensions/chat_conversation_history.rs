@@ -5,7 +5,7 @@ use crate::agent::MvpAgent;
 use agent_client_protocol as acp;
 #[tracing::instrument(skip_all, fields(method = %args.method))]
 pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
-    if true {
+    {
         let _ = (agent, args);
         return Err(acp::Error::method_not_found());
     }

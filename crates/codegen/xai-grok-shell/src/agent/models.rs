@@ -1155,6 +1155,14 @@ impl ModelsManager {
         self.notify_models_updated();
     }
 
+    /// [`Self::apply_config`] plus an unconditional default re-resolve, used
+    /// when remote settings arrive while no session owns the current choice.
+    pub(crate) fn apply_config_reselecting_default(&self, new_config: config::Config) {
+        self.apply_config(new_config.clone());
+        self.reselect_default_model(&new_config);
+        self.notify_models_updated();
+    }
+
     // ── Accessors ───────────────────────────────────────────────────
 
     pub fn models(&self) -> IndexMap<String, ModelEntry> {

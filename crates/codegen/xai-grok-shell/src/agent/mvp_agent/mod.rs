@@ -77,7 +77,8 @@ use crate::session::persistence::PersistenceHandle;
 use crate::session::worktree::BackgroundCopyContext;
 use crate::session::{
     ParsedPromptInfo, SCHEDULER_BACKGROUND_LOOPS_META_KEY, SessionCommand, SessionHandle,
-    SessionLiveState, SessionThread, info::Info as SessionInfo, spawn_session_on_thread,
+    CancelOptions, CancelTrigger, SessionLiveState, SessionThread, ShutdownKind,
+    info::Info as SessionInfo, spawn_session_on_thread,
 };
 use crate::terminal::{AcpTerminalRunner, TerminalRunner};
 use crate::tools::ToolContext;
@@ -298,10 +299,47 @@ fn parse_session_kind(
         .and_then(|k| SessionKind::deserialize(k).ok())
         .unwrap_or(SessionKind::Build)
 }
-/// Hard-off in release builds: `kind: "chat"` meta is ignored and
-/// sessions stay on the local Build path.
-fn is_chat_session_kind(meta: Option<&acp::Meta>) -> bool {
-    false
+/// Whether meta requests chat kind (ignores whether the binary supports it).
+fn wants_chat_session_kind(meta: Option<&acp::Meta>) -> bool {
+    matches!(
+        parse_session_kind(meta),
+        crate::session::unified_list::SessionKind::Chat
+    )
+}
+use crate::session::unified_list::SessionKind;
+/// A chat-kind assertion from a request; only a claim until checked. Always
+/// false without the `chat` feature.
+#[derive(Clone, Copy)]
+pub(crate) struct ChatKindClaim(bool);
+impl ChatKindClaim {
+    pub(crate) fn from_meta(meta: Option<&acp::Meta>) -> Self {
+        {
+            let _ = meta;
+            Self(false)
+        }
+    }
+    /// Which pipeline owns this id. The session decides; the claim answers
+    /// only for an id the registry has never seen.
+    pub(crate) fn resolve(self, agent: &MvpAgent, id: &acp::SessionId) -> SessionKind {
+        let _ = (agent, id);
+        self.declared()
+    }
+    /// What the request asked to create; authoritative only at `session/new`.
+    pub(crate) fn declared(self) -> SessionKind {
+        if self.0 { SessionKind::Chat } else { SessionKind::Build }
+    }
+}
+/// Fail closed when a client requests `kind: "chat"` on a build-only binary.
+fn reject_chat_kind_without_feature(meta: Option<&acp::Meta>) -> Result<(), acp::Error> {
+    {
+        if wants_chat_session_kind(meta) {
+            return Err(
+                acp::Error::invalid_params()
+                    .data("session kind \"chat\" requires a chat-enabled binary"),
+            );
+        }
+        Ok(())
+    }
 }
 fn chat_initial_model(
     is_chat_kind: bool,
@@ -692,32 +730,13 @@ struct RetainedResources {
     >,
 }
 pub struct MvpAgent {
-    /// LEADER-SAFE(per-session): keyed by SessionId. Sessions are created/removed
-    /// per client request; no cross-session iteration except cleanup
-    /// (`remove_session`, `sweep_dead_sessions`).
-    pub(crate) sessions: RefCell<HashMap<acp::SessionId, SessionHandle>>,
-    /// `Send + Sync` mirror of per-session activity (running turn, pending
-    /// interactions, subagent gauge) shared with the leader's auto-update
-    /// checker, which cannot read the `!Send` maps above. Sessions are
-    /// registered at handle creation and expire when their actor exits — no
-    /// unregister bookkeeping. See [`crate::agent::activity::AgentActivity`].
+    /// LEADER-SAFE(shared): `Send + Sync` mirror of per-session activity for the
+    /// leader's auto-update checker, which cannot read the `!Send` maps. Expires
+    /// when the actor exits. See [`crate::agent::activity::AgentActivity`].
     pub(crate) activity: crate::agent::activity::AgentActivity,
     /// LEADER-SAFE(per-session). Per-session resources (turn, live state,
     /// unavailable model, bridge, dispatch lock) released on one-drop.
     session_registry: SessionRegistry,
-    /// Sessions with a `session/load` currently in flight. LEADER-SAFE(per-session).
-    ///
-    /// Inserted by [`Self::begin_session_load`] at the top of `load_session`
-    /// and removed when the returned RAII guard drops (any exit path). Lets
-    /// racing session-scoped requests — notably `session/prompt` sent right
-    /// behind a reconnect-replayed `session/load` after a leader restart —
-    /// wait for the load via [`Self::wait_for_in_flight_session_load`]
-    /// instead of failing with "unknown session id". The watch channel closes
-    /// when the guard drops, waking all waiters. A load guard rather than
-    /// session state: it exists before the session.
-    loading_sessions: RefCell<
-        HashMap<acp::SessionId, tokio::sync::watch::Receiver<bool>>,
-    >,
     /// Title per resident session id, refreshed each `build_roster`. Lets the
     /// synchronous roster deltas reuse the title instead of emitting an empty
     /// one — `resident_roster_entry` can't read disk.
@@ -1359,11 +1378,11 @@ fn plan_hunk_tracking(mode_str: Option<&str>) -> HunkTrackingPlan {
         actor_mode: resolve_hunk_tracking_mode(mode_str),
     }
 }
-/// RAII marker for an in-flight `session/load` (see
-/// [`MvpAgent::begin_session_load`]). Holding the guard keeps the session id
-/// in `MvpAgent::loading_sessions`; dropping it removes the marker and wakes
-/// every [`MvpAgent::wait_for_in_flight_session_load`] waiter (the held
-/// watch sender drops with the guard, closing the channel).
+/// Bound on waiting out an evicted session's flushing actor thread.
+pub(super) const DRAIN_OLD_THREAD_WAIT: std::time::Duration = std::time::Duration::from_secs(
+    5,
+);
+/// RAII marker for an in-flight attach; dropping it wakes every waiter.
 pub(crate) struct SessionLoadGuard<'a> {
     agent: &'a MvpAgent,
     session_id: acp::SessionId,
@@ -1373,10 +1392,7 @@ pub(crate) struct SessionLoadGuard<'a> {
 }
 impl Drop for SessionLoadGuard<'_> {
     fn drop(&mut self) {
-        let mut map = self.agent.loading_sessions.borrow_mut();
-        if map.get(&self.session_id).is_some_and(|rx| rx.same_channel(&self.rx)) {
-            map.remove(&self.session_id);
-        }
+        self.agent.session_registry.settle_attach(&self.session_id, &self.rx);
     }
 }
 mod code_nav;
@@ -1388,6 +1404,7 @@ mod session_lifecycle;
 mod subagent_coordinator;
 mod agent_ops;
 mod acp_agent;
+mod session_setup;
 use session_registry::SessionRegistry;
 pub(crate) use session_lifecycle::RegistrySnapshot;
 pub(super) use super::ext_parsers;
@@ -1817,7 +1834,7 @@ impl MvpAgent {
         if orphaned.is_empty() {
             return Vec::new();
         }
-        if self.sessions.borrow().get(session_id).is_some() {
+        if self.is_resident(session_id) {
             return Vec::new();
         }
         let mut completions = Vec::with_capacity(orphaned.len());
@@ -2264,12 +2281,7 @@ impl MvpAgent {
     }
     /// Snapshot live session senders and broadcast `RefreshSkillBaseline`.
     pub(super) fn refresh_skill_baseline_for_all_sessions(&self) {
-        let senders = self
-            .sessions
-            .borrow()
-            .values()
-            .map(|h| h.cmd_tx.clone())
-            .collect();
+        let senders = self.resident_cmd_txs();
         Self::broadcast_refresh_skill_baseline(senders);
     }
     /// Eagerly fan out the current on-disk plugin registry to every live
@@ -2290,17 +2302,18 @@ impl MvpAgent {
                 std::path::PathBuf,
                 tokio::sync::mpsc::UnboundedSender<crate::session::SessionCommand>,
             ),
-        > = self
-            .sessions
-            .borrow()
-            .iter()
-            .filter_map(|(sid, h)| {
-                if skip == Some(sid) {
-                    return None;
-                }
-                Some((std::path::PathBuf::from(&h.info.cwd), h.cmd_tx.clone()))
-            })
-            .collect();
+        > = {
+            let mut targets = Vec::new();
+            self.session_registry
+                .for_each_resident(|sid, h| {
+                    if skip == Some(sid) {
+                        return;
+                    }
+                    targets
+                        .push((std::path::PathBuf::from(&h.info.cwd), h.cmd_tx.clone()));
+                });
+            targets
+        };
         let remote_settings = self.cfg.borrow().remote_settings.clone();
         for (cwd, cmd_tx) in targets {
             let project_trusted = folder_trust::resolve_and_record(
@@ -2358,9 +2371,7 @@ impl MvpAgent {
         }
         let proxy_base_url = self.cli_chat_proxy_base_url();
         let alpha_test_key = self.alpha_test_key();
-        let senders: Vec<
-            tokio::sync::mpsc::UnboundedSender<crate::session::SessionCommand>,
-        > = self.sessions.borrow().values().map(|h| h.cmd_tx.clone()).collect();
+        let senders = self.resident_cmd_txs();
         tokio::task::spawn_local(async move {
             let result = maybe_sync_bundle_to_root(
                     &root,
@@ -2404,11 +2415,9 @@ async fn handle_synthetic_turn_trace(
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     let (info, turn_number, user_id, user_email, client_source, client_version, model) = {
         let this = agent_ref.get();
-        let session_info = {
-            let sessions = this.sessions.borrow();
-            let sid = &request.session_id;
-            sessions.get(sid).map(|h| h.info.clone())
-        };
+        let session_info = this
+            .resident_handle(&request.session_id)
+            .map(|h| h.info.clone());
         let Some(info) = session_info else {
             tracing::debug!(
                 session_id = %request.session_id.0,
@@ -2435,13 +2444,10 @@ async fn handle_synthetic_turn_trace(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let client_version = this.cfg.borrow().client_version.clone();
-        let model = {
-            let sessions = this.sessions.borrow();
-            sessions
-                .get(&request.session_id)
-                .map(|h| h.model_id.0.to_string())
-                .unwrap_or_else(|| this.models_manager.current_model_id().0.to_string())
-        };
+        let model = this
+            .resident_handle(&request.session_id)
+            .map(|h| h.model_id.0.to_string())
+            .unwrap_or_else(|| this.models_manager.current_model_id().0.to_string());
         (info, turn_number, user_id, user_email, client_source, client_version, model)
     };
     let trace_context = {

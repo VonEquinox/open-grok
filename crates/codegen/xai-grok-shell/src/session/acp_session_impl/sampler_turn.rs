@@ -1352,15 +1352,18 @@ impl SessionActor {
         xai_grok_telemetry::unified_log::warn(
             "turn.terminal_failure",
             Some(self.session_info.id.0.as_ref()),
-            Some(serde_json::json!(
-                { "error_type" : error_type, "status_code" : status_code,
-                "provider" : format!("{provider:?}"),
-                "reauthable" : reauthable, "auth_mode" : auth.as_ref().map(| a |
-                format!("{:?}", a.auth_mode)), "key_prefix" : auth.as_ref().map(| a |
-                crate ::auth::token_suffix(& a.key).to_owned()), "expires_at" : auth
-                .as_ref().and_then(| a | a.expires_at.map(| e | e.to_rfc3339())),
-                "message" : crate ::util::truncate(message, 300), }
-            )),
+            Some(serde_json::json!({
+                "error_type": error_type,
+                "status_code": status_code,
+                "provider": format!("{provider:?}"),
+                "reauthable": reauthable,
+                "auth_mode": auth.as_ref().map(|a| format!("{:?}", a.auth_mode)),
+                "key_prefix": auth.as_ref().map(|a| xai_grok_auth::bearer_suffix(&a.key).to_owned()),
+                "expires_at": auth
+                    .as_ref()
+                    .and_then(|a| a.expires_at.map(|e| e.to_rfc3339())),
+                "message": crate::util::truncate(message, 300),
+            })),
         );
     }
     pub(crate) async fn handle_sampling_failure(
