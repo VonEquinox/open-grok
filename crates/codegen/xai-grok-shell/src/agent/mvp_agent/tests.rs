@@ -3048,6 +3048,80 @@ async fn prepare_image_gen_config_sends_client_identifier_header() {
          applies the coding ZDR opt-out to Build traffic"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn prepare_image_gen_config_routes_openai_through_isolated_codex_auth() {
+    use base64::Engine as _;
+    use xai_grok_config_types::ImageGenerationProvider;
+    use xai_grok_test_support::EnvGuard;
+    use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
+
+    let home = tempfile::tempdir().unwrap();
+    let _env = EnvGuard::set("OPENGROK_HOME", home.path());
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "account-123",
+                "chatgpt_plan_type": "plus"
+            }
+        }))
+        .unwrap(),
+    );
+    let id_token = format!("{header}.{claims}.signature");
+    std::fs::write(
+        home.path().join(crate::codex_auth::CODEX_AUTH_FILE_NAME),
+        serde_json::to_vec(&crate::codex_auth::CodexAuthStore {
+            auth_mode: Some("chatgpt".to_owned()),
+            openai_api_key: None,
+            tokens: Some(crate::codex_auth::CodexTokenData {
+                id_token,
+                access_token: "codex-image-token".to_owned(),
+                refresh_token: "refresh".to_owned(),
+                account_id: Some("account-123".to_owned()),
+            }),
+            last_refresh: None,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let agent = build_minimal_agent_for_tests();
+    agent.cfg.borrow_mut().ui.image_generation_provider =
+        Some(ImageGenerationProvider::OpenAi);
+    let ImageGenConfig::Enabled {
+        provider,
+        api_key,
+        base_url,
+        extra_headers,
+        api_key_provider,
+        tier_restricted,
+        ..
+    } = agent.prepare_image_gen_config()
+    else {
+        panic!("expected OpenAI image generation to be enabled");
+    };
+    assert_eq!(provider, ImageGenerationProvider::OpenAi);
+    assert_eq!(api_key, "codex-image-token");
+    assert_eq!(base_url, crate::codex_auth::inference_base_url());
+    assert_eq!(
+        extra_headers.get("ChatGPT-Account-ID").map(String::as_str),
+        Some("account-123")
+    );
+    assert_eq!(
+        extra_headers.get("originator").map(String::as_str),
+        Some(crate::codex_auth::CODEX_ORIGINATOR)
+    );
+    assert_eq!(
+        api_key_provider
+            .expect("OpenAI image route must keep a live Codex bearer")
+            .current_api_key(),
+        Some("codex-image-token".to_owned())
+    );
+    assert!(!tier_restricted);
+}
+
 /// Same contract for video generation (also a direct API call).
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_video_gen_config_sends_client_identifier_header() {

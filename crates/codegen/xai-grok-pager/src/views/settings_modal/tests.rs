@@ -896,6 +896,8 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "plan_mode",
             // SHELL-owned coding_data_sharing (Privacy category).
             "coding_data_sharing",
+            // SHELL-owned image provider (Models category, restart-required).
+            "image_generation_provider",
             // SHELL-owned default_model (Models category).
             "default_model",
             // Kimi service selector and isolated credentials.

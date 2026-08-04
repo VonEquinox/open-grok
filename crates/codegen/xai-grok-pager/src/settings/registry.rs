@@ -846,6 +846,11 @@ pub fn current_value_for(
         "code_mode" => Some(SettingValue::Enum(
             ui.code_mode.unwrap_or_default().as_canonical(),
         )),
+        "image_generation_provider" => Some(SettingValue::Enum(
+            ui.image_generation_provider
+                .unwrap_or_default()
+                .as_canonical(),
+        )),
         // ask_user_question timeout: reflects the effective TOML merge; the
         // toggle writes the user layer, and env/remote settings tiers feed the
         // final gate at agent build. None → the resolver-shared default (ON).
@@ -1313,6 +1318,28 @@ mod tests {
                             .map(|choice| choice.canonical)
                             .collect::<Vec<_>>(),
                         vec!["direct", "code_mode", "code_mode_only"],
+                    );
+                }
+                (
+                    "image_generation_provider",
+                    SettingKind::Enum {
+                        default, choices, ..
+                    },
+                ) => {
+                    assert_eq!(
+                        *default,
+                        ui.image_generation_provider
+                            .unwrap_or_default()
+                            .as_canonical(),
+                        "image_generation_provider default drifts from UiConfig::default()",
+                    );
+                    assert_eq!(*default, "grok");
+                    assert_eq!(
+                        choices
+                            .iter()
+                            .map(|choice| choice.canonical)
+                            .collect::<Vec<_>>(),
+                        vec!["grok", "openai"],
                     );
                 }
                 // ask_user_question timeout: no UiConfig mirror (lives under

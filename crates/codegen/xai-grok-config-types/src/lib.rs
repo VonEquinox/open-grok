@@ -17,6 +17,37 @@ mod pool;
 pub use pool::*;
 use serde::{Deserialize, Serialize};
 use xai_grok_announcements::RemoteAnnouncement;
+
+/// User-selected image generation service.
+///
+/// This is a routing decision only. Each provider keeps its own endpoint,
+/// credentials, headers, and retry path.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageGenerationProvider {
+    #[default]
+    Grok,
+    #[serde(rename = "openai")]
+    OpenAi,
+}
+
+impl ImageGenerationProvider {
+    pub const fn as_canonical(self) -> &'static str {
+        match self {
+            Self::Grok => "grok",
+            Self::OpenAi => "openai",
+        }
+    }
+
+    pub fn from_canonical(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "grok" => Some(Self::Grok),
+            "openai" => Some(Self::OpenAi),
+            _ => None,
+        }
+    }
+}
+
 /// A remote `campaigns[]` entry: an `id` gate plus a full-power
 /// flattened config patch (the JSON sibling of a `[[campaigns]]` TOML override).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

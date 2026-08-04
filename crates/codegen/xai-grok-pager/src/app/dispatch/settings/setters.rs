@@ -928,6 +928,38 @@ pub(in crate::app::dispatch) fn set_code_mode(
     }]
 }
 
+pub(super) fn set_image_generation_provider_inner(
+    app: &mut AppView,
+    new: xai_grok_shell::agent::config::ImageGenerationProvider,
+) {
+    app.current_ui.image_generation_provider = Some(new);
+}
+
+pub(in crate::app::dispatch) fn set_image_generation_provider(
+    app: &mut AppView,
+    new: xai_grok_shell::agent::config::ImageGenerationProvider,
+) -> Vec<Effect> {
+    let previous_state = app.current_ui.image_generation_provider;
+    let previous = previous_state.unwrap_or_default();
+    if previous == new && previous_state.is_some() {
+        return vec![];
+    }
+    set_image_generation_provider_inner(app, new);
+    refresh_open_settings_modals(app);
+    let label = match new {
+        xai_grok_shell::agent::config::ImageGenerationProvider::Grok => "Grok Imagine",
+        xai_grok_shell::agent::config::ImageGenerationProvider::OpenAi => "OpenAI Images",
+    };
+    app.show_toast(&format!(
+        "Image generation: {label} (restart Open Grok to apply)"
+    ));
+    vec![Effect::PersistSetting {
+        key: "image_generation_provider",
+        value: crate::settings::SettingValue::Enum(new.as_canonical()),
+        rollback_value: crate::settings::SettingValue::Enum(previous.as_canonical()),
+    }]
+}
+
 /// Mirror the just-written TOML value in `app` so the modal reflects it (the
 /// effective timeout is re-resolved shell-side at agent build).
 pub(super) fn set_ask_user_question_timeout_enabled_inner(app: &mut AppView, new: bool) {

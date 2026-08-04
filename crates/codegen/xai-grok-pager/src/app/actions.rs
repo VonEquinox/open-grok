@@ -501,6 +501,9 @@ pub enum Action {
     /// Select direct, mixed Code Mode, or Code Mode Only after Open Grok is
     /// restarted. SHELL-owned; persisted to `[ui].code_mode`.
     SetCodeMode(xai_grok_shell::agent::config::ToolModePreference),
+    /// Select Grok Imagine or OpenAI Images for new sessions after Open Grok
+    /// restarts. SHELL-owned; persisted to `[ui].image_generation_provider`.
+    SetImageGenerationProvider(xai_grok_shell::agent::config::ImageGenerationProvider),
     /// Toggle the ask_user_question timeout. SHELL-owned; persisted to
     /// `[toolset.ask_user_question].timeout_enabled`. Applies to new sessions.
     SetAskUserQuestionTimeoutEnabled(bool),
@@ -1281,11 +1284,7 @@ impl PlanModeKind {
     }
     /// Construct from a bool (the inverse of [`Self::to_bool`]).
     pub fn from_bool(b: bool) -> Self {
-        if b {
-            Self::On
-        } else {
-            Self::Off
-        }
+        if b { Self::On } else { Self::Off }
     }
 }
 /// Async side effect produced by [`super::dispatch::dispatch`].

@@ -135,7 +135,12 @@ Also isolated:
 8. **OpenCode Go transport is model-owned.** `@ai-sdk/anthropic` entries use Messages + `x-api-key`; OpenAI-compatible entries use Chat Completions + Bearer. Never choose the protocol from the provider alone.
 9. **Wafer AI is API-key-only and provider-local.** `WAFER_API_KEY` is sent only to `https://pass.wafer.ai/v1`; its dynamic `/models` catalog, client function tools, and standard metadata do not inherit xAI behavior. Wafer has no native hosted web search.
 10. **xAI-only services** (relay, some uploads, etc.) close via monotonic export boundary after non-xAI denied profiles. Compatibility field name remains `ever_used_codex` even when the triggering provider is not Codex; subagents mark the parent tree.
-11. **xAI media / Imagine** must not receive another provider's credential; hide media tools outside eligible xAI sessions.
+11. **Image generation is explicitly routed.** The default `grok` route uses
+    xAI Imagine credentials and remains hidden outside eligible xAI sessions.
+    Selecting `openai` in Settings is an explicit cross-provider opt-in: it
+    uses only the isolated Codex OAuth store, calls the Codex Images endpoint,
+    blocks known ChatGPT Free accounts, and never reuses an xAI credential.
+    Video generation remains xAI-only.
 12. **Hosted search** is dialect-scoped: xAI web/X search vs OpenAI `web_search`. Optional client search fallbacks are declared only when the provider profile permits them. Never infer this from model names or URLs.
 13. **Opaque history** (e.g. Codex compaction carriers, xAI-only items) is projected only by the matching dialect.
 14. **Standalone search is route-scoped.** Official Codex OAuth Responses
@@ -198,7 +203,7 @@ Follow [`../provider-architecture.md`](../provider-architecture.md):
    - API-key: `ApiKeyOnly` policy, scoped storage, empty live resolver.
    - OAuth: **separate file** (like `codex-auth.json`), own `BearerResolver`, fail-closed identity, never xAI `AuthManager`.
 5. If `xai_services: Denied`, participate in monotonic export boundary (`ever_used_codex` field name frozen for compatibility).
-6. Filter hosted + local tools by provider; never reuse another provider’s credentials for media/search.
+6. Filter hosted + local tools by provider; never reuse another provider’s credentials for media/search. The user-selected OpenAI Images route is the explicit exception for cross-provider image use, but its Codex credential and endpoint remain isolated.
 7. Add table-driven registry coverage + request/stream/tool/credential-isolation/retry/export-boundary tests.
 8. Custom endpoints may reuse an existing profile + explicit API key; unknown remote catalog providers fail closed.
 

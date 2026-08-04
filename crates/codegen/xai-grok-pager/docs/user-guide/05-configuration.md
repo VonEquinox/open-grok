@@ -1,6 +1,6 @@
 # Configuration
 
-Grok reads settings from config files, environment variables, and CLI flags. This page covers the common options.
+Open Grok reads settings from config files, environment variables, and CLI flags. This page covers the common options.
 
 ---
 
@@ -56,6 +56,8 @@ remember_tool_approvals = false        # show per-command "Always allow" options
                                        # grants are remembered per project (default: false); see 22-permissions-and-safety.md
 code_mode = "direct"                   # "direct", "code_mode" (mixed), or "code_mode_only";
                                        # restart Open Grok after changing this setting
+image_generation_provider = "grok"     # "grok" (Imagine) or "openai" (gpt-image-2 via Codex OAuth);
+                                       # restart Open Grok after changing this setting
 show_thinking_blocks = true            # show agent thinking blocks in the TUI (default: true)
 group_tool_verbs = true                # fold runs of read/search/list tool calls and subagent rows
                                        # — and finished thoughts among them — into one row (default: true)
@@ -110,6 +112,15 @@ Grok after changing the setting; the running process keeps the configuration it
 loaded at startup. An OpenAI Codex catalog entry that explicitly requires
 `code_mode_only` overrides this preference. Non-Responses models remain in
 direct mode.
+
+#### Image generation provider
+
+`[ui] image_generation_provider` controls both `image_gen` and `image_edit`.
+`"grok"` (default) uses xAI Imagine and xAI credentials. `"openai"` uses
+`gpt-image-2` through the Codex Images API and the isolated
+`~/.opengrok/codex-auth.json` credential; run `open-grok login --codex` first.
+Known ChatGPT Free accounts are not eligible. Restart Open Grok after changing
+the setting. Video generation remains xAI-only.
 
 #### Input Mode
 

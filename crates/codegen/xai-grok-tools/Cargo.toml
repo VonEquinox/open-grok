@@ -19,6 +19,7 @@ xai-tty-utils = { workspace = true }
 xai-grok-code-mode = { path = "../xai-grok-code-mode" }
 xai-grok-code-mode-protocol = { path = "../xai-grok-code-mode-protocol" }
 xai-grok-config = { path = "../xai-grok-config" }
+xai-grok-config-types = { path = "../xai-grok-config-types" }
 xai-grok-extra-ca = { workspace = true }
 xai-grok-tools-api = { path = "../xai-grok-tools-api" }
 xai-grok-workspace-types = { path = "../xai-grok-workspace-types" }
