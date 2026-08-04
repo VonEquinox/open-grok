@@ -39,6 +39,24 @@ SubagentEvent mpsc  ──►  MvpAgent::start_subagent_coordinator (spawn_local
 | Worktrees | `session/worktree.rs` → `xai-grok-workspace/src/worktree/`, `xai-fast-worktree/` |
 | Child session spawn | `session/acp_session_impl/spawn.rs` |
 
+## Three distinct surfaces
+
+`task`, `agent_swarm`, and `workflow` all run child sessions through the same
+coordinator, but they are three separate model surfaces and must stay that way.
+Locked by `task_agent_swarm_and_workflow_stay_three_distinct_surfaces` in
+`…/task/types.rs`.
+
+| Surface | Tool id / kind | Shape | Turn ownership |
+| --- | --- | --- | --- |
+| Individual subagent | `task` / `ToolKind::Task` | One child, foreground or background | Foreground holds an **interruptible** wait |
+| Swarm | `agent_swarm` / `ToolKind::AgentSwarm` | Many members of the same shape, one prompt template | Holds an **orchestration** wait for the whole cohort |
+| Workflow | `workflow` / `ToolKind::Workflow` | Declarative multi-phase run on the workflow engine | Returns immediately; the run continues in the background |
+
+A single subagent stands alone: `task`'s `requires_expr` names only the
+background-task lifecycle kinds, so neither orchestrator has to be in the
+toolset. `agent_swarm` depends on `ToolKind::Task` (its members are ordinary
+subagents), never the reverse, and `workflow` depends on neither.
+
 ## Spawn / task tool flow
 
 1. **Model calls `task`** (UI/hook aliases may show `Task` / `spawn_subagent`; tool id is `task`).

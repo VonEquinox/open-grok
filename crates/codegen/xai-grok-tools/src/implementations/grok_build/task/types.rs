@@ -1433,6 +1433,70 @@ mod tests {
         );
     }
 
+    /// `task`, `agent_swarm`, and `workflow` are three separate model surfaces
+    /// built on the same subagent machinery. They must stay separately
+    /// addressable, and a single subagent must stand alone: `task`'s
+    /// requirements hold with neither orchestrator in the toolset.
+    #[test]
+    fn task_agent_swarm_and_workflow_stay_three_distinct_surfaces() {
+        use crate::implementations::grok_build::{AgentSwarmTool, TaskTool, WorkflowTool};
+        use crate::types::requirements::{EvalContext, ProposedTool};
+        use crate::types::tool_metadata::ToolMetadata;
+        use xai_tool_runtime::Tool;
+
+        assert_eq!(
+            [
+                Tool::id(&TaskTool).as_str().to_string(),
+                Tool::id(&AgentSwarmTool).as_str().to_string(),
+                Tool::id(&WorkflowTool).as_str().to_string(),
+            ],
+            ["task", "agent_swarm", "workflow"],
+            "each orchestration surface keeps its own stable tool id"
+        );
+        assert_eq!(
+            [
+                ToolMetadata::kind(&TaskTool),
+                ToolMetadata::kind(&AgentSwarmTool),
+                ToolMetadata::kind(&WorkflowTool),
+            ],
+            [ToolKind::Task, ToolKind::AgentSwarm, ToolKind::Workflow],
+            "each surface keeps its own ToolKind so packs and Code Mode can gate them apart"
+        );
+
+        // A lone subagent surface: `task` plus the background lifecycle tools it
+        // needs to manage what it spawns. No swarm, no workflow.
+        let params = serde_json::Value::Object(Default::default());
+        let lone_subagent = ["task", "get_task_output", "kill_task"];
+        let kinds = [
+            ToolKind::Task,
+            ToolKind::BackgroundTaskAction,
+            ToolKind::KillTaskAction,
+        ];
+        let proposed: Vec<ProposedTool> = lone_subagent
+            .iter()
+            .zip(kinds)
+            .map(|(id, kind)| ProposedTool {
+                namespace: "GrokBuild",
+                id,
+                kind,
+                params: &params,
+                input_schema: None,
+            })
+            .collect();
+        let ctx = EvalContext {
+            tools: &proposed,
+            self_params: &params,
+        };
+        assert!(
+            ToolMetadata::requires_expr(&TaskTool).eval(&|req| req.eval(&ctx)),
+            "an individual subagent must be usable without agent_swarm or workflow"
+        );
+        assert!(
+            ToolMetadata::requires_expr(&AgentSwarmTool).eval(&|req| req.eval(&ctx)),
+            "agent_swarm layers on the task surface rather than replacing it"
+        );
+    }
+
     #[test]
     fn strip_nested_spawn_tools_keeps_background_helpers_for_bg_capable_bash() {
         let mut bash = ToolConfig::from_id("GrokBuild:run_terminal_cmd");
