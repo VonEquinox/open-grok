@@ -191,9 +191,101 @@ jobs:
             dist/LICENSE
             dist/THIRD-PARTY-NOTICES
 
+  ubuntu-20-04:
+    name: Ubuntu 20.04 x86_64
+    needs: resolve
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils build-essential ca-certificates clang cmake curl file git pkg-config python3 unzip
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Trust checked-out repository
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Verify tag and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < OPEN_GROK_VERSION)"
+          test "v${version}" = '${{ needs.resolve.outputs.tag }}'
+          git tag --points-at HEAD | grep -Fx '${{ needs.resolve.outputs.tag }}'
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain 1.93.0
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-ubuntu-20.04-x86_64
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Install pinned build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          protoc_archive="$RUNNER_TEMP/protoc-29.3-linux-x86_64.zip"
+          protoc_root="$RUNNER_TEMP/protoc-29.3"
+          curl -fL \
+            https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip \
+            -o "$protoc_archive"
+          printf '%s  %s\n' \
+            3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a \
+            "$protoc_archive" | sha256sum -c -
+          mkdir -p "$protoc_root"
+          unzip -q "$protoc_archive" -d "$protoc_root"
+          protoc="$protoc_root/bin/protoc"
+          test "$("$protoc" --version)" = "libprotoc 29.3"
+          echo "PROTOC=$protoc" >> "$GITHUB_ENV"
+
+          rg_archive="$RUNNER_TEMP/ripgrep-15.0.0-x86_64-unknown-linux-musl.tar.gz"
+          curl -fL \
+            https://github.com/BurntSushi/ripgrep/releases/download/15.0.0/ripgrep-15.0.0-x86_64-unknown-linux-musl.tar.gz \
+            -o "$rg_archive"
+          printf '%s  %s\n' \
+            253ad0fd5fef0d64cba56c70dccdacc1916d4ed70ad057cc525fcdb0c3bbd2a7 \
+            "$rg_archive" | sha256sum -c -
+          tar -xzf "$rg_archive" -C "$RUNNER_TEMP"
+          echo "GROK_TOOLS_BUNDLE_RG_PATH=$RUNNER_TEMP/ripgrep-15.0.0-x86_64-unknown-linux-musl/rg" \
+            >> "$GITHUB_ENV"
+
+      - name: Build and verify Ubuntu 20.04 release
+        shell: bash
+        run: ./scripts/build-linux-release.sh
+
+      - name: Upload Ubuntu assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-20.04-release
+          if-no-files-found: error
+          path: |
+            dist/open-grok-ubuntu-20.04-x86_64.tar.gz
+            dist/open-grok-ubuntu-20.04-x86_64.tar.gz.sha256
+
   publish:
     name: Publish and verify GitHub release
-    needs: [resolve, windows, macos]
+    needs: [resolve, windows, macos, ubuntu-20-04]
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}

@@ -1,8 +1,6 @@
 name: Build platform artifacts
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -110,19 +108,26 @@ jobs:
     name: Ubuntu 20.04 x86_64
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - name: Install build dependencies
         shell: bash
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            binutils build-essential ca-certificates cmake curl file git pkg-config python3 unzip
+            binutils build-essential ca-certificates clang cmake curl file git pkg-config python3 unzip
           rm -rf /var/lib/apt/lists/*
 
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Trust checked-out repository
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install pinned Rust toolchain
         shell: bash
