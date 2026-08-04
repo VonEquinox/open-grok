@@ -3113,3 +3113,37 @@ pub(super) fn build_shortcuts(state: &SettingsModalState) -> Vec<Shortcut<'stati
         ],
     }
 }
+
+#[cfg(test)]
+mod description_visible_tests {
+    use super::description_visible;
+
+    #[test]
+    fn ordinary_settings_need_explicit_expand() {
+        assert!(!description_visible("compact_mode", false, true, true));
+        assert!(description_visible("compact_mode", true, false, false));
+    }
+
+    #[test]
+    fn local_feature_flags_show_on_select_or_hover() {
+        assert!(description_visible(
+            "features.web_fetch",
+            false,
+            true,
+            false
+        ));
+        assert!(description_visible(
+            "features.telemetry",
+            false,
+            false,
+            true
+        ));
+        assert!(!description_visible(
+            "features.web_fetch",
+            false,
+            false,
+            false
+        ));
+        assert!(description_visible("memory.enabled", true, false, false));
+    }
+}
