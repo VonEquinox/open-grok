@@ -799,8 +799,7 @@ pub enum SessionCommand {
     /// collaboration team. Unlike `Interject`, the sender is another model,
     /// not the user, and the pager must not render it as user-authored input.
     AgentMessage {
-        message:
-            xai_grok_tools::implementations::grok_build::task::types::AgentMailboxMessage,
+        message: xai_grok_tools::implementations::grok_build::task::types::AgentMailboxMessage,
     },
     /// Trigger a model turn so the model can print a visible goal progress
     /// summary.  The goal orchestrator injects a system reminder into context

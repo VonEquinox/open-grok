@@ -130,13 +130,7 @@ pub(crate) fn kind_allowed(mode: CapabilityMode, kind: ToolKind) -> bool {
 
     match kind {
         // Meta tools: always allowed.
-        Plan
-        | EnterPlan
-        | ExitPlan
-        | AskUser
-        | Skill
-        | SearchTool
-        | GoalUpdate
+        Plan | EnterPlan | ExitPlan | AskUser | Skill | SearchTool | GoalUpdate
         | AgentCollaboration => true,
 
         // Read class.
