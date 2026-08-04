@@ -1802,6 +1802,14 @@ mod tests {
                 has_task, *subagents,
                 "[{label}] spawn_subagent presence should match subagents_enabled={subagents}; got tools: {names:?}"
             );
+            for collaboration_tool in ["list_agents", "send_message", "followup_task", "wait_agent"]
+            {
+                assert_eq!(
+                    names.contains(&collaboration_tool),
+                    *subagents,
+                    "[{label}] {collaboration_tool} presence should match subagents_enabled={subagents}; got tools: {names:?}"
+                );
+            }
             assert!(
                 names.contains(&"enter_plan_mode"),
                 "[{label}] enter_plan_mode must always be present (TUI plan-mode keybind needs it); got tools: {names:?}"
