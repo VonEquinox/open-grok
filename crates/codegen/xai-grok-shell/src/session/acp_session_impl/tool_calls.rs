@@ -560,7 +560,8 @@ impl SessionActor {
             }
             map
         };
-        let shared_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
+        let shared_xai_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
+        let shared_codex_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
         let workspace_ops = self.workspace_ops.clone();
         let pending_interjections = self.pending_interjections.clone();
         let session_id: Arc<str> = Arc::from(&*self.session_info.id.0);
@@ -570,7 +571,11 @@ impl SessionActor {
             .map(|(idx, prepared)| {
                 let prepared = Arc::new(prepared.clone());
                 let am = self.auth_manager.clone();
-                let shared_recovery = Arc::clone(&shared_recovery);
+                let auth_refresh_route = self.tool_auth_refresh_route(&prepared.tool_name);
+                let shared_recovery = match auth_refresh_route {
+                    ToolAuthRefreshRoute::XaiSession => Arc::clone(&shared_xai_recovery),
+                    ToolAuthRefreshRoute::CodexOAuth => Arc::clone(&shared_codex_recovery),
+                };
                 let workspace_ops = workspace_ops.clone();
                 let session_id = session_id.clone();
                 let pending_interjections = pending_interjections.clone();
@@ -601,6 +606,7 @@ impl SessionActor {
                             biased;
                             result = call_with_auth_retry(
                                 am.as_ref(),
+                                auth_refresh_route,
                                 Some(&shared_recovery),
                                 &prepared.tool_name,
                                 run_tool,
@@ -616,6 +622,7 @@ impl SessionActor {
                     } else {
                         call_with_auth_retry(
                             am.as_ref(),
+                            auth_refresh_route,
                             Some(&shared_recovery),
                             &prepared.tool_name,
                             run_tool,
@@ -1068,6 +1075,7 @@ impl SessionActor {
             }
             result = call_with_auth_retry(
                 self.auth_manager.as_ref(),
+                self.tool_auth_refresh_route(&prepared.tool_name),
                 None,
                 &prepared.tool_name,
                 dispatch,

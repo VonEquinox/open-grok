@@ -1784,7 +1784,9 @@ fn resolve_subagent_permission_mode(
 pub use xai_grok_agent::config::AgentDefinition;
 pub use xai_grok_agent::config::Effort;
 pub use xai_grok_agent::config::PermissionMode;
-pub use xai_grok_shared::ui_config::{ContextualHints, ToolModePreference, UiConfig};
+pub use xai_grok_shared::ui_config::{
+    ContextualHints, ImageGenerationProvider, ToolModePreference, UiConfig,
+};
 /// Configuration for selecting the agent definition.
 ///
 /// Set in `config.toml` under `[agent]`:

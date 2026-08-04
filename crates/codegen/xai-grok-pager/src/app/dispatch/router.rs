@@ -89,15 +89,16 @@ use super::settings::setters::{
     set_contextual_hint_undo, set_contextual_hint_word_select, set_deepseek_api_key,
     set_default_model, set_default_selected_permission, set_display_refresh_auto_cadence,
     set_enter_steers, set_fireworks_api_key, set_fork_secondary_model, set_group_tool_verbs,
-    set_hunk_tracker_mode, set_invert_scroll, set_keep_text_selection, set_kimi_api_endpoint,
-    set_kimi_api_key, set_local_feature_flag, set_max_thoughts_width, set_memory_model,
-    set_multiline_mode, set_opencode_go_api_key, set_opencode_go_enabled_models,
-    set_page_flip_on_send, set_perplexity_api_key, set_perplexity_web_search,
-    set_prompt_suggestions, set_recap_model, set_remember_tool_approvals, set_render_mermaid,
-    set_respect_manual_folds, set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed,
-    set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme, set_timeline,
-    set_timestamps, set_vim_mode, set_voice_capture_mode, set_voice_keybind_enabled,
-    set_voice_stt_language, set_wafer_api_key, set_web_search_source, set_x_search_enabled,
+    set_hunk_tracker_mode, set_image_generation_provider, set_invert_scroll,
+    set_keep_text_selection, set_kimi_api_endpoint, set_kimi_api_key, set_local_feature_flag,
+    set_max_thoughts_width, set_memory_model, set_multiline_mode, set_opencode_go_api_key,
+    set_opencode_go_enabled_models, set_page_flip_on_send, set_perplexity_api_key,
+    set_perplexity_web_search, set_prompt_suggestions, set_recap_model,
+    set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds, set_screen_mode,
+    set_scroll_lines, set_scroll_mode, set_scroll_speed, set_show_thinking_blocks, set_show_tips,
+    set_simple_mode, set_theme, set_timeline, set_timestamps, set_vim_mode, set_voice_capture_mode,
+    set_voice_keybind_enabled, set_voice_stt_language, set_wafer_api_key, set_web_search_source,
+    set_x_search_enabled,
 };
 use super::settings::ui::{
     dispatch_confirm_reset_setting, dispatch_open_command_palette,
@@ -1105,6 +1106,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetVimMode(v) => set_vim_mode(app, v),
         Action::SetRememberToolApprovals(v) => set_remember_tool_approvals(app, v),
         Action::SetCodeMode(v) => set_code_mode(app, v),
+        Action::SetImageGenerationProvider(v) => set_image_generation_provider(app, v),
         Action::SetAskUserQuestionTimeoutEnabled(v) => {
             set_ask_user_question_timeout_enabled(app, v)
         }

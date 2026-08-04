@@ -815,6 +815,11 @@ impl SessionActor {
             crate::session::placeholder_images::attached_image_references(&user_images)
         };
         self.tool_bridge_handle()
+            .update_resource(xai_grok_tools::types::resources::ImageGenerationTurnId(
+                uuid::Uuid::now_v7().to_string(),
+            ))
+            .await;
+        self.tool_bridge_handle()
             .update_resource(xai_grok_tools::types::resources::AttachedImages(
                 attached_image_refs,
             ))

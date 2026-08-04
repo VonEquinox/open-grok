@@ -641,7 +641,8 @@ fn parse_esc_ttl(raw: Option<String>) -> Duration {
 ///
 /// Current set:
 /// - `usage` — coding credit / billing UI (alias: `/cost`)
-/// - `imagine` — image generation entry point
+/// - `imagine` — Grok Imagine entry point (not restricted when the persisted
+///   OpenAI Images route is active)
 /// - `imagine-video` — video generation entry point
 /// - `voice` — voice dictation entry point (the Ctrl+Space / F8 keybinding is
 ///   gated separately in [`crate::app::dispatch::voice`], since it bypasses the
@@ -2161,6 +2162,11 @@ impl AppView {
         let names: Vec<String> = if restricted {
             TIER_RESTRICTED_COMMANDS
                 .iter()
+                .filter(|name| {
+                    !(**name == "imagine"
+                        && self.current_ui.image_generation_provider
+                            == Some(xai_grok_shell::agent::config::ImageGenerationProvider::OpenAi))
+                })
                 .map(|n| (*n).to_string())
                 .collect()
         } else {
