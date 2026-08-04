@@ -85,6 +85,24 @@ Scheduling and output:
 
 Swarm mode can be entered manually (`/swarm`, `/swarm on`) or for one turn (`/swarm <task>` / direct `agent_swarm`). Manual mode survives turns and takes precedence over one-shot triggers; task/tool activation auto-exits at the turn boundary.
 
+### Follow-ups during a swarm
+
+A foreground wait is typed (`ForegroundWaitKind` in `…/task/types.rs`), and the
+host counts the two kinds separately in `BlockingWaitState`:
+
+- A foreground `task` holds an **interruptible** wait. A prompt arriving during
+  it takes the send-now path and cancels the turn, so the new prompt runs next.
+- `agent_swarm` holds an **orchestration** wait. `queue_input` promotes an
+  explicit send-now to run next but never returns `cancel_running_turn`, because
+  aborting the turn drops the swarm future and `CancelResultReceiverOnDrop`
+  cancels every live member.
+
+So a follow-up typed during a swarm queues behind the running turn instead of
+discarding in-flight member work. To reach the orchestrator *during* the run,
+use the interjection path (`x.ai/interject`): it is consumed at the next model
+boundary and never cancels. `workflow` needs no special case — its tool call
+returns immediately and holds no wait.
+
 ## SubagentCoordinator lifecycle
 
 `SubagentCoordinator` is a field on `MvpAgent` (`RefCell`). It is **not** itself a long-lived OS thread; the **drain task** is.

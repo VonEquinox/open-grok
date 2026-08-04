@@ -1206,19 +1206,43 @@ pub trait ForegroundWaitGuard: Send {}
 
 impl<T: Send> ForegroundWaitGuard for T {}
 
-type ForegroundWaitFactory = dyn Fn() -> Box<dyn ForegroundWaitGuard> + Send + Sync;
+/// What the running turn is parked on, so the host can decide whether an
+/// arriving user prompt may abort the turn.
+///
+/// A single foreground child (`task`) is cheap to restart, so the host aborts
+/// the turn and runs the new prompt immediately. A swarm is a live cohort whose
+/// members all die with the turn, so aborting would throw away in-flight work
+/// the user did not ask to discard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForegroundWaitKind {
+    /// One foreground child; a user prompt may abort the turn.
+    #[default]
+    Interruptible,
+    /// A multi-member cohort; a user prompt must reach the orchestrator without
+    /// aborting the turn.
+    Orchestration,
+}
+
+type ForegroundWaitFactory =
+    dyn Fn(ForegroundWaitKind) -> Box<dyn ForegroundWaitGuard> + Send + Sync;
 
 /// Factory injected by hosts that expose a send-now wait window.
 #[derive(Clone)]
 pub struct SubagentForegroundWait(Arc<ForegroundWaitFactory>);
 
 impl SubagentForegroundWait {
-    pub fn new(factory: impl Fn() -> Box<dyn ForegroundWaitGuard> + Send + Sync + 'static) -> Self {
+    pub fn new(
+        factory: impl Fn(ForegroundWaitKind) -> Box<dyn ForegroundWaitGuard> + Send + Sync + 'static,
+    ) -> Self {
         Self(Arc::new(factory))
     }
 
     pub fn enter(&self) -> Box<dyn ForegroundWaitGuard> {
-        (self.0)()
+        self.enter_kind(ForegroundWaitKind::Interruptible)
+    }
+
+    pub fn enter_kind(&self, kind: ForegroundWaitKind) -> Box<dyn ForegroundWaitGuard> {
+        (self.0)(kind)
     }
 }
 
