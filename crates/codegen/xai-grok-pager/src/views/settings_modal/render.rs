@@ -633,14 +633,10 @@ pub(super) fn render_rows(
                 let value_opt = values.get(row_pos).and_then(|v| v.as_ref());
                 let is_selected = row_idx == state.selected;
                 let is_hovered = hover_row_snapshot == Some(row_idx);
-                // Feature-flag rows surface context on select/hover so users
-                // don't have to discover Right/`▸`. Other rows stay expand-on-demand.
-                let is_expanded = description_visible(
-                    key,
-                    expanded_snapshot.contains(key),
-                    is_selected,
-                    is_hovered,
-                );
+                // Feature-flag rows surface context when selected (click /
+                // keyboard focus), not on hover. Other rows stay expand-on-demand.
+                let is_expanded =
+                    description_visible(key, expanded_snapshot.contains(key), is_selected);
 
                 // Group rows carry no scalar value; render a chevron row that
                 // opens the sub-sheet (skips the value/edited machinery below).
@@ -845,13 +841,8 @@ fn compute_filtered_row_heights(state: &SettingsModalState, area_width: u16) -> 
                 // Group rows carry no value; height = chevron row + the expanded
                 // description (cap 8), agreeing with the forward render loop.
                 let is_selected = row_idx == state.selected;
-                let is_hovered = state.hover_row == Some(row_idx);
-                let is_expanded = description_visible(
-                    key,
-                    state.expanded_keys.contains(key),
-                    is_selected,
-                    is_hovered,
-                );
+                let is_expanded =
+                    description_visible(key, state.expanded_keys.contains(key), is_selected);
                 if matches!(
                     meta.kind,
                     SettingKind::Group { .. } | SettingKind::DynamicMultiSelect { .. }
@@ -2743,16 +2734,15 @@ pub(super) fn render_setting_row(
 /// Whether a setting row should paint its description.
 ///
 /// Explicit Right/`▸` expansion always wins. Advanced local feature flags also
-/// surface their description while selected or hovered so opt-in flags explain
-/// themselves without discovering the expand chord.
+/// surface their description while selected (click / keyboard focus) so opt-in
+/// flags explain themselves without discovering the expand chord. Hover alone
+/// does not expand — that would thrash layout as the pointer moves.
 fn description_visible(
     key: crate::settings::SettingKey,
     explicitly_expanded: bool,
     is_selected: bool,
-    is_hovered: bool,
 ) -> bool {
-    explicitly_expanded
-        || (crate::settings::is_local_feature_flag(key) && (is_selected || is_hovered))
+    explicitly_expanded || (crate::settings::is_local_feature_flag(key) && is_selected)
 }
 
 /// Render the wrapped description for an expanded row.
@@ -3120,30 +3110,15 @@ mod description_visible_tests {
 
     #[test]
     fn ordinary_settings_need_explicit_expand() {
-        assert!(!description_visible("compact_mode", false, true, true));
-        assert!(description_visible("compact_mode", true, false, false));
+        assert!(!description_visible("compact_mode", false, true));
+        assert!(description_visible("compact_mode", true, false));
     }
 
     #[test]
-    fn local_feature_flags_show_on_select_or_hover() {
-        assert!(description_visible(
-            "features.web_fetch",
-            false,
-            true,
-            false
-        ));
-        assert!(description_visible(
-            "features.telemetry",
-            false,
-            false,
-            true
-        ));
-        assert!(!description_visible(
-            "features.web_fetch",
-            false,
-            false,
-            false
-        ));
-        assert!(description_visible("memory.enabled", true, false, false));
+    fn local_feature_flags_show_on_select_not_hover() {
+        assert!(description_visible("features.web_fetch", false, true));
+        assert!(!description_visible("features.telemetry", false, false));
+        assert!(!description_visible("features.web_fetch", false, false));
+        assert!(description_visible("memory.enabled", true, false));
     }
 }
