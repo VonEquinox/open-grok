@@ -447,13 +447,11 @@ impl SubagentBackend for ChannelBackend {
         let (respond_to, response_rx) = oneshot::channel();
         if self
             .tx
-            .send(SubagentEvent::WaitAgentMessages(
-                AgentMailboxWaitRequest {
-                    identity,
-                    timeout_ms,
-                    respond_to,
-                },
-            ))
+            .send(SubagentEvent::WaitAgentMessages(AgentMailboxWaitRequest {
+                identity,
+                timeout_ms,
+                respond_to,
+            }))
             .is_err()
         {
             return WaitAgentMessagesOutput {

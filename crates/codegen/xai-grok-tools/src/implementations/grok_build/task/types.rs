@@ -193,21 +193,10 @@ pub struct AgentMailboxIdentity {
     pub agent_id: String,
 }
 
-register_resource!(
-    "grok_build",
-    "AgentMailboxIdentity",
-    AgentMailboxIdentity
-);
+register_resource!("grok_build", "AgentMailboxIdentity", AgentMailboxIdentity);
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMailboxMessageKind {
@@ -236,36 +225,33 @@ pub struct AgentMailboxMessage {
     pub created_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct AgentRosterEntry {
     pub agent_id: String,
     pub is_root: bool,
     pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ListAgentsOutput {
     pub team_scope_id: String,
     pub agents: Vec<AgentRosterEntry>,
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMessageDeliveryStatus {
@@ -273,14 +259,18 @@ pub enum AgentMessageDeliveryStatus {
     Delivered,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct AgentMessageSendOutput {
     pub message_id: String,
     pub target_agent_id: String,
     pub status: AgentMessageDeliveryStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct WaitAgentMessagesOutput {
     pub messages: Vec<AgentMailboxMessage>,
     pub timed_out: bool,
@@ -1397,10 +1387,7 @@ mod tests {
                 tc("GrokBuild:task", ToolKind::Task),
                 tc("GrokBuild:agent_swarm", ToolKind::AgentSwarm),
                 tc("GrokBuild:workflow", ToolKind::Workflow),
-                tc(
-                    "GrokBuild:send_message",
-                    ToolKind::AgentCollaboration,
-                ),
+                tc("GrokBuild:send_message", ToolKind::AgentCollaboration),
                 tc("GrokBuild:get_task_output", ToolKind::BackgroundTaskAction),
                 tc("GrokBuild:kill_task", ToolKind::KillTaskAction),
                 ToolConfig::from_id("Mcp:custom_tool"),

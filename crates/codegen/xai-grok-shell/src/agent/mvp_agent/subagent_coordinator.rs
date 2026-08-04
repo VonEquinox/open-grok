@@ -164,7 +164,7 @@ impl xai_grok_tools::implementations::grok_build::task::coordinator::ChildRunner
         let parent_cmd_tx = this
             .sessions
             .borrow()
-            .get(&acp::SessionId::new(&message.team_scope_id))
+            .get(&acp::SessionId::new(message.team_scope_id.as_str()))
             .map(|handle| handle.cmd_tx.clone());
         crate::agent::subagent::emit_subagent_notification(
             &this.gateway,
