@@ -215,7 +215,7 @@ impl SessionEvent {
                 }
             }
             SessionEvent::ReAuthRequired => {
-                "The configured API key was rejected. Check ~/.opengrok/config.toml, \
+                "The configured API key was rejected. Check your Open Grok config.toml, \
                  then resend your message."
                     .to_string()
             }
@@ -760,7 +760,7 @@ mod tests {
     #[test]
     fn reauth_required_message_points_at_config() {
         let msg = SessionEvent::ReAuthRequired.message();
-        assert!(msg.contains("~/.opengrok/config.toml"));
+        assert!(msg.contains("Open Grok config.toml"));
         assert!(!msg.contains("/login"));
     }
 

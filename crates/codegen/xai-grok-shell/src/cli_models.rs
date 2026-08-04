@@ -6,7 +6,7 @@ use xai_acp_lib::{AcpAgentTx, acp_send};
 
 use crate::agent::config::Config as AgentConfig;
 
-/// Status for the `og models` banner.
+/// Status for the `open-grok models` banner.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AuthStatus {
     /// Catalog key of a model with an explicit credential in config.toml.

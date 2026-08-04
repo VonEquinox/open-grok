@@ -442,7 +442,7 @@ fn auto_respond_to_permissions(
 
 /// "Not signed in" error message, tailored to the session type.
 fn auth_required_message(_interactive: bool) -> String {
-    "No API key is configured for the selected model. Add `api_key` in      ~/.opengrok/config.toml."
+    "No API key is configured for the selected model. Add `api_key` to that model in your Open Grok config.toml."
         .to_string()
 }
 
@@ -511,8 +511,8 @@ fn selected_provider_auth(
                 Ok(false)
             } else {
                 Err(anyhow::anyhow!(
-                    "No API key is configured for the selected model. Add `api_key` in \
-                         ~/.opengrok/config.toml."
+                    "No API key is configured for the selected model. Add `api_key` to that model \
+                         in your Open Grok config.toml."
                 ))
             })
         }
@@ -851,6 +851,14 @@ fn headless_materialize_ctx(
     }
 }
 
+fn persisted_summary_by_session_id(
+    session_id: &str,
+) -> Option<xai_grok_shell::session::persistence::Summary> {
+    let session_dir = xai_grok_shell::session::persistence::find_session_dir_by_id(session_id)?;
+    let summary = std::fs::read(session_dir.join("summary.json")).ok()?;
+    serde_json::from_slice(&summary).ok()
+}
+
 /// Run a headless single-turn prompt: spawn the agent, drive the ACP lifecycle, stream to stdout.
 pub async fn run_single_turn(
     prompt: HeadlessPrompt,
@@ -949,12 +957,12 @@ pub async fn run_single_turn(
     .await?;
     let persisted_model = match &materialized {
         MaterializedStartup::Resume { session_id, .. } => {
-            xai_grok_shell::session::persistence::find_summary_by_session_id(session_id)
+            persisted_summary_by_session_id(session_id)
                 .map(|summary| summary.current_model_id.0.to_string())
         }
         MaterializedStartup::Fork {
             parent_session_id, ..
-        } => xai_grok_shell::session::persistence::find_summary_by_session_id(parent_session_id)
+        } => persisted_summary_by_session_id(parent_session_id)
             .map(|summary| summary.current_model_id.0.to_string()),
         MaterializedStartup::NewAuto | MaterializedStartup::NewWithId { .. } => None,
     };

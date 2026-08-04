@@ -705,6 +705,33 @@ pub fn default_settings() -> Vec<SettingMeta> {
             hidden_in_minimal: false,
         },
         SettingMeta {
+            key: "enter_steers",
+            category: SettingCategory::Editor,
+            owner: SettingOwner::Shared,
+            label: "Enter steers mid-turn",
+            description: "When a turn is running, swap Enter and the send-now chord \
+                          (Ctrl+Enter, or Ctrl+O / Ctrl+L on some terminals). Off \
+                          (default): Enter queues a follow-up; the chord sends now \
+                          (cancels the turn). On: Enter sends now; the chord queues. \
+                          Matches Codex's historical steer toggle, adapted to Open \
+                          Grok's Enter ↔ Ctrl+Enter pair (Codex used Enter ↔ Tab).",
+            keywords: &[
+                "steer",
+                "enter",
+                "queue",
+                "send now",
+                "interject",
+                "ctrl+enter",
+                "follow-up",
+                "mid-turn",
+            ],
+            kind: SettingKind::Bool {
+                default: ui_default.enter_steers_enabled(),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
             // Persisted key stays `simple_mode`; the user-facing label
             // distinguishes the PROMPT vim-mode (this setting) from the
             // scrollback `vim_mode` keybindings below.
@@ -2068,7 +2095,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Memory tools",
-            description: "Enable persistent memory tools, /memory, /remember, and /dream.",
+            description: "Turn on cross-session memory so the agent can store and recall notes \
+                          with /memory, /remember, and /dream. Off by default; restart after \
+                          enabling so new sessions load the memory tools.",
             keywords: &["memory", "remember", "dream", "persistent", "tools", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
@@ -2079,9 +2108,31 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Automatic memory dreaming",
-            description: "Allow automatic background memory consolidation when memory is enabled.",
+            description: "When Memory tools are on, periodically consolidate recent sessions \
+                          into durable MEMORY.md notes in the background. Disable if you only \
+                          want manual /remember and /dream.",
             keywords: &["memory", "dream", "automatic", "consolidation", "flag"],
             kind: SettingKind::Bool { default: true },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "features.telemetry",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Product telemetry",
+            description: "Send anonymous product-analytics events (feature usage counts, not \
+                          your prompts or code). Separate from Privacy → coding-data sharing. \
+                          Restart required.",
+            keywords: &[
+                "telemetry",
+                "analytics",
+                "metrics",
+                "product",
+                "usage",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
             restart_required: true,
             hidden_in_minimal: false,
         },
@@ -2090,7 +2141,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "LSP tools",
-            description: "Enable language-server navigation and code intelligence tools.",
+            description: "Expose language-server tools so the agent can jump to definitions, \
+                          find references, and use other IDE-style code intelligence from \
+                          configured LSP servers. Restart required.",
             keywords: &["lsp", "language server", "definition", "references", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
@@ -2101,8 +2154,31 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Web fetch tool",
-            description: "Enable fetching and reading specific web pages from new sessions.",
+            description: "Let the agent fetch a specific URL and read the page as markdown \
+                          (beyond search snippets). Off by default; applies to new sessions \
+                          after restart.",
             keywords: &["web", "fetch", "url", "research", "tool", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "toolset.web_fetch.allow_local",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Web fetch allow localhost",
+            description: "When Web fetch is on, also allow fetches to explicit loopback hosts \
+                          (localhost, 127.0.0.0/8, ::1) — useful for local docs servers. \
+                          Private LAN and cloud-metadata addresses stay blocked.",
+            keywords: &[
+                "web",
+                "fetch",
+                "localhost",
+                "loopback",
+                "ssrf",
+                "local",
+                "flag",
+            ],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
             hidden_in_minimal: false,
@@ -2112,7 +2188,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Two-pass compaction",
-            description: "Prefire a background summary before context compaction.",
+            description: "Before context fills up, prefire a background summary of older \
+                          history, then compact NOTE + recent tail when the threshold hits. \
+                          Can improve long-session continuity; restart required.",
             keywords: &["two pass", "compaction", "summary", "context", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
@@ -2123,10 +2201,28 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Non-Git workspace warning",
-            description: "Show a blocking warning when a session starts outside a Git repository.",
+            description: "Show a blocking startup warning when the working directory is not \
+                          a Git repo, so you can quit before losing rewind/hunk tracking that \
+                          depends on Git. Restart required.",
             keywords: &["git", "repository", "workspace", "warning", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "features.remember_mode",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Remember-mode shortcut",
+            description: "On an empty prompt, press # to enter remember mode and save the next \
+                          line as a memory note (same as /remember with no args). Applies \
+                          immediately; Memory tools still need to be enabled for notes to persist.",
+            keywords: &[
+                "remember", "memory", "hash", "#", "shortcut", "mode", "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            // Gated by a live config.toml read on each `#` keypress.
+            restart_required: false,
             hidden_in_minimal: false,
         },
         SettingMeta {
@@ -2134,9 +2230,11 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Doom-loop recovery",
-            description: "Detect repetitive model loops and retry the turn with recovery guidance.",
+            description: "When the model repeats the same failing tool pattern, inject recovery \
+                          guidance and retry the turn instead of spinning. On by default; turn \
+                          off only if you want raw unassisted retries. Restart required.",
             keywords: &["doom loop", "repetition", "recovery", "retry", "flag"],
-            kind: SettingKind::Bool { default: false },
+            kind: SettingKind::Bool { default: true },
             restart_required: true,
             hidden_in_minimal: false,
         },
@@ -2145,10 +2243,106 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Subagent worktree snapshots",
-            description: "Store completed isolated subagent worktrees as durable Git refs.",
+            description: "After an isolated subagent finishes, snapshot its worktree into a \
+                          durable Git ref and remove the temp directory so you can resume later \
+                          without keeping every worktree on disk. Restart required.",
             keywords: &[
                 "subagent", "worktree", "snapshot", "git ref", "resume", "flag",
             ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "diagnostics.crash_handler",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Crash handler",
+            description: "Install a richer crash/panic handler that captures stack traces and \
+                          restores the terminal more reliably after a hard failure. Off by \
+                          default; restart required to install.",
+            keywords: &["crash", "handler", "panic", "diagnostics", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "ui.mouse_reporting_toggle",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Mouse reporting toggle",
+            description: "Register Ctrl+R (scrollback focused) and /toggle-mouse-reporting so you \
+                          can turn terminal mouse capture off for native click-drag copy/paste, \
+                          then turn TUI mouse features back on. Restart required.",
+            keywords: &[
+                "mouse",
+                "reporting",
+                "toggle",
+                "ctrl+r",
+                "capture",
+                "copy",
+                "paste",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "suggestions.enabled",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Shell command suggestions",
+            description: "While typing shell/bash-style input, show inline suggestions from \
+                          command history and path completion. Distinct from Appearance → \
+                          Prompt suggestions. Restart required.",
+            keywords: &[
+                "suggestions",
+                "shell",
+                "completion",
+                "history",
+                "path",
+                "flag",
+            ],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "suggestions.ai_enabled",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "AI shell suggestions",
+            description: "When Shell command suggestions are on, also ask a small model for \
+                          command completions. Uses extra tokens; leave off if you only want \
+                          history/path matches. Restart required.",
+            keywords: &["suggestions", "ai", "shell", "completion", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "sandbox.auto_allow_bash",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Sandbox auto-allow bash",
+            description: "When an OS sandbox profile is active, auto-approve bash tool calls \
+                          that the sandbox already confines — fewer permission prompts, still \
+                          blocked outside the sandbox. Restart required.",
+            keywords: &["sandbox", "bash", "auto", "allow", "permissions", "flag"],
+            kind: SettingKind::Bool { default: false },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "tools.respect_gitignore",
+            category: SettingCategory::Advanced,
+            owner: SettingOwner::Shell,
+            label: "Respect .gitignore in tools",
+            description: "Make search, find, and other file tools skip paths listed in \
+                          .gitignore by default (build artifacts, node_modules, etc.). \
+                          Restart required.",
+            keywords: &["gitignore", "tools", "search", "ignore", "flag"],
             kind: SettingKind::Bool { default: false },
             restart_required: true,
             hidden_in_minimal: false,
