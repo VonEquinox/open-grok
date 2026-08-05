@@ -2792,6 +2792,7 @@ mod tests {
             branch: None,
             repo_name: repo_name.into(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }
     }

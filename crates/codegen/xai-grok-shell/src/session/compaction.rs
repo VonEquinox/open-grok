@@ -3013,6 +3013,7 @@ mod inline_auto_compact_flow_tests {
             pending_web_search_reload: None,
             notifications_suppressed: false,
             rewindable: false,
+            front_message_committed: false,
             nudges_used_this_session: 0,
             swarm_mode: crate::session::swarm_mode::SwarmModeTracker::default(),
         });
@@ -3058,6 +3059,7 @@ mod inline_auto_compact_flow_tests {
                 gateway: GatewaySender::new(gateway_tx),
                 gateway_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 persistence_tx,
+                disk_full: crate::session::notifications::idle_disk_full_rx(),
             },
             permissions: PermissionHandle::allow_all(),
             tool_context,
@@ -3214,6 +3216,9 @@ mod inline_auto_compact_flow_tests {
             last_recap_main_turn: std::cell::Cell::new(0),
             recap_in_flight: std::cell::Cell::new(false),
             recap_epoch: std::cell::Cell::new(0),
+            turn_summary_task: std::cell::RefCell::new(None),
+            turn_summary_generation: std::cell::Cell::new(0),
+            turn_summary_enabled: false,
             session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             streaming_turn_capture: parking_lot::Mutex::new(
                 crate::session::acp_session::StreamingTurnCapture::default(),

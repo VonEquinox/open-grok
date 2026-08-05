@@ -1833,6 +1833,7 @@ pub(crate) async fn run(
         MaterializedStartup::Resume {
             session_id,
             deferred_local_miss,
+            suppress_code_restore,
             ..
         } if args.worktree.is_some() => {
             tracing::info!(
@@ -1843,17 +1844,27 @@ pub(crate) async fn run(
             // Materialization-time provenance for the worktree failure hint;
             // the effect matches it against the exact deferred target.
             app.resume_local_miss = deferred_local_miss.then(|| session_id.clone());
+            if *suppress_code_restore {
+                app.suppress_code_restore_once = Some(session_id.clone());
+            }
             Some(Action::NewWorktreeSession {
                 load_session_id: Some(session_id.clone()),
                 label: args.worktree.as_ref().filter(|s| !s.is_empty()).cloned(),
                 git_ref: args.worktree_ref.clone(),
             })
         }
-        MaterializedStartup::Resume { session_id, .. } => {
+        MaterializedStartup::Resume {
+            session_id,
+            suppress_code_restore,
+            ..
+        } => {
             // CLI resume has no roster entry: `chat_kind` on LoadSession is the
             // conversation-entry bit only (false here). Process-wide `--chat`
             // still stamps kind=chat via SessionFlags.chat_mode in the load
             // effect; local Build disk rows are refused in dispatch / startup.
+            if *suppress_code_restore {
+                app.suppress_code_restore_once = Some(session_id.clone());
+            }
             Some(Action::LoadSession(
                 session_id.clone(),
                 session_cwd.clone(),
@@ -1878,12 +1889,18 @@ pub(crate) async fn run(
             parent_session_id,
             parent_cwd,
             new_session_id,
+            suppress_code_restore,
             ..
-        } => Some(Action::StartupForkSession {
-            parent_session_id: parent_session_id.clone(),
-            parent_cwd: parent_cwd.clone().or(session_cwd.clone()),
-            new_session_id: new_session_id.clone(),
-        }),
+        } => {
+            if *suppress_code_restore {
+                app.suppress_code_restore_once = Some(parent_session_id.clone());
+            }
+            Some(Action::StartupForkSession {
+                parent_session_id: parent_session_id.clone(),
+                parent_cwd: parent_cwd.clone().or(session_cwd.clone()),
+                new_session_id: new_session_id.clone(),
+            })
+        }
         MaterializedStartup::NewAuto if args.worktree.is_some() => {
             Some(Action::NewWorktreeSession {
                 load_session_id: None,
@@ -3994,18 +4011,71 @@ pub(crate) fn welcome_history_build_bypass_consume(
     })
 }
 
-/// Spawn effects into the task set. Returns `true` if the app should quit.
-fn process_effects(
-    effs: Vec<super::actions::Effect>,
-    tasks: &mut JoinSet<TaskResult>,
+/// Conversation `LoadSession` must never inherit process-wide local stamp.
+#[cfg(feature = "local-workspace")]
+fn conversation_load_in_effects(effs: &[super::actions::Effect]) -> bool {
+    use super::actions::Effect;
+    effs.iter().any(|e| {
+        matches!(
+            e,
+            Effect::LoadSession {
+                chat_kind: true,
+                ..
+            }
+        )
+    })
+}
+
+/// Consume id-keyed code-restore suppression on a matching `LoadSession` or
+/// worktree resume. Leaves `app.restore_code` unchanged for other loads.
+pub(crate) fn take_load_restore_code(
     app: &mut AppView,
-    progress_tx: &tokio::sync::mpsc::UnboundedSender<effects::RestoreProgressMsg>,
-) -> bool {
-    let flags = effects::SessionFlags {
+    effs: &[super::actions::Effect],
+) -> Option<bool> {
+    let Some(target) = app.suppress_code_restore_once.clone() else {
+        return app.restore_code;
+    };
+    let hit_load = effs.iter().any(|e| match e {
+        super::actions::Effect::LoadSession { session_id, .. } => session_id == &target,
+        _ => false,
+    });
+    let hit_worktree = effs.iter().any(|e| match e {
+        super::actions::Effect::CreateWorktreeSession {
+            load_session_id: Some(sid),
+            ..
+        } => sid == &target,
+        _ => false,
+    });
+    if hit_load {
+        app.suppress_code_restore_once = None;
+        return Some(false);
+    }
+    if hit_worktree {
+        // Peek only: worktree resume sends restoreCode:false, then
+        // WorktreeForked retargets suppress to the child LoadSession.
+        return Some(false);
+    }
+    app.restore_code
+}
+
+/// If one-shot suppress is armed for `from`, point it at `to`.
+pub(crate) fn retarget_suppress_code_restore(app: &mut AppView, from: &str, to: impl Into<String>) {
+    if app.suppress_code_restore_once.as_deref() == Some(from) {
+        app.suppress_code_restore_once = Some(to.into());
+    }
+}
+
+/// Shared [`SessionFlags`] builder (interactive loop + leader-cluster).
+pub(crate) fn session_flags_for_effects(
+    app: &mut AppView,
+    #[cfg_attr(not(feature = "local-workspace"), allow(unused_variables))]
+    effs: &[super::actions::Effect],
+) -> effects::SessionFlags {
+    effects::SessionFlags {
         plan_mode: app.plan_mode,
         subagents: app.subagents,
         ask_user: app.ask_user,
-        restore_code: app.restore_code,
+        restore_code: take_load_restore_code(app, effs),
         agent_override: app.agent_override.clone(),
         yolo_mode: app.default_yolo,
         auto_mode: super::dispatch::effective_auto(
@@ -4016,11 +4086,9 @@ fn process_effects(
         chat_mode: {
             #[cfg(feature = "local-workspace")]
             {
-                if welcome_history_build_bypass_applies(&effs, app.welcome_history_load_as_build) {
-                    if welcome_history_build_bypass_consume(
-                        &effs,
-                        app.welcome_history_load_as_build,
-                    ) {
+                if welcome_history_build_bypass_applies(effs, app.welcome_history_load_as_build) {
+                    if welcome_history_build_bypass_consume(effs, app.welcome_history_load_as_build)
+                    {
                         app.welcome_history_load_as_build = false;
                     }
                     false
@@ -4033,15 +4101,33 @@ fn process_effects(
                 app.chat_mode
             }
         },
+        #[cfg(feature = "local-workspace")]
+        local_workspace: {
+            if conversation_load_in_effects(effs) {
+                None // conversation resume is sandbox/gateway-owned
+            } else if welcome_oneshot_applies_to_effects(effs) {
+                match app.welcome_session_local_workspace.take() {
+                    Some(one_shot) => one_shot,
+                    None => crate::app::session_startup::active_local_workspace().unwrap_or(None),
+                }
+            } else {
+                crate::app::session_startup::active_local_workspace().unwrap_or(None)
+            }
+        },
         screen_mode_label: Some(app.screen_mode.meta_label()),
         is_api_key_auth: app.is_api_key_auth,
         resume_local_miss: app.resume_local_miss.clone(),
-        #[cfg(feature = "local-workspace")]
-        local_workspace: match app.welcome_session_local_workspace.take() {
-            Some(one_shot) => one_shot,
-            None => crate::app::session_startup::active_local_workspace().unwrap_or(None),
-        },
-    };
+    }
+}
+
+/// Spawn effects into the task set. Returns `true` if the app should quit.
+fn process_effects(
+    effs: Vec<super::actions::Effect>,
+    tasks: &mut JoinSet<TaskResult>,
+    app: &mut AppView,
+    progress_tx: &tokio::sync::mpsc::UnboundedSender<effects::RestoreProgressMsg>,
+) -> bool {
+    let flags = session_flags_for_effects(app, &effs);
     for eff in effs {
         let (quit, meta) = effects::execute(eff, tasks, &app.acp_tx, &app.cwd, &flags, progress_tx);
         // Install auth abort handle if the current auth state still matches.
@@ -4078,6 +4164,79 @@ fn process_effects(
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyEventState};
+
+    #[cfg(feature = "local-workspace")]
+    #[test]
+    fn welcome_oneshot_applies_to_create_worktree_session() {
+        use crate::app::actions::Effect;
+        use crate::app::agent::AgentId;
+        let worktree = Effect::CreateWorktreeSession {
+            agent_id: AgentId(0),
+            load_session_id: None,
+            label: None,
+            git_ref: None,
+            model_id: None,
+            preferred_session_id: None,
+            chat_kind: false,
+        };
+        assert!(welcome_oneshot_applies_to_effects(std::slice::from_ref(
+            &worktree
+        )));
+        assert!(!welcome_oneshot_applies_to_effects(&[]));
+        assert!(!welcome_oneshot_applies_to_effects(&[Effect::Quit]));
+    }
+
+    #[cfg(feature = "local-workspace")]
+    #[test]
+    fn conversation_load_is_not_welcome_oneshot_or_local_stamp() {
+        use crate::app::actions::Effect;
+        use crate::app::agent::AgentId;
+        let load = Effect::LoadSession {
+            agent_id: AgentId(0),
+            session_id: "c1".into(),
+            session_cwd: None,
+            chat_kind: true,
+        };
+        assert!(!welcome_oneshot_applies_to_effects(std::slice::from_ref(
+            &load
+        )));
+        assert!(conversation_load_in_effects(std::slice::from_ref(&load)));
+        let build_load = Effect::LoadSession {
+            agent_id: AgentId(0),
+            session_id: "b1".into(),
+            session_cwd: None,
+            chat_kind: false,
+        };
+        assert!(!conversation_load_in_effects(std::slice::from_ref(
+            &build_load
+        )));
+    }
+
+    #[cfg(feature = "local-workspace")]
+    #[test]
+    fn session_flags_consume_history_bypass_and_strip_conversation_stamp() {
+        use crate::app::actions::Effect;
+        use crate::app::agent::AgentId;
+        let mut app = crate::app::app_view::tests::test_app();
+        app.chat_mode = true;
+        app.welcome_history_load_as_build = true;
+        let load = Effect::LoadSession {
+            agent_id: AgentId(0),
+            session_id: "c1".into(),
+            session_cwd: None,
+            chat_kind: true,
+        };
+        let flags = session_flags_for_effects(&mut app, std::slice::from_ref(&load));
+        assert!(!flags.chat_mode, "history bypass must clear chat_mode");
+        assert!(
+            !app.welcome_history_load_as_build,
+            "LoadSession consumes the bypass"
+        );
+        assert!(
+            flags.local_workspace.is_none(),
+            "conversation load must strip local stamp"
+        );
+    }
 
     #[test]
     fn startup_auth_plan_offers_provider_choice_when_xai_is_missing() {
@@ -4210,6 +4369,62 @@ mod tests {
         assert_eq!(
             requested_model_provider(effective, &visible, &providers),
             Some(PrimaryProvider::Xai)
+        );
+    }
+
+    #[test]
+    fn take_load_restore_code_is_oneshot_on_matching_session_only() {
+        use crate::app::actions::Effect;
+        use crate::app::agent::AgentId;
+        let mut app = crate::app::app_view::tests::test_app();
+        app.restore_code = None;
+        app.suppress_code_restore_once = Some("child".into());
+        let other_load = Effect::LoadSession {
+            agent_id: AgentId(0),
+            session_id: "other".into(),
+            session_cwd: None,
+            chat_kind: false,
+        };
+        assert_eq!(
+            take_load_restore_code(&mut app, std::slice::from_ref(&other_load)),
+            None
+        );
+        assert_eq!(app.suppress_code_restore_once.as_deref(), Some("child"));
+        let wt = Effect::CreateWorktreeSession {
+            agent_id: AgentId(0),
+            load_session_id: Some("child".into()),
+            label: None,
+            git_ref: None,
+            model_id: None,
+            preferred_session_id: None,
+            chat_kind: false,
+        };
+        assert_eq!(
+            take_load_restore_code(&mut app, std::slice::from_ref(&wt)),
+            Some(false)
+        );
+        assert_eq!(
+            app.suppress_code_restore_once.as_deref(),
+            Some("child"),
+            "worktree resume peeks suppress without consuming"
+        );
+
+        let load = Effect::LoadSession {
+            agent_id: AgentId(0),
+            session_id: "child".into(),
+            session_cwd: None,
+            chat_kind: false,
+        };
+        assert_eq!(
+            take_load_restore_code(&mut app, std::slice::from_ref(&load)),
+            Some(false)
+        );
+        assert!(app.suppress_code_restore_once.is_none());
+        app.restore_code = Some(true);
+        assert_eq!(
+            take_load_restore_code(&mut app, std::slice::from_ref(&load)),
+            Some(true),
+            "later loads must use app.restore_code, not sticky false"
         );
     }
 

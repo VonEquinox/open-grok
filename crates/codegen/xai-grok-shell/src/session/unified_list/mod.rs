@@ -233,6 +233,11 @@ pub async fn build_unified_list(
     let exclude_conversations = excludes_conversations(&facet_filters);
     let exclude_build = excludes_build(&facet_filters);
     let over = crate::session::merge::over_fetch(limit);
+    let cwd_scope = if req.allow_relax {
+        crate::session::merge::CwdScope::RelaxIfEmpty
+    } else {
+        crate::session::merge::CwdScope::WithSiblings
+    };
     let can_relax = relax_eligible(RelaxGate {
         opted_in: req.allow_relax,
         no_facet_filters: facet_filters.is_empty(),
@@ -245,7 +250,9 @@ pub async fn build_unified_list(
         }
         let cwd = req.cwd.as_deref();
         if can_relax {
-            let lanes = crate::session::merge::fetch_lanes(registry_client, cwd, None, over).await;
+            let lanes =
+                crate::session::merge::fetch_lanes(registry_client, cwd, cwd_scope, None, over)
+                    .await;
             let rows = to_rows(
                 crate::session::merge::merge(
                     lanes.remote.clone(),
@@ -264,9 +271,14 @@ pub async fn build_unified_list(
                 }),
             }
         } else {
-            let merged =
-                crate::session::merge::fetch_merged(registry_client, cwd, query.as_deref(), over)
-                    .await;
+            let merged = crate::session::merge::fetch_merged(
+                registry_client,
+                cwd,
+                cwd_scope,
+                query.as_deref(),
+                over,
+            )
+            .await;
             LocalLane {
                 rows: to_rows(merged, reg),
                 relax: None,
@@ -537,6 +549,7 @@ mod tests {
             git_root_dir: Some("/Users/me/xai".into()),
             git_remotes: vec!["git@github.com:example/repo.git".into()],
             source_workspace_dir: Some("/Users/me/xai-src".into()),
+            last_turn_summary: None,
             session_kind: Some("worktree".into()),
         }
     }
