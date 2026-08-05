@@ -2344,7 +2344,8 @@ pub(in crate::app::dispatch) fn set_default_model(
                 Some(PrimaryProvider::Wafer) => {
                     app.cancel_pending_wafer_rebind(aid);
                 }
-                Some(PrimaryProvider::Xai | PrimaryProvider::Codex) | None => {}
+                Some(PrimaryProvider::Xai | PrimaryProvider::Codex | PrimaryProvider::Meta)
+                | None => {}
             }
             crate::app::dispatch::maybe_drain_queue_and_note_peek(app, aid)
         } else {

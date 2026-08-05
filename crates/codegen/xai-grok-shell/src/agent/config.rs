@@ -3657,7 +3657,8 @@ pub fn resolve_model_list(
     prefetched: Option<IndexMap<String, ModelEntry>>,
 ) -> IndexMap<String, ModelEntry> {
     resolve_model_list_with_provider_catalogs(
-        cfg, prefetched, None, false, None, false, None, false, None, false, None, false,
+        cfg, prefetched, None, false, None, false, None, false, None, false, None, false, None,
+        false,
     )
 }
 
@@ -3688,6 +3689,8 @@ pub fn resolve_model_list_with_codex(
         false,
         None,
         false,
+        None,
+        false,
     )
 }
 
@@ -3705,6 +3708,8 @@ pub fn resolve_model_list_with_provider_catalogs(
     fireworks_authoritative: bool,
     deepseek_remote: Option<IndexMap<String, ModelEntry>>,
     deepseek_authoritative: bool,
+    meta_remote: Option<IndexMap<String, ModelEntry>>,
+    meta_authoritative: bool,
     opencode_go_remote: Option<IndexMap<String, ModelEntry>>,
     opencode_go_authoritative: bool,
 ) -> IndexMap<String, ModelEntry> {
@@ -3849,6 +3854,13 @@ pub fn resolve_model_list_with_provider_catalogs(
         deepseek_remote,
         ModelProvider::DeepSeek,
         deepseek_authoritative,
+    );
+    merge_remote_provider_partition(
+        &mut resolved,
+        &defaults,
+        meta_remote,
+        ModelProvider::Meta,
+        meta_authoritative,
     );
     merge_remote_provider_partition(
         &mut resolved,
@@ -4182,6 +4194,10 @@ fn default_models(
                 m.env_key = Some(EnvKeys::single(
                     crate::deepseek_models::DEEPSEEK_API_KEY_ENV,
                 ));
+            }
+            if m.provider == ModelProvider::Meta {
+                m.base_url = Some(crate::meta_models::api_base_url());
+                m.env_key = Some(EnvKeys::single(crate::meta_models::META_API_KEY_ENV));
             }
             if m.provider == ModelProvider::Wafer {
                 m.base_url = Some(crate::wafer_models::api_base_url());
@@ -4527,7 +4543,7 @@ impl ConfigModelOverride {
             // across a provider override. Explicit fields below may opt back
             // into values valid for the newly selected provider.
             entry.info.api_backend = match entry.info.provider {
-                ModelProvider::Codex => ApiBackend::Responses,
+                ModelProvider::Codex | ModelProvider::Meta => ApiBackend::Responses,
                 ModelProvider::Xai
                 | ModelProvider::Kimi
                 | ModelProvider::Fireworks
@@ -14057,6 +14073,8 @@ default = "grok-4.5"
             false,
             None,
             false,
+            None,
+            false,
         );
         assert!(resolved.contains_key("grok-4.5"));
         assert!(resolved.contains_key("kimi-k3"));
@@ -14334,6 +14352,8 @@ default = "grok-4.5"
             false,
             None,
             false,
+            None,
+            false,
         );
         assert!(resolved.contains_key("grok-live"));
         assert!(resolved.contains_key("gpt-5.6-sol"));
@@ -14359,6 +14379,8 @@ default = "grok-4.5"
             false,
             Some(kimi),
             true,
+            None,
+            false,
             None,
             false,
             None,

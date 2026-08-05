@@ -1568,6 +1568,13 @@ impl SessionActor {
                     );
                     false
                 }
+                xai_grok_sampling_types::ModelProvider::Meta => {
+                    tracing::warn!(
+                        session_id = %self.session_info.id.0,
+                        "Meta API-key authentication cannot be refreshed; surfacing 401",
+                    );
+                    false
+                }
                 xai_grok_sampling_types::ModelProvider::Wafer => {
                     tracing::warn!(
                         session_id = %self.session_info.id.0,

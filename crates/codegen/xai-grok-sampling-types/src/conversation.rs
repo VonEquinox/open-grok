@@ -1630,7 +1630,10 @@ impl ConversationRequest {
                     // DeepSeek Responses has no opaque provider-native history
                     // carriers today; keep the match explicit so new dialects
                     // fail closed until their replay contract is defined.
-                    (Some(crate::ResponsesDialect::DeepSeek), _) => None,
+                    (
+                        Some(crate::ResponsesDialect::DeepSeek | crate::ResponsesDialect::Meta),
+                        _,
+                    ) => None,
                     _ => None,
                 };
                 if let Some(value) = value {

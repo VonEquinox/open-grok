@@ -1280,7 +1280,8 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         }
         Some(
             crate::app::app_view::PrimaryProvider::Xai
-            | crate::app::app_view::PrimaryProvider::Codex,
+            | crate::app::app_view::PrimaryProvider::Codex
+            | crate::app::app_view::PrimaryProvider::Meta,
         )
         | None => {}
     }

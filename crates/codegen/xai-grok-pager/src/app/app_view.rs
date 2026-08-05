@@ -411,6 +411,7 @@ pub enum PrimaryProvider {
     Kimi,
     Fireworks,
     DeepSeek,
+    Meta,
     OpenCodeGo,
     Wafer,
 }
@@ -437,6 +438,11 @@ impl PrimaryProvider {
             || provider.eq_ignore_ascii_case("deepseek-api")
         {
             Some(Self::DeepSeek)
+        } else if provider.eq_ignore_ascii_case("meta")
+            || provider.eq_ignore_ascii_case("meta_ai")
+            || provider.eq_ignore_ascii_case("meta-api")
+        {
+            Some(Self::Meta)
         } else if provider.eq_ignore_ascii_case("opencode_go")
             || provider.eq_ignore_ascii_case("opencode-go")
         {
@@ -1522,6 +1528,7 @@ impl AppView {
             | PrimaryProvider::Kimi
             | PrimaryProvider::Fireworks
             | PrimaryProvider::DeepSeek
+            | PrimaryProvider::Meta
             | PrimaryProvider::OpenCodeGo
             | PrimaryProvider::Wafer => {
                 // Preserve the xAI snapshot only when crossing out of xAI.

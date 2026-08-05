@@ -151,6 +151,7 @@ fn select_startup_model(
             PrimaryProvider::Kimi => "Kimi",
             PrimaryProvider::Fireworks => "Fireworks AI",
             PrimaryProvider::DeepSeek => "DeepSeek",
+            PrimaryProvider::Meta => "Meta API",
             PrimaryProvider::OpenCodeGo => "OpenCode Go",
             PrimaryProvider::Wafer => "Wafer AI",
         };
