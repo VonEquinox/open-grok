@@ -68,6 +68,24 @@ fn next_deepseek_operation_generation(app: &mut AppView) -> u64 {
     app.deepseek_operation_generation
 }
 
+fn remember_loaded_meta_sessions(app: &mut AppView) {
+    let mut targets = Vec::new();
+    for (&agent_id, agent) in &mut app.agents {
+        if PrimaryProvider::for_current_model(&agent.session.models) == Some(PrimaryProvider::Meta)
+        {
+            agent.session.provider_rebind_pending = true;
+            targets.push(agent_id);
+        }
+    }
+    app.pending_meta_rebind_agents.extend(targets);
+}
+
+fn next_meta_operation_generation(app: &mut AppView) -> u64 {
+    app.meta_operation_generation = app.meta_operation_generation.wrapping_add(1).max(1);
+    app.meta_runtime_update_pending = true;
+    app.meta_operation_generation
+}
+
 fn remember_loaded_opencode_go_sessions(app: &mut AppView) {
     let mut targets = Vec::new();
     for (&agent_id, agent) in &mut app.agents {
@@ -289,6 +307,29 @@ pub(in crate::app::dispatch) fn clear_deepseek_api_key(app: &mut AppView) -> Vec
     let generation = next_deepseek_operation_generation(app);
     app.show_toast("Removing DeepSeek API key…");
     vec![Effect::UpdateDeepSeekApiKey {
+        generation,
+        key: None,
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_meta_api_key(
+    app: &mut AppView,
+    key: SecretInput,
+) -> Vec<Effect> {
+    remember_loaded_meta_sessions(app);
+    let generation = next_meta_operation_generation(app);
+    app.show_toast("Saving Meta API key and refreshing models…");
+    vec![Effect::UpdateMetaApiKey {
+        generation,
+        key: Some(key),
+    }]
+}
+
+pub(in crate::app::dispatch) fn clear_meta_api_key(app: &mut AppView) -> Vec<Effect> {
+    remember_loaded_meta_sessions(app);
+    let generation = next_meta_operation_generation(app);
+    app.show_toast("Removing Meta API key…");
+    vec![Effect::UpdateMetaApiKey {
         generation,
         key: None,
     }]
@@ -2312,6 +2353,8 @@ pub(in crate::app::dispatch) fn set_default_model(
         Some(PrimaryProvider::Fireworks)
     } else if app.pending_deepseek_rebind_agents.contains(&aid) {
         Some(PrimaryProvider::DeepSeek)
+    } else if app.pending_meta_rebind_agents.contains(&aid) {
+        Some(PrimaryProvider::Meta)
     } else if app.pending_opencode_go_rebind_agents.contains(&aid) {
         Some(PrimaryProvider::OpenCodeGo)
     } else if app.pending_wafer_rebind_agents.contains(&aid) {
@@ -2338,14 +2381,16 @@ pub(in crate::app::dispatch) fn set_default_model(
                 Some(PrimaryProvider::DeepSeek) => {
                     app.cancel_pending_deepseek_rebind(aid);
                 }
+                Some(PrimaryProvider::Meta) => {
+                    app.cancel_pending_meta_rebind(aid);
+                }
                 Some(PrimaryProvider::OpenCodeGo) => {
                     app.cancel_pending_opencode_go_rebind(aid);
                 }
                 Some(PrimaryProvider::Wafer) => {
                     app.cancel_pending_wafer_rebind(aid);
                 }
-                Some(PrimaryProvider::Xai | PrimaryProvider::Codex | PrimaryProvider::Meta)
-                | None => {}
+                Some(PrimaryProvider::Xai | PrimaryProvider::Codex) | None => {}
             }
             crate::app::dispatch::maybe_drain_queue_and_note_peek(app, aid)
         } else {

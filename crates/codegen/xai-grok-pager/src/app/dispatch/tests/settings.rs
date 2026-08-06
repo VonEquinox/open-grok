@@ -742,6 +742,32 @@ fn dashboard_kimi_login_starts_at_service_picker() {
 }
 
 #[test]
+fn dashboard_meta_login_opens_secure_api_key_editor() {
+    use crate::views::settings_modal::{SettingsEntryPoint, SettingsModalMode};
+
+    let mut app = test_app_with_agent();
+    app.dashboard = Some(crate::views::dashboard::DashboardState::new());
+    app.active_view = ActiveView::AgentDashboard;
+
+    let effects = dispatch(Action::OpenMetaApiKeyEditor, &mut app);
+
+    assert!(effects.is_empty());
+    let state = app
+        .dashboard
+        .as_ref()
+        .and_then(|dashboard| dashboard.settings_modal.as_deref())
+        .expect("dashboard /login meta should open the Settings credential editor");
+    assert_eq!(state.entry_point, SettingsEntryPoint::ProviderLogin);
+    assert!(matches!(
+        state.mode(),
+        SettingsModalMode::EditingSecret {
+            key: "meta_api_key",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn set_kimi_service_live_applies_optimistically_and_is_idempotent() {
     let mut app = test_app_with_agent();
 

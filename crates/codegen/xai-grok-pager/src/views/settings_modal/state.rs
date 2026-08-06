@@ -583,6 +583,10 @@ impl SettingsModalState {
         self.try_open_provider_login_secret("deepseek_api_key")
     }
 
+    pub fn try_open_meta_provider_login(&mut self) -> bool {
+        self.try_open_provider_login_secret("meta_api_key")
+    }
+
     pub fn try_open_opencode_go_provider_login(&mut self) -> bool {
         self.try_open_provider_login_secret("opencode_go_api_key")
     }

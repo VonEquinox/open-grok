@@ -646,6 +646,12 @@ pub enum Action {
     },
     /// Remove the UI-stored DeepSeek credential.
     ClearDeepSeekApiKey,
+    /// Save the Meta Model API key from the dedicated masked editor.
+    SetMetaApiKey {
+        key: crate::settings::SecretInput,
+    },
+    /// Remove the UI-stored Meta credential.
+    ClearMetaApiKey,
     SetOpenCodeGoApiKey {
         key: crate::settings::SecretInput,
     },
@@ -770,6 +776,8 @@ pub enum Action {
     OpenFireworksApiKeyEditor,
     /// Open Settings directly in the secure DeepSeek API-key editor.
     OpenDeepSeekApiKeyEditor,
+    /// Open Settings directly in the secure Meta API-key editor.
+    OpenMetaApiKeyEditor,
     OpenOpenCodeGoApiKeyEditor,
     /// Open Settings directly in the secure Wafer AI API-key editor.
     OpenWaferApiKeyEditor,
@@ -1586,6 +1594,11 @@ pub enum Effect {
         generation: u64,
         key: Option<crate::settings::SecretInput>,
     },
+    /// Update the Meta credential, then refresh (or clear) its Muse catalog.
+    UpdateMetaApiKey {
+        generation: u64,
+        key: Option<crate::settings::SecretInput>,
+    },
     UpdateOpenCodeGoApiKey {
         generation: u64,
         key: Option<crate::settings::SecretInput>,
@@ -1630,6 +1643,15 @@ pub enum Effect {
     /// Rebind one loaded DeepSeek session to the live credential without
     /// changing the user's preferred model setting.
     RebindDeepSeekModel {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        model_id: acp::ModelId,
+        effort: Option<ReasoningEffort>,
+        generation: u64,
+    },
+    /// Rebind one loaded Meta session to the live credential without changing
+    /// the user's preferred model setting.
+    RebindMetaModel {
         agent_id: AgentId,
         session_id: acp::SessionId,
         model_id: acp::ModelId,
@@ -2583,6 +2605,15 @@ pub enum TaskResult {
         error: Option<String>,
         models: Option<acp::SessionModelState>,
     },
+    /// Completion of a Meta credential update and Muse catalog refresh.
+    MetaApiKeyUpdated {
+        configured: bool,
+        generation: u64,
+        stale: bool,
+        warning: Option<String>,
+        error: Option<String>,
+        models: Option<acp::SessionModelState>,
+    },
     OpenCodeGoModelsUpdated {
         configured: Option<bool>,
         mutation: bool,
@@ -2614,6 +2645,15 @@ pub enum TaskResult {
     },
     /// Completion of an automatic DeepSeek sampler/model rebind.
     DeepSeekModelRebindComplete {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        model_id: acp::ModelId,
+        effort: Option<ReasoningEffort>,
+        generation: u64,
+        result: Result<(), SwitchModelError>,
+    },
+    /// Completion of an automatic Meta sampler/model rebind.
+    MetaModelRebindComplete {
         agent_id: AgentId,
         session_id: acp::SessionId,
         model_id: acp::ModelId,

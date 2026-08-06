@@ -752,6 +752,9 @@ pub struct AppView {
     pub(crate) deepseek_operation_generation: u64,
     pub(crate) deepseek_runtime_update_pending: bool,
     pub(crate) pending_deepseek_rebind_agents: std::collections::HashSet<AgentId>,
+    pub(crate) meta_operation_generation: u64,
+    pub(crate) meta_runtime_update_pending: bool,
+    pub(crate) pending_meta_rebind_agents: std::collections::HashSet<AgentId>,
     pub(crate) opencode_go_operation_generation: u64,
     pub(crate) opencode_go_runtime_update_pending: bool,
     pub(crate) pending_opencode_go_rebind_agents: std::collections::HashSet<AgentId>,
@@ -1484,6 +1487,17 @@ impl AppView {
         }
     }
 
+    pub(crate) fn cancel_pending_meta_rebind(&mut self, agent_id: AgentId) -> bool {
+        let removed = self.pending_meta_rebind_agents.remove(&agent_id);
+        if let Some(agent) = self.agents.get_mut(&agent_id) {
+            let was_pending = agent.session.provider_rebind_pending;
+            agent.session.provider_rebind_pending = false;
+            removed || was_pending
+        } else {
+            removed
+        }
+    }
+
     pub(crate) fn cancel_pending_opencode_go_rebind(&mut self, agent_id: AgentId) -> bool {
         let removed = self.pending_opencode_go_rebind_agents.remove(&agent_id);
         if let Some(agent) = self.agents.get_mut(&agent_id) {
@@ -1843,6 +1857,9 @@ impl AppView {
             deepseek_operation_generation: 0,
             deepseek_runtime_update_pending: false,
             pending_deepseek_rebind_agents: Default::default(),
+            meta_operation_generation: 0,
+            meta_runtime_update_pending: false,
+            pending_meta_rebind_agents: Default::default(),
             opencode_go_operation_generation: 0,
             opencode_go_runtime_update_pending: false,
             pending_opencode_go_rebind_agents: Default::default(),
@@ -6438,6 +6455,9 @@ pub(crate) mod tests {
             deepseek_operation_generation: 0,
             deepseek_runtime_update_pending: false,
             pending_deepseek_rebind_agents: Default::default(),
+            meta_operation_generation: 0,
+            meta_runtime_update_pending: false,
+            pending_meta_rebind_agents: Default::default(),
             opencode_go_operation_generation: 0,
             opencode_go_runtime_update_pending: false,
             pending_opencode_go_rebind_agents: Default::default(),

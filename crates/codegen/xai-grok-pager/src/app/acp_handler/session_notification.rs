@@ -148,6 +148,8 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         Some(crate::app::app_view::PrimaryProvider::Fireworks)
     } else if app.pending_deepseek_rebind_agents.contains(&parent_id) {
         Some(crate::app::app_view::PrimaryProvider::DeepSeek)
+    } else if app.pending_meta_rebind_agents.contains(&parent_id) {
+        Some(crate::app::app_view::PrimaryProvider::Meta)
     } else if app.pending_opencode_go_rebind_agents.contains(&parent_id) {
         Some(crate::app::app_view::PrimaryProvider::OpenCodeGo)
     } else if app.pending_wafer_rebind_agents.contains(&parent_id) {
@@ -1272,6 +1274,9 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         Some(crate::app::app_view::PrimaryProvider::DeepSeek) => {
             app.cancel_pending_deepseek_rebind(parent_id);
         }
+        Some(crate::app::app_view::PrimaryProvider::Meta) => {
+            app.cancel_pending_meta_rebind(parent_id);
+        }
         Some(crate::app::app_view::PrimaryProvider::OpenCodeGo) => {
             app.cancel_pending_opencode_go_rebind(parent_id);
         }
@@ -1280,8 +1285,7 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         }
         Some(
             crate::app::app_view::PrimaryProvider::Xai
-            | crate::app::app_view::PrimaryProvider::Codex
-            | crate::app::app_view::PrimaryProvider::Meta,
+            | crate::app::app_view::PrimaryProvider::Codex,
         )
         | None => {}
     }

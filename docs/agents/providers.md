@@ -116,7 +116,7 @@ Home root: `$OPENGROK_HOME` or `~/.opengrok` via `xai_grok_config::grok_home()`.
 | Kimi Code | `auth.json` scope `kimi_code::api_key` | Settings / `/login kimi` |
 | Fireworks AI | `auth.json` scope `fireworks::api_key` | Settings / `/login fireworks` |
 | DeepSeek direct | `auth.json` scope `deepseek::api_key` | Settings / `/login deepseek` |
-| Meta API | `auth.json` scope `meta::api_key` or `META_API_KEY` | Environment / model config |
+| Meta API | `auth.json` scope `meta::api_key` or `META_API_KEY` | Settings / `/login meta` / environment |
 | Wafer AI | `auth.json` scope `wafer::api_key` | Settings / `/login wafer` |
 | OpenCode Go | `auth.json` scope `opencode_go::api_key` | Settings / `/login opencode-go` |
 | Perplexity Search fallback | `auth.json` scope `perplexity::api_key` | Settings |
