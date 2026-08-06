@@ -4650,6 +4650,10 @@ impl ConfigModelOverride {
         if !self.reasoning_efforts.is_empty() {
             entry.info.reasoning_efforts = self.reasoning_efforts.clone();
         }
+        if self.supports_reasoning_effort == Some(false) {
+            entry.info.reasoning_effort = None;
+            entry.info.reasoning_efforts.clear();
+        }
         if let Some(v) = self.supports_reasoning_summary_parameter {
             entry.info.supports_reasoning_summary_parameter = v;
         }
@@ -6085,7 +6089,11 @@ pub fn sampling_config_for_model(
             .sends_x_grok_headers()
             .then_some(client_version)
             .flatten(),
-        reasoning_effort: info.reasoning_effort,
+        reasoning_effort: if info.supports_reasoning_effort {
+            info.reasoning_effort
+        } else {
+            None
+        },
         service_tier: None,
         reasoning_summary: model_reasoning_summary(info),
         force_http1: false,
@@ -8923,6 +8931,93 @@ reasoning_effort = "low"
             None,
         );
         assert_eq!(sampling_config.api_backend, ApiBackend::Responses);
+    }
+    #[test]
+    fn reasoning_effort_override_supported_values_reach_sampler() {
+        let endpoints = EndpointsConfig::default();
+        let base = test_model_entry(
+            "reasoning-model",
+            "https://api.example.com/v1",
+            None,
+            None,
+            None,
+        );
+        let model = ConfigModelOverride {
+            reasoning_effort: Some(ReasoningEffort::High),
+            supports_reasoning_effort: Some(true),
+            reasoning_efforts: vec![ReasoningEffortOption {
+                id: "high".to_owned(),
+                value: ReasoningEffort::High,
+                label: "High".to_owned(),
+                description: None,
+                default: true,
+            }],
+            ..Default::default()
+        }
+        .apply("reasoning-model", Some(base), &endpoints);
+
+        assert!(model.info.supports_reasoning_effort);
+        assert_eq!(model.info.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(model.info.reasoning_efforts.len(), 1);
+        let sampling_config = sampling_config_for_model(
+            &model,
+            resolve_credentials(&model, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            sampling_config.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+    #[test]
+    fn reasoning_effort_override_false_clears_conflicting_values() {
+        let endpoints = EndpointsConfig::default();
+        let mut base = test_model_entry(
+            "plain-model",
+            "https://api.example.com/v1",
+            None,
+            None,
+            None,
+        );
+        base.info.supports_reasoning_effort = true;
+        base.info.reasoning_effort = Some(ReasoningEffort::Low);
+        base.info.reasoning_efforts = vec![ReasoningEffortOption {
+            id: "low".to_owned(),
+            value: ReasoningEffort::Low,
+            label: "Low".to_owned(),
+            description: None,
+            default: true,
+        }];
+        let mut model = ConfigModelOverride {
+            reasoning_effort: Some(ReasoningEffort::High),
+            supports_reasoning_effort: Some(false),
+            reasoning_efforts: vec![ReasoningEffortOption {
+                id: "high".to_owned(),
+                value: ReasoningEffort::High,
+                label: "High".to_owned(),
+                description: None,
+                default: true,
+            }],
+            ..Default::default()
+        }
+        .apply("plain-model", Some(base), &endpoints);
+        model.info.derive_reasoning_effort_fields();
+
+        assert!(!model.info.supports_reasoning_effort);
+        assert_eq!(model.info.reasoning_effort, None);
+        assert!(model.info.reasoning_efforts.is_empty());
+        let sampling_config = sampling_config_for_model(
+            &model,
+            resolve_credentials(&model, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(sampling_config.reasoning_effort, None);
     }
     #[test]
     fn parses_model_use_concise_true() {
