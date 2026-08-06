@@ -1086,6 +1086,7 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         "antigravity_skip_permissions" => Some(Action::SetAntigravitySkipPermissions(new)),
         "respect_manual_folds" => Some(Action::SetRespectManualFolds(new)),
         "page_flip_on_send" => Some(Action::SetPageFlipOnSend(new)),
+        "confirm_before_rewind" => Some(Action::SetConfirmBeforeRewind(new)),
         "combine_queued_prompts" => Some(Action::SetCombineQueuedPrompts(new)),
         "enter_steers" => Some(Action::SetEnterSteers(new)),
         "invert_scroll" => Some(Action::SetInvertScroll(new)),

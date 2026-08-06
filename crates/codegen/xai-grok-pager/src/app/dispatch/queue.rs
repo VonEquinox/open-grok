@@ -492,6 +492,8 @@ pub(crate) fn maybe_drain_queue(agent: &mut AgentView) -> QueueDrain {
         QueueEntryKind::Command => {
             // Currently only `/compact` — future slash commands will branch here.
             agent.session.start_command(AgentCommand::Compact);
+            // Compact owns the pane; a leftover wake marker must not shadow stop.
+            agent.running_wake_turn = None;
             agent.turn_started_at = Some(Instant::now());
 
             QueueDrain {

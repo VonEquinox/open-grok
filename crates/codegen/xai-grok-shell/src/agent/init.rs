@@ -28,15 +28,30 @@ pub fn bootstrap(
     // here: xAI product kill-switches (workflows_enabled, etc.) must never strip
     // fork features. Clients that thread remote_settings for managed-config
     // signature disarm still get that side effect before fail-closed policy read.
+    xai_grok_telemetry::startup::enter(xai_grok_telemetry::startup::StartupPhase::Bootstrap);
     let mut cfg = cfg.clone();
-    crate::agent::config::apply_remote_settings_side_effects(cfg.remote_settings.as_ref());
-    // Strip product flags before any policy/feature resolution.
-    cfg.remote_settings = None;
+    {
+        let _timer = crate::instrumentation_timer!("startup.bootstrap.remote_settings");
+        crate::agent::config::apply_remote_settings_side_effects(cfg.remote_settings.as_ref());
+        // Strip product flags before any policy/feature resolution.
+        cfg.remote_settings = None;
+    }
     crate::managed_config::managed_policy_gate()?;
-    let cfg = resolve_config(&cfg, auth_manager);
-    cfg.validate_model_filters()?;
-    init_process(&cfg, auth_manager);
-    let models_manager = ModelsManager::from_config(&cfg, prefetched, auth_manager.clone())?;
+    let cfg = {
+        let _timer = crate::instrumentation_timer!("startup.bootstrap.resolve_config");
+        let cfg = resolve_config(&cfg, auth_manager);
+        cfg.validate_model_filters()?;
+        cfg
+    };
+    {
+        let _timer = crate::instrumentation_timer!("startup.bootstrap.init_process");
+        init_process(&cfg, auth_manager);
+    }
+    xai_grok_telemetry::startup::enter(xai_grok_telemetry::startup::StartupPhase::ModelCatalog);
+    let models_manager = {
+        let _timer = crate::instrumentation_timer!("startup.bootstrap.models_manager");
+        ModelsManager::from_config(&cfg, prefetched, auth_manager.clone())?
+    };
 
     // Refresh on every auth refresh — the FSEvents watcher can silently die after
     // macOS sleep, stranding the catalog on bundled defaults.

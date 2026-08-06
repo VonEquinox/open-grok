@@ -4645,6 +4645,10 @@ impl MvpAgent {
         let subagents_enabled = self.cfg.borrow().subagents_enabled;
         let subagents_max_depth = self.cfg.borrow().subagents_max_depth;
         let tool_mode_preference = self.cfg.borrow().ui.code_mode;
+        let workflow_max_concurrent_agents = self
+            .cfg
+            .borrow()
+            .workflow_max_concurrent_agents;
         let ask_user_question_enabled = crate::upload::turn::parse_ask_user_question_from_meta(
                 session_meta,
             )
@@ -4878,6 +4882,7 @@ impl MvpAgent {
                     background_workflows_enabled,
                     subagents_enabled,
                     subagents_max_depth,
+                    workflow_max_concurrent_agents,
                     ask_user_question_enabled,
                     client_hooks,
                     prompt_display_cwd,

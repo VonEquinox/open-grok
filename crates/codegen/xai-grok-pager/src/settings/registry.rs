@@ -702,6 +702,7 @@ pub fn current_value_for(
         "combine_queued_prompts" => Some(SettingValue::Bool(
             crate::appearance::cache::load_combine_queued_prompts(),
         )),
+        "confirm_before_rewind" => Some(SettingValue::Bool(ui.confirm_before_rewind_enabled())),
         "enter_steers" => Some(SettingValue::Bool(
             crate::appearance::cache::load_enter_steers(),
         )),
@@ -1133,6 +1134,13 @@ mod tests {
                         *default,
                         ui.page_flip_on_send_enabled(),
                         "page_flip_on_send default drifts from UiConfig::default()"
+                    );
+                }
+                ("confirm_before_rewind", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.confirm_before_rewind_enabled(),
+                        "confirm_before_rewind default drifts from UiConfig::default()"
                     );
                 }
                 ("combine_queued_prompts", SettingKind::Bool { default }) => {

@@ -1234,8 +1234,9 @@ pub enum RetryState {
 /// again. Drives the actionable re-auth banner.
 ///
 /// `legacy_auth` is intentionally excluded: those failures carry their own
-/// detailed migration guidance (`open-grok logout` / `open-grok login`) in the
-/// message, so we surface that verbatim instead of the generic prompt.
+/// detailed migration guidance (`open-grok update` / `open-grok logout` /
+/// `open-grok login`) in the message, so we surface that verbatim instead of
+/// the generic prompt.
 ///
 /// `auth_transient` is excluded for the opposite reason: the shell emits it
 /// only when the failure self-heals (see `AuthManager::requires_manual_reauth`)
