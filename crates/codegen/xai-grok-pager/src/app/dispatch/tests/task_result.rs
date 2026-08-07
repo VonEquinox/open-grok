@@ -1961,6 +1961,7 @@ fn successful_model_switch_updates_provider_and_round_trips_xai_access_state() {
         Effect::FetchBilling {
             agent_id: fetched_agent,
             silent: true,
+            ..
         } if *fetched_agent == id
     )));
 }

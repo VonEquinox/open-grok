@@ -1610,6 +1610,7 @@ impl AppView {
             effects.push(crate::app::actions::Effect::FetchBilling {
                 agent_id,
                 silent: true,
+                nonce: 0,
             });
         }
         effects
