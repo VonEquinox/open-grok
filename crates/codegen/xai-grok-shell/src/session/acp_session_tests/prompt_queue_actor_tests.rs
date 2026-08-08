@@ -68,168 +68,6 @@ fn bash_item(id: &str, owner: &str, command: &str) -> InputItem {
     item
 }
 
-/// Detached producers such as restored plan approval and subagent completion
-/// call the scheduler directly rather than waiting behind the actor mailbox.
-/// The actor-level lifecycle gate must therefore block promotion in the shared
-/// scheduler itself, while preserving the synthetic input for post-mutation
-/// delivery.
-#[tokio::test(flavor = "current_thread")]
-async fn lifecycle_mutation_gate_blocks_direct_synthetic_turn_start() {
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let (actor, _gateway_rx) = build_actor().await;
-            actor
-                .begin_lifecycle_mutation(crate::session::LifecycleMutationKind::ModelSwitch)
-                .await
-                .expect("idle actor claims lifecycle gate");
-
-            let (respond_to, _response_rx) = tokio::sync::oneshot::channel();
-            let cancel = actor
-                .queue_input(
-                    vec![acp::ContentBlock::Text(acp::TextContent::new(
-                        "subagent finished",
-                    ))],
-                    "subagent-completed-gate-test".to_string(),
-                    PromptMode::Agent,
-                    None,
-                    None,
-                    None,
-                    None,
-                    true,
-                    None,
-                    false,
-                    None,
-                    None,
-                    respond_to,
-                    None,
-                    None,
-                )
-                .await;
-            assert!(!cancel);
-
-            let (completion_tx, _completion_rx) = tokio::sync::mpsc::unbounded_channel();
-            SessionActor::maybe_start_running_task(actor.clone(), completion_tx.clone()).await;
-            {
-                let state = actor.state.lock().await;
-                assert!(
-                    state.running_task.is_none(),
-                    "synthetic turn must not start during lifecycle mutation"
-                );
-                assert_eq!(state.pending_inputs.len(), 1, "input remains queued");
-            }
-
-            actor
-                .end_lifecycle_mutation(crate::session::LifecycleMutationKind::ModelSwitch)
-                .await;
-            SessionActor::maybe_start_running_task(actor.clone(), completion_tx).await;
-            let task = actor
-                .state
-                .lock()
-                .await
-                .running_task
-                .take()
-                .expect("queued synthetic turn starts after gate release");
-            task.handle.abort();
-        })
-        .await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn web_search_reload_waits_for_an_active_kimi_turn() {
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let (actor, _gateway_rx) = build_actor().await;
-            let mut sampling_config = actor
-                .chat_state_handle
-                .get_sampling_config()
-                .await
-                .expect("test actor sampling config");
-            sampling_config.provider = xai_grok_sampling_types::ModelProvider::Kimi;
-            actor
-                .chat_state_handle
-                .update_sampling_config(sampling_config);
-            actor
-                .session_turn_active
-                .store(true, std::sync::atomic::Ordering::Release);
-
-            let (responds_to, mut response) = tokio::sync::oneshot::channel();
-            actor
-                .handle_reload_web_search_toolset(
-                    crate::session::agent_rebuild::ResolvedWebSearchState::resolved_for(
-                        crate::tools::config::WebSearchCandidates::disabled(),
-                        &xai_grok_sampler::SamplerConfig::default(),
-                    ),
-                    responds_to,
-                )
-                .await;
-
-            let state = actor.state.lock().await;
-            assert!(state.pending_web_search_reload.is_some());
-            assert!(state.lifecycle_mutation.is_none());
-            drop(state);
-            assert!(matches!(
-                response.try_recv(),
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-            ));
-
-            actor
-                .session_turn_active
-                .store(false, std::sync::atomic::Ordering::Release);
-            actor.maybe_apply_pending_web_search_reload().await;
-            assert!(response.await.expect("reload response channel").is_ok());
-            let state = actor.state.lock().await;
-            assert!(state.pending_web_search_reload.is_none());
-            assert!(state.lifecycle_mutation.is_none());
-        })
-        .await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn maintenance_mutations_share_the_model_switch_and_rewind_gate() {
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let (actor, _gateway_rx) = build_actor().await;
-            for maintenance in [
-                crate::session::LifecycleMutationKind::ManualCompaction,
-                crate::session::LifecycleMutationKind::HistoryRepair,
-            ] {
-                actor
-                    .begin_lifecycle_mutation(maintenance)
-                    .await
-                    .expect("idle maintenance claims lifecycle gate");
-                assert_eq!(
-                    actor
-                        .begin_lifecycle_mutation(
-                            crate::session::LifecycleMutationKind::ModelSwitch
-                        )
-                        .await,
-                    Err(crate::session::LifecycleMutationBlock::MutationInProgress(
-                        maintenance
-                    ))
-                );
-                assert_eq!(
-                    actor
-                        .begin_lifecycle_mutation(crate::session::LifecycleMutationKind::Rewind)
-                        .await,
-                    Err(crate::session::LifecycleMutationBlock::MutationInProgress(
-                        maintenance
-                    ))
-                );
-                let state = actor.state.lock().await;
-                assert!(
-                    crate::session::state_is_busy(&state),
-                    "maintenance must keep the session resident"
-                );
-                drop(state);
-                actor.end_lifecycle_mutation(maintenance).await;
-            }
-        })
-        .await;
-}
-
 #[test]
 fn combine_front_merges_consecutive_plain_prompts() {
     use crate::session::commands::{PromptCompletionKind, PromptTurnOk};
@@ -1334,11 +1172,8 @@ async fn queue_input_send_now_inserts_behind_running_front_and_requests_cancel()
         .await;
 }
 
-/// Stacked send-now prompts insert FIFO (first sent runs first), not LIFO.
-/// Exercised via an active goal turn, which promotes send-now rows but never
-/// cancels — so multiple sends accumulate behind the running front.
 #[tokio::test]
-async fn queue_input_stacked_send_now_prompts_insert_fifo_during_goal_turn() {
+async fn queue_input_send_now_during_goal_turn_merges_as_interjections_fifo() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -1353,10 +1188,14 @@ async fn queue_input_stacked_send_now_prompts_insert_fifo_during_goal_turn() {
                 .current_prompt_id
                 .lock()
                 .expect("current_prompt_id mutex poisoned") = Some("running".into());
-            actor
-                .tool_context
-                .goal_loop_active_gate
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            actor.goal_tracker.lock().create_goal(
+                "goal".into(),
+                "objective".into(),
+                None,
+                0,
+                "2026-01-01T00:00:00Z".into(),
+                None,
+            );
 
             for id in ["sn-1", "sn-2"] {
                 let (respond_to, _prx) = oneshot::channel();
@@ -1370,20 +1209,27 @@ async fn queue_input_stacked_send_now_prompts_insert_fifo_during_goal_turn() {
                         )
                     })
                     .await;
-                assert!(!cancel, "goal turns promote send-now but never cancel");
+                assert!(!cancel, "goal turns never cancel-and-send");
             }
 
-            let state = actor.state.lock().await;
-            let order: Vec<&str> = state
-                .pending_inputs
-                .iter()
-                .map(|i| i.prompt_id.as_str())
-                .collect();
             assert_eq!(
-                order,
-                vec!["running", "sn-1", "sn-2", "held"],
-                "send-now prompts must run in the order they were sent (FIFO)"
+                actor
+                    .state
+                    .lock()
+                    .await
+                    .pending_inputs
+                    .iter()
+                    .map(|item| item.prompt_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["running", "held"]
             );
+            let interjections: Vec<String> = actor
+                .pending_interjections
+                .drain_all()
+                .into_iter()
+                .map(|entry| entry.text)
+                .collect();
+            assert_eq!(interjections, vec!["sn-1", "sn-2"]);
         })
         .await;
 }
@@ -1631,23 +1477,14 @@ async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
             for (prompt_id, send_now) in [("plain-followup", false), ("explicit-send-now", true)] {
                 let (respond_to, _keep) = oneshot::channel();
                 let cancel = actor
-                    .queue_input(
-                        vec![acp::ContentBlock::Text(acp::TextContent::new("follow up"))],
-                        prompt_id.to_string(),
-                        PromptMode::Agent,
-                        None,
-                        None,
-                        None,
-                        None,
-                        false,
-                        None,
+                    .queue_input(QueueInputRequest {
                         send_now,
-                        None,
-                        /*tool_overrides_update*/ None,
-                        respond_to,
-                        None,
-                        None,
-                    )
+                        ..queue_input_request(
+                            vec![acp::ContentBlock::Text(acp::TextContent::new("follow up"))],
+                            prompt_id,
+                            respond_to,
+                        )
+                    })
                     .await;
                 assert!(
                     !cancel,
@@ -1679,7 +1516,7 @@ async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
 
 /// Synthetic inputs and active goal loops never take the send-now path.
 #[tokio::test]
-async fn queue_input_send_now_exempts_synthetic_and_goal_turns() {
+async fn queue_input_send_now_exempts_synthetic_prompts() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -1707,28 +1544,69 @@ async fn queue_input_send_now_exempts_synthetic_and_goal_turns() {
                 })
                 .await;
             assert!(!cancel, "synthetic prompts must never cancel the turn");
+        })
+        .await;
+}
 
-            actor
-                .tool_context
-                .goal_loop_active_gate
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            let (respond_to, _p2) = oneshot::channel();
+#[tokio::test]
+async fn queue_send_now_during_goal_routes_by_kind() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            {
+                let mut state = actor.state.lock().await;
+                state.pending_inputs.push_back(user_item("running", "A"));
+                state.running_task = Some(running_task_stub("running"));
+                state.pending_inputs.push_back(user_item("q1", "A"));
+                state.pending_inputs.push_back(bash_item("b1", "A", "ls"));
+            }
+            *actor
+                .current_prompt_id
+                .lock()
+                .expect("current_prompt_id mutex poisoned") = Some("running".into());
+            actor.goal_tracker.lock().create_goal(
+                "goal".into(),
+                "objective".into(),
+                None,
+                0,
+                "2026-01-01T00:00:00Z".into(),
+                None,
+            );
+
             let cancel = actor
-                .queue_input(QueueInputRequest {
-                    send_now: true,
-                    ..queue_input_request(
-                        vec![acp::ContentBlock::Text(acp::TextContent::new("nudge"))],
-                        "d-goal",
-                        respond_to,
-                    )
-                })
+                .handle_interject_queued_prompt("q1", 0, Some("A"), None)
                 .await;
-            assert!(!cancel, "goal turns must not be cancelled by send-now");
+            assert!(!cancel);
             let state = actor.state.lock().await;
             assert_eq!(
-                state.pending_inputs.back().map(|i| i.prompt_id.as_str()),
-                Some("d-goal"),
-                "goal-suppressed send-now falls back to a plain append"
+                state
+                    .pending_inputs
+                    .iter()
+                    .map(|item| item.prompt_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["running", "b1"]
+            );
+            drop(state);
+            let interjections: Vec<String> = actor
+                .pending_interjections
+                .drain_all()
+                .into_iter()
+                .map(|entry| entry.text)
+                .collect();
+            assert_eq!(interjections, vec!["text for q1"]);
+
+            let cancel = actor
+                .handle_interject_queued_prompt("b1", 0, Some("A"), None)
+                .await;
+            assert!(!cancel);
+            let state = actor.state.lock().await;
+            assert!(
+                state
+                    .pending_inputs
+                    .iter()
+                    .any(|item| item.prompt_id == "b1"),
+                "bash rows remain queued during goals"
             );
         })
         .await;
@@ -2115,7 +1993,7 @@ async fn agent_rebuild_republishes_the_configured_cutoff() {
             let mut seeded = xai_grok_agent::AgentDefinition::default_grok_build();
             seeded.tool_overrides = Some(seed.clone());
             actor
-                .handle_rebuild_agent_for_definition(seeded, false)
+                .handle_rebuild_agent_for_definition(seeded)
                 .await
                 .expect("zero-turn rebuild should succeed");
             assert_eq!(
@@ -2131,7 +2009,6 @@ async fn agent_rebuild_republishes_the_configured_cutoff() {
             actor
                 .handle_rebuild_agent_for_definition(
                     xai_grok_agent::AgentDefinition::default_grok_build(),
-                    false,
                 )
                 .await
                 .expect("second rebuild should succeed");

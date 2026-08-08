@@ -50,7 +50,7 @@ impl coordinator::ChildRunner for ShellChildRunner {
             if let Some(handle) = parent_handle {
                 ctx.parent_mcp_pool = handle.snapshot_mcp_pool().await;
                 ctx.client_hooks = handle.snapshot_client_hooks().await;
-                if request.fork_context {
+                if run.request.fork_context {
                     let parent_tools = handle.snapshot_tool_definitions().await;
                     ctx.parent_tool_snapshot = (!parent_tools.function_tools.is_empty()
                         || parent_tools.resolved_policy.is_some())
@@ -111,9 +111,8 @@ impl coordinator::ChildRunner for ShellChildRunner {
         let command_tx = self
             .agent_ref
             .get()
-            .sessions
-            .borrow()
-            .get(&session_id)
+            .session_registry
+            .resident_handle(&session_id)
             .map(|handle| handle.cmd_tx.clone());
         command_tx.is_some_and(|tx| {
             tx.send(crate::session::SessionCommand::AgentMessage {
@@ -133,9 +132,8 @@ impl coordinator::ChildRunner for ShellChildRunner {
 
         let this = self.agent_ref.get();
         let parent_cmd_tx = this
-            .sessions
-            .borrow()
-            .get(&acp::SessionId::new(message.team_scope_id.as_str()))
+            .session_registry
+            .resident_handle(&acp::SessionId::new(message.team_scope_id.as_str()))
             .map(|handle| handle.cmd_tx.clone());
         crate::agent::subagent::emit_subagent_notification(
             &this.gateway,
@@ -429,6 +427,10 @@ impl MvpAgent {
             .as_ref()
             .map(|h| h.ask_user_question_enabled)
             .unwrap_or_else(|| self.cfg.borrow().resolve_ask_user_question().value);
+        let parent_non_interactive = parent_handle
+            .as_ref()
+            .map(|h| h.non_interactive)
+            .unwrap_or(false);
         let (gcs_upload_method, gcs_bucket_url) = match provider_boundary
             .allows_xai_export()
             .then(|| self.trace_upload_config_snapshot())
@@ -514,6 +516,7 @@ impl MvpAgent {
             goal_enabled: self.cfg.borrow().resolve_goal().value,
             background_workflows_enabled: self.cfg.borrow().resolve_workflows().value,
             ask_user_question_enabled,
+            parent_non_interactive,
             parent_cmd_tx: parent_cmd_tx.clone(),
             parent_session_info: parent_handle.as_ref().map(|h| crate::session::info::Info {
                 id: parent_sid.clone(),

@@ -61,9 +61,7 @@ impl SessionActor {
     ///
     /// `send_now` (or a user prompt arriving during an interruptible wait)
     /// inserts the prompt to run next. Returns `true` when the caller must
-    /// cancel the running turn — never while a goal loop or an `agent_swarm`
-    /// cohort owns the turn, since both would lose live work. An uncommitted
-    /// front is also spared (send-now would invisibly destroy it).
+    /// cancel the running turn.
     #[must_use = "true means the caller must cancel the running turn"]
     pub(super) async fn queue_input(&self, request: QueueInputRequest) -> bool {
         let QueueInputRequest {
@@ -264,10 +262,8 @@ impl SessionActor {
         // unpopped). Auto send-now only if blocked wait + empty held queue.
         let running_front_id = state.running_prompt_id().map(str::to_string);
         let turn_running = running_front_id.is_some();
-        let goal_active = self
-            .tool_context
-            .goal_loop_active_gate
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let goal_active = self.goal_tracker.lock().status()
+            == Some(crate::session::goal_tracker::GoalStatus::Active);
         let blocked_in_wait = self.tool_context.blocking_wait_depth.depth() > 0;
         // An `agent_swarm` cohort is parked here. Aborting the turn cancels
         // every live member, so the prompt is promoted to run next but the turn
@@ -281,9 +277,19 @@ impl SessionActor {
         let auto_send_now = turn_running && blocked_in_wait && !held_user_queue;
         let send_now = !item.origin.is_synthetic() && (send_now || auto_send_now);
         let front_awaiting_commit_now = Self::front_awaiting_commit(&state);
-        let cancel_running_turn = send_now
-            && Self::send_now_cancels_running_turn(&state, goal_active, orchestrating);
-        if send_now {
+        let cancel_running_turn =
+            send_now && Self::send_now_cancels_running_turn(&state, goal_active, orchestrating);
+        let merge_into_goal = send_now
+            && turn_running
+            && goal_active
+            && Self::extract_bash_command(&item.prompt_blocks).is_none();
+        if merge_into_goal {
+            self.enqueue_prompt_as_planner_steering(&item);
+            self.enqueue_prompt_as_interjection(
+                item,
+                crate::session::events::InterjectionSource::Direct,
+            );
+        } else if send_now {
             item.send_now = true;
             let insert_at = Self::send_now_insert_index(&state, running_front_id.as_deref());
             state.pending_inputs.insert(insert_at, item);
@@ -318,6 +324,7 @@ impl SessionActor {
                     "cancels_turn": cancel_running_turn,
                     "blocked_in_wait": blocked_in_wait,
                     "goal_active": goal_active,
+                    "merged_as_interjection": merge_into_goal,
                     "front_awaiting_commit": front_awaiting_commit_now,
                 })),
             );
@@ -548,6 +555,62 @@ impl SessionActor {
             && !Self::front_awaiting_commit(state)
     }
 
+    fn enqueue_prompt_as_planner_steering(&self, item: &InputItem) {
+        let steering = item
+            .prompt_blocks
+            .iter()
+            .filter_map(|block| match block {
+                acp::ContentBlock::Text(text) => Some(text.text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.goal_tracker.lock().steer_planner(steering);
+    }
+
+    fn enqueue_prompt_as_interjection(
+        &self,
+        item: InputItem,
+        source: crate::session::events::InterjectionSource,
+    ) {
+        let InputItem {
+            prompt_id,
+            prompt_blocks,
+            respond_to,
+            ..
+        } = item;
+        let mut text_parts = Vec::new();
+        let mut attachments = Vec::new();
+        for block in prompt_blocks {
+            match block {
+                acp::ContentBlock::Text(text) => {
+                    let text = text.text.trim();
+                    if !text.is_empty() {
+                        text_parts.push(text.to_string());
+                    }
+                }
+                acp::ContentBlock::Image(image) => attachments.push(image),
+                _ => {}
+            }
+        }
+        let text = text_parts.join("\n\n");
+        let image_count = attachments.len() as u32;
+        self.pending_interjections.push(PendingInterjection {
+            text: text.clone(),
+            attachments,
+        });
+        self.broadcast_interjection(&text, Some(&prompt_id));
+        self.events
+            .emit(crate::session::events::Event::Interjected {
+                source,
+                image_count,
+                redirect_kind: crate::session::events::RedirectKind::Interjection,
+            });
+        Self::respond_removed_prompt(respond_to);
+        tracing::info!("goal turn: queued send-now prompt as a mid-turn interjection");
+    }
+
     /// Resolve a removed prompt's pending RPC with `Ok(RemovedFromQueue)` before dropping it. A
     /// dropped sender would look like the running turn failing; the `Ok` lets the client discard it.
     /// It never ran, so token count is `0` and there is no `tool_overrides` echo.
@@ -608,12 +671,8 @@ impl SessionActor {
     /// [`SessionCommand::Interject`]'s broadcast-then-buffer. An uncommitted
     /// front is never cancelled; the promoted row still runs next.
     ///
-    /// Benign **no-op** (the prompt stays queued and runs normally) when:
-    /// - no turn is running (the `Send now` race where the turn just ended —
-    ///   buffering into nothing would strand the text), or
-    /// - `id` names the running turn, is already drained/removed, carries a
-    ///   stale `expected_version`, or is owned by another client, or
-    /// - the row is not a plain prompt (it would reach the model as prompt text).
+    /// During an active goal, plain prompts become steering while bash stays queued.
+    /// Missing, stale, running, or foreign rows are benign no-ops.
     ///
     /// Always re-broadcasts `x.ai/queue/changed` so every client reconciles
     /// (the row vanishes on success, is unchanged on a no-op).
@@ -634,10 +693,8 @@ impl SessionActor {
         let mut state = self.state.lock().await;
         let running_front_id = state.running_prompt_id().map(str::to_string);
         let turn_running = running_front_id.is_some();
-        let goal_active = self
-            .tool_context
-            .goal_loop_active_gate
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let goal_active = self.goal_tracker.lock().status()
+            == Some(crate::session::goal_tracker::GoalStatus::Active);
         // An `agent_swarm` cohort is parked here — same promote-without-cancel
         // shape as goal turns / `queue_input`.
         let orchestrating = self.tool_context.blocking_wait_depth.orchestration_depth() > 0;
@@ -666,12 +723,26 @@ impl SessionActor {
             if let Some(new_text) = new_text.filter(|t| !t.trim().is_empty()) {
                 Self::apply_queued_prompt_edit(&mut item, new_text.to_string(), owner);
             }
-            // Send-now: promote the row to run as the next turn, not an
-            // interjection.
-            item.send_now = true;
-            let insert_at = Self::send_now_insert_index(&state, running_front_id.as_deref());
-            state.pending_inputs.insert(insert_at, item);
-            cancel_running_turn = cancel_decision;
+            let merge_into_goal = turn_running
+                && goal_active
+                && Self::extract_bash_command(&item.prompt_blocks).is_none();
+            if merge_into_goal {
+                self.enqueue_prompt_as_planner_steering(&item);
+                self.enqueue_prompt_as_interjection(
+                    item,
+                    crate::session::events::InterjectionSource::Queue,
+                );
+                tracing::info!(
+                    queued_id = %id,
+                    "send-now: queued row will steer the active goal turn"
+                );
+            } else {
+                item.send_now = true;
+                let insert_at = Self::send_now_insert_index(&state, running_front_id.as_deref());
+                state.pending_inputs.insert(insert_at, item);
+                cancel_running_turn = cancel_decision;
+                tracing::info!(queued_id = %id, cancel_running_turn, "send-now: promoted queued prompt to run next");
+            }
             xai_grok_telemetry::unified_log::info(
                 "shell.prompt.send_now_decision",
                 Some(self.session_info.id.0.as_ref()),
@@ -680,10 +751,10 @@ impl SessionActor {
                     "from_queue_row": true,
                     "cancels_turn": cancel_running_turn,
                     "goal_active": goal_active,
+                    "merged_as_interjection": merge_into_goal,
                     "front_awaiting_commit": front_awaiting_commit_now,
                 })),
             );
-            tracing::info!(queued_id = %id, cancel_running_turn, "send-now: promoted queued prompt to run next");
         } else if let Some(new_text) = new_text
             && !new_text.trim().is_empty()
             && !running_is_row

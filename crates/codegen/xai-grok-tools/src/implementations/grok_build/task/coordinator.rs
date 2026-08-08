@@ -67,9 +67,16 @@ pub struct SubagentCoordinator<R: ChildRunner> {
     mailboxes: HashMap<MailboxKey, VecDeque<AgentMailboxMessage>>,
     mailbox_waiters: HashMap<MailboxKey, AgentMailboxWaiter>,
     workflow_cancel_waiters: HashMap<String, Vec<oneshot::Sender<SubagentCancelOutcome>>>,
+    /// Per-parent delete-path teardown drain, present only while a
+    /// responder-bearing `TeardownSession` (`/delete`) waits for the session's
+    /// children to finish. While an entry exists, spawn admission stays closed
+    /// and [`SubagentEvent::OpenSpawnAdmission`] cannot reopen it (a racing
+    /// next-turn open would reopen Task spawns mid-delete).
+    teardown_drains: HashMap<String, TeardownDrain>,
     /// Parent sessions that received `ParentSession` cancel. Non-workflow spawns
     /// are rejected until [`SubagentEvent::OpenSpawnAdmission`] (next turn) or
-    /// teardown, so a detached late `TaskTool` spawn cannot outrun Stop.
+    /// teardown drain completes, so a detached late `TaskTool` spawn cannot
+    /// outrun Stop / delete.
     spawn_blocked_sessions: HashSet<String>,
     usage_not_applied_prompts: HashSet<PromptScope>,
     pending_completions: Vec<BufferedCompletion>,
@@ -81,6 +88,18 @@ pub struct SubagentCoordinator<R: ChildRunner> {
     progress: FuturesUnordered<ProgressFuture<<R::Control as ChildControl>::ProgressFuture>>,
     list_requests: HashMap<u64, ListRequest>,
     next_list_request_id: u64,
+}
+
+/// Backstop for a delete-path teardown hold: if a cancelled child never
+/// finishes, force-reopen the session's spawn admission after this long (with a
+/// warning) rather than blocking spawns for the process lifetime.
+const TEARDOWN_DRAIN_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// In-flight delete-path teardown drain: responders to resolve once the last
+/// child drains, and the backstop deadline that force-reopens admission.
+struct TeardownDrain {
+    waiters: Vec<oneshot::Sender<()>>,
+    deadline: tokio::time::Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -138,6 +157,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             mailboxes: HashMap::new(),
             mailbox_waiters: HashMap::new(),
             workflow_cancel_waiters: HashMap::new(),
+            teardown_drains: HashMap::new(),
             spawn_blocked_sessions: HashSet::new(),
             usage_not_applied_prompts: HashSet::new(),
             pending_completions: Vec::new(),
@@ -291,7 +311,10 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     .collect();
                 let _ = request.respond_to.send(completions);
             }
-            SubagentEvent::TeardownSession { parent_session_id } => {
+            SubagentEvent::TeardownSession {
+                parent_session_id,
+                respond_to,
+            } => {
                 self.pending_completions
                     .retain(|completion| completion.parent_session_id != parent_session_id);
                 self.mailboxes
@@ -307,11 +330,27 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         timed_out: true,
                     });
                 }
-                self.spawn_blocked_sessions.remove(&parent_session_id);
                 self.teardown_session_children(&parent_session_id);
+                // Only the delete path (responder present) holds spawn
+                // admission closed until children drain, so a next-turn
+                // OpenSpawnAdmission cannot reopen Task spawns mid-delete.
+                // Close / idle unload (no responder) keep the pre-existing
+                // behavior: cancel children and leave admission untouched.
+                if let Some(respond_to) = respond_to {
+                    if self.session_has_children(&parent_session_id) {
+                        self.begin_teardown_drain(parent_session_id, respond_to);
+                    } else {
+                        let _ = respond_to.send(());
+                    }
+                }
             }
             SubagentEvent::OpenSpawnAdmission { parent_session_id } => {
-                self.spawn_blocked_sessions.remove(&parent_session_id);
+                // Next-turn reopen after Stop is intentional even while cancelled
+                // children finish — but not while a delete-path TeardownSession
+                // is draining.
+                if !self.teardown_drains.contains_key(&parent_session_id) {
+                    self.spawn_blocked_sessions.remove(&parent_session_id);
+                }
             }
             SubagentEvent::Outstanding(request) => {
                 // Reap again here so turn-freeze / Outstanding polls see
@@ -962,6 +1001,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
         self.completed_order.push_back(id.to_owned());
         self.running_count_changed();
         let workflow_run_id = request.owner.workflow_run_id().map(str::to_owned);
+        let parent_session_id = request.parent_session_id.clone();
         self.runner.on_completed(ChildCompletion {
             request,
             result: output.result,
@@ -971,6 +1011,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
         if let Some(run_id) = workflow_run_id {
             self.resolve_workflow_cancel_waiters(&run_id);
         }
+        self.resolve_teardown_drain_waiters(&parent_session_id);
         self.start_queued_within_capacity();
     }
 
@@ -1126,6 +1167,57 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
         }
     }
 
+    /// Whether any child (active, pending, or queued) still belongs to the
+    /// session. Unlike [`Self::session_running_count`] it counts every owner,
+    /// including workflow, since teardown drains all children.
+    fn session_has_children(&self, parent_session_id: &str) -> bool {
+        self.active
+            .values()
+            .map(|child| &child.request)
+            .chain(self.pending.values().map(|child| &child.request))
+            .chain(self.queued.iter().map(|queued| queued.request.as_ref()))
+            .any(|request| request.parent_session_id == parent_session_id)
+    }
+
+    /// Latch spawn admission closed for a delete-path teardown and park the
+    /// responder until the last child drains (or the backstop deadline fires).
+    fn begin_teardown_drain(&mut self, parent_session_id: String, respond_to: oneshot::Sender<()>) {
+        let deadline = tokio::time::Instant::now() + TEARDOWN_DRAIN_MAX;
+        self.spawn_blocked_sessions
+            .insert(parent_session_id.clone());
+        self.teardown_drains
+            .entry(parent_session_id)
+            .or_insert_with(|| TeardownDrain {
+                waiters: Vec::new(),
+                deadline,
+            })
+            .waiters
+            .push(respond_to);
+    }
+
+    /// Clear a delete-path hold: reopen the session's spawn admission and
+    /// resolve every parked drain responder.
+    fn clear_teardown_drain(&mut self, parent_session_id: &str) {
+        self.spawn_blocked_sessions.remove(parent_session_id);
+        if let Some(drain) = self.teardown_drains.remove(parent_session_id) {
+            for respond_to in drain.waiters {
+                let _ = respond_to.send(());
+            }
+        }
+    }
+
+    fn resolve_teardown_drain_waiters(&mut self, parent_session_id: &str) {
+        // Cheap precondition (one lookup) before the three-collection scan on
+        // every child completion: only a delete-path teardown holds a drain.
+        if !self.teardown_drains.contains_key(parent_session_id) {
+            return;
+        }
+        if self.session_has_children(parent_session_id) {
+            return;
+        }
+        self.clear_teardown_drain(parent_session_id);
+    }
+
     fn cancel_workflow_children(&mut self, run_id: &str, parent_session_id: Option<&str>) {
         for child in self.active.values() {
             if child.request.owner.workflow_run_id() == Some(run_id)
@@ -1183,6 +1275,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     .map(|waiter| waiter.deadline),
             )
             .chain(self.mailbox_waiters.values().map(|waiter| waiter.deadline))
+            .chain(self.teardown_drains.values().map(|drain| drain.deadline))
             .min()
     }
 
@@ -1208,6 +1301,22 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
     fn process_deadlines(&mut self) {
         self.reap_abandoned_callers();
         let now = tokio::time::Instant::now();
+        // Backstop: a delete-path hold whose drain deadline elapsed force-clears
+        // so a child that never finishes cannot block spawns forever.
+        let stale: Vec<String> = self
+            .teardown_drains
+            .iter()
+            .filter(|(_, drain)| drain.deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale {
+            tracing::warn!(
+                parent_session_id = %id,
+                still_draining = self.session_has_children(&id),
+                "teardown drain deadline elapsed; force-reopening spawn admission",
+            );
+            self.clear_teardown_drain(&id);
+        }
         for child in self.pending.values_mut() {
             background_at_deadline(child, now, self.config.foreground_budget);
         }

@@ -1196,6 +1196,11 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
         agent.scheduler_background_loops = scheduler_background_loops;
         agent.session.cwd = session_cwd.clone();
         agent.session.is_worktree = true;
+        agent.current_branch = None;
+        agent.main_repo = None;
+        agent.is_worktree = true;
+        crate::git_info::populate_from_cwd_async(session_cwd.clone());
+
         agent.prompt.file_search.retarget(&session_cwd);
         agent.scrollback.push_block(RenderBlock::system(format!(
             "Worktree ready: {}",

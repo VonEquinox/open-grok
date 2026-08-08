@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use agent_client_protocol as acp;
 use tokio::task::JoinSet;
 use xai_acp_lib::{AcpAgentTx, acp_send};
-use xai_grok_telemetry::startup::{self, StartupOutcome, StartupPhase};
+use xai_grok_telemetry::startup::{self, StartupPhase};
 use actions::{
     ClipboardPasteTarget, Effect, ProbedAttachment, SubagentKillOutcome,
     SwitchModelError, TaskResult,
@@ -1818,17 +1818,17 @@ pub(crate) fn execute(
                         Some(serde_json::json!({"mcp_server_count": mcp_count})),
                     );
                     let create_start = std::time::Instant::now();
-                    let result = acp_send(
+                    let result = helpers::acp_send_bounded(
                             acp::NewSessionRequest::new(session_cwd.clone())
                                 .mcp_servers(mcp_servers)
                                 .meta(meta),
                             &tx,
+                            "Session creation",
                         )
                         .await;
                     let create_elapsed_ms = create_start.elapsed().as_millis() as u64;
                     match result {
                         Ok(resp) => {
-                            startup::report_total(StartupOutcome::Ok);
                             ulog::info(
                                 "session.create.done",
                                 Some(&resp.session_id.0),
@@ -1934,7 +1934,13 @@ pub(crate) fn execute(
                                 .into(),
                         );
                         let _phase = startup::phase_scope(StartupPhase::SessionCreate);
-                        let ext_resp = match acp_send(ext_req, &tx).await {
+                        let ext_resp = match helpers::acp_send_bounded(
+                                ext_req,
+                                &tx,
+                                "Worktree session resume",
+                            )
+                            .await
+                        {
                             Ok(resp) => {
                                 tracing::info!(
                                 session_id = %sid,
@@ -2007,7 +2013,6 @@ pub(crate) fn execute(
                         let (code_restored, restore_summary, restore_degree) = parse_worktree_restore_payload(
                             result_obj,
                         );
-                        startup::report_total(StartupOutcome::Ok);
                         return TaskResult::WorktreeForked {
                             agent_id,
                             session_id: acp::SessionId::new(new_session_id),
@@ -2128,16 +2133,16 @@ pub(crate) fn execute(
                         &xai_grok_tools::types::compat::CompatConfig::default(),
                     );
                     let _phase = startup::phase_scope(StartupPhase::SessionCreate);
-                    let result = acp_send(
+                    let result = helpers::acp_send_bounded(
                             acp::NewSessionRequest::new(session_cwd.clone())
                                 .mcp_servers(mcp_servers)
                                 .meta(meta),
                             &tx,
+                            "Worktree session creation",
                         )
                         .await;
                     match result {
                         Ok(resp) => {
-                            startup::report_total(StartupOutcome::Ok);
                             TaskResult::WorktreeSessionCreated {
                                 agent_id,
                                 session_id: resp.session_id,
@@ -2189,7 +2194,7 @@ pub(crate) fn execute(
                     let _phase = startup::phase_scope(StartupPhase::SessionCreate);
                     ulog::info("session.load.start", Some(&acp_session_id.0), None);
                     let load_started = std::time::Instant::now();
-                    let result = acp_send(
+                    let result = helpers::acp_send_bounded(
                             acp::LoadSessionRequest::new(
                                     acp_session_id.clone(),
                                     cwd.clone(),
@@ -2197,6 +2202,7 @@ pub(crate) fn execute(
                                 .mcp_servers(mcp_servers.clone())
                                 .meta(meta.clone()),
                             &tx,
+                            "Session loading",
                         )
                         .await;
                     let load_elapsed_ms = load_started.elapsed().as_millis() as u64;
@@ -2213,7 +2219,6 @@ pub(crate) fn execute(
                                 Some(&acp_session_id.0),
                                 Some(serde_json::json!({"elapsed_ms": load_elapsed_ms})),
                             );
-                            startup::report_total(StartupOutcome::Ok);
                             let (code_restored, restore_summary, restore_degree) = parse_session_load_restore_meta(
                                 resp.meta.as_ref(),
                             );
