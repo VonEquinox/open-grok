@@ -1469,6 +1469,11 @@ mod tests {
         /// Max time to wait for events after debounce (debounce + buffer)
         const EVENT_WAIT_MS: u64 = 300;
         /// Timeout for watcher initialization in tests
+        // FSEvents stream registration can take tens of seconds under a busy
+        // full-suite process; Linux inotify remains effectively immediate.
+        #[cfg(target_os = "macos")]
+        const TEST_INIT_TIMEOUT: Duration = Duration::from_secs(60);
+        #[cfg(not(target_os = "macos"))]
         const TEST_INIT_TIMEOUT: Duration = Duration::from_secs(15);
         /// Number of retries for starting watcher (helps with flaky FSEvents)
         const START_RETRIES: usize = 3;
