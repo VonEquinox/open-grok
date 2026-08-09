@@ -83,6 +83,9 @@ pub struct UsageInfoModalState {
     pub session_error: Option<String>,
     /// Pre-formatted session token/cost summary (`session_usage_block_text`).
     pub session_usage_text: Option<String>,
+    /// Pre-formatted non-xAI provider usage (Codex quota) when xAI billing is
+    /// hidden. Populated by `UsageFetched` with `include_xai: false`.
+    pub provider_usage_text: Option<String>,
     pub billing_loading: bool,
     pub billing_error: Option<String>,
     /// Fetch generation stamped at open; results from an earlier open (same
@@ -105,6 +108,7 @@ impl UsageInfoModalState {
             session_text: None,
             session_error: None,
             session_usage_text: None,
+            provider_usage_text: None,
             billing_loading: false,
             billing_error: None,
             fetch_nonce: 0,
@@ -396,7 +400,23 @@ fn usage_limit_lines(
     if state.ctx.chat_kind {
         // Gateway chat sessions have no Build coding credits to show.
     } else if !state.ctx.usage_visible {
-        lines.push(muted_line(theme, "Usage limits are managed by your team."));
+        // xAI consumer billing is hidden (team/API-key), but Open Grok may
+        // still have an independently connected Codex quota to show.
+        if let Some(provider_text) = &state.provider_usage_text {
+            for (i, row) in provider_text.lines().enumerate() {
+                if i == 0 {
+                    lines.push(Line::styled(row.to_string(), header_style(theme)));
+                } else {
+                    lines.push(plain(theme, row));
+                }
+            }
+        } else if state.billing_loading {
+            lines.push(muted_line(theme, "Loading usage\u{2026}"));
+        } else if let Some(error) = &state.billing_error {
+            lines.push(muted_line(theme, format!("Couldn't load usage: {error}")));
+        } else {
+            lines.push(muted_line(theme, "Usage limits are managed by your team."));
+        }
     } else if let Some(url) = &state.ctx.billing_redirect_url {
         lines.push(plain(theme, format!("Please check your usage on {url}")));
     } else if let Some(bal) = balance {
@@ -666,9 +686,18 @@ mod tests {
         let lines = usage_limit_lines(&state, None, &theme);
         assert!(lines[0].to_string().contains("https://x.example/usage"));
 
+        state.billing_loading = false;
         state.ctx.usage_visible = false;
         let lines = usage_limit_lines(&state, None, &theme);
         assert!(lines[0].to_string().contains("managed by your team"));
+
+        state.billing_loading = true;
+        let lines = usage_limit_lines(&state, None, &theme);
+        assert!(
+            lines[0].to_string().contains("Loading usage"),
+            "Codex-only fetch while xAI billing is hidden: {:?}",
+            lines[0].to_string()
+        );
 
         // Gateway chat sessions surface no billing at all.
         state.ctx.chat_kind = true;

@@ -581,6 +581,8 @@ fn show_usage_without_session_still_surfaces_credits() {
 #[test]
 fn show_usage_skips_hidden_xai_billing_but_still_fetches_codex() {
     let mut app = test_app_with_agent();
+    // Scrollback flow is minimal-only; full TUI opens the usage modal.
+    app.screen_mode = crate::app::ScreenMode::Minimal;
     app.startup_codex_account = Some(xai_grok_shell::codex_auth::CodexAccountSummary {
         email: None,
         account_id: Some("acct".into()),
@@ -604,6 +606,41 @@ fn show_usage_skips_hidden_xai_billing_but_still_fetches_codex() {
             xai_redirect_url: None,
         }]
     ));
+}
+
+#[test]
+fn show_usage_modal_fetches_codex_when_xai_billing_hidden() {
+    let mut app = test_app_with_agent();
+    app.startup_codex_account = Some(xai_grok_shell::codex_auth::CodexAccountSummary {
+        email: None,
+        account_id: Some("acct".into()),
+        plan_type: Some("Pro".into()),
+    });
+    app.apply_usage_visibility(false);
+    let effects = dispatch(Action::ShowUsage, &mut app);
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                Effect::ShowContextInfo { .. },
+                Effect::ShowSessionInfo { .. },
+                Effect::FetchSessionUsage { .. },
+                Effect::FetchUsage {
+                    agent_id: AgentId(0),
+                    include_xai: false,
+                    xai_redirect_url: None,
+                },
+            ]
+        ),
+        "got: {effects:?}"
+    );
+    let Some(crate::views::modal::ActiveModal::UsageInfo { state }) =
+        app.agents[&AgentId(0)].active_modal.as_ref()
+    else {
+        panic!("expected the usage modal to be open");
+    };
+    assert!(!state.ctx.usage_visible);
+    assert!(state.billing_loading);
 }
 
 #[test]

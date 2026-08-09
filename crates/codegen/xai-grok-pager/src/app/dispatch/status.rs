@@ -81,6 +81,8 @@ pub(super) fn open_usage_info_modal(
     let redirect_url = app.usage_billing_redirect_url.clone();
     let tier = app.subscription_tier.clone();
     let show_resolved_model = app.show_resolved_model;
+    // Codex quota is independent of the xAI billing/UI gate (`usage_visible`).
+    let codex_connected = app.startup_codex_account.is_some();
     let Some(agent) = app.agents.get_mut(&id) else {
         return vec![];
     };
@@ -125,12 +127,21 @@ pub(super) fn open_usage_info_modal(
         });
     }
     // Silent refresh of the cached billing mirrors the modal renders from.
+    // When xAI billing is hidden, still fetch Codex quota so Open Grok's
+    // combined `/usage` surface remains available for non-xAI sessions.
     if billing_reachable {
         state.billing_loading = true;
         effects.push(Effect::FetchBilling {
             agent_id: id,
             silent: true,
             nonce,
+        });
+    } else if codex_connected && !agent.chat_kind {
+        state.billing_loading = true;
+        effects.push(Effect::FetchUsage {
+            agent_id: id,
+            include_xai: false,
+            xai_redirect_url: None,
         });
     }
     agent.active_modal = Some(ActiveModal::UsageInfo {

@@ -639,9 +639,16 @@ impl AgentView {
             wake.cancel_sent = true;
         }
     }
-    /// Overlay stop: stamp the dashboard trigger if something stoppable is running.
+    /// First-press overlay Ctrl+X: cancel a local/wake model turn only.
+    ///
+    /// `/compact` is intentionally excluded — CancelTurn would work, but the
+    /// overlay gesture arms the two-press close instead (matching idle /
+    /// cancelling). Compact cancel stays on Ctrl+C, Esc, and the *confirmed*
+    /// overlay stop (`dispatch_dashboard_overlay_stop`).
     pub(crate) fn arm_dashboard_stop(&mut self) -> bool {
-        if self.stoppable_activity_running() {
+        let cancel = self.session.state.is_turn_running()
+            || (self.wake_turn_active() && !self.wake_turn_cancelling());
+        if cancel {
             self.cancel_trigger_hint = Some(crate::app::actions::CancelTrigger::DashboardStop);
             true
         } else {

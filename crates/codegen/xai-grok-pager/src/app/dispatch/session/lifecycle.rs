@@ -1306,6 +1306,11 @@ fn push_session_create_failure_warning(app: &mut AppView, msg: &str) {
 /// After an orphan create fails, New/Fork may already have moved overlay
 /// attach onto the removed placeholder. Re-point to the survivor so
 /// Left/Esc still exit to the dashboard; clear when recovery is Welcome.
+///
+/// Must run **before** [`remove_agent_and_cleanup`]: that helper clears
+/// attach when it still names the removed id, which would make this a
+/// no-op. Re-pointing first leaves attach on the survivor so cleanup
+/// leaves it alone; clearing first (no survivor) makes cleanup a no-op.
 fn restore_dashboard_attach_after_orphan_remove(
     app: &mut AppView,
     removed: AgentId,
@@ -1339,12 +1344,13 @@ pub(in crate::app::dispatch) fn handle_session_failed(
     if is_orphan {
         let failed_was_active = matches!(app.active_view, ActiveView::Agent(id) if id == agent_id);
         let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
+        // Attach merge before remove: see restore_dashboard_attach_after_orphan_remove.
+        restore_dashboard_attach_after_orphan_remove(app, agent_id, fallback);
         remove_agent_and_cleanup(app, agent_id);
         if let Some(target) = fallback {
             if failed_was_active {
                 switch_to_agent(app, target, SwitchCause::Picker);
             }
-            restore_dashboard_attach_after_orphan_remove(app, agent_id, Some(target));
             if matches!(app.active_view, ActiveView::Welcome) {
                 push_session_create_failure_warning(app, &msg);
             } else {
@@ -1358,7 +1364,6 @@ pub(in crate::app::dispatch) fn handle_session_failed(
             app.session_picker_state.selected = 0;
             app.session_picker_content_results = None;
             app.session_picker_content_loading = false;
-            restore_dashboard_attach_after_orphan_remove(app, agent_id, None);
             push_session_create_failure_warning(app, &msg);
         }
     } else if let Some(agent) = app.agents.get_mut(&agent_id) {
@@ -1392,10 +1397,11 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
         .is_some_and(|a| a.session.session_id.is_none() && a.session.forked_from.is_none());
     if is_orphan {
         let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
+        // Attach merge before remove: see restore_dashboard_attach_after_orphan_remove.
+        restore_dashboard_attach_after_orphan_remove(app, agent_id, fallback);
         remove_agent_and_cleanup(app, agent_id);
         if let Some(target) = fallback {
             switch_to_agent(app, target, SwitchCause::Picker);
-            restore_dashboard_attach_after_orphan_remove(app, agent_id, Some(target));
         } else {
             show_welcome(app);
             app.welcome_prompt_focused = true;
@@ -1404,7 +1410,6 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
             app.session_picker_state.selected = 0;
             app.session_picker_content_results = None;
             app.session_picker_content_loading = false;
-            restore_dashboard_attach_after_orphan_remove(app, agent_id, None);
         }
         let msg = format!("Cannot create worktree: {error}");
         if !app.startup_warnings.iter().any(|w| w.message == msg) {

@@ -524,25 +524,19 @@ fn clear_pending_overlay_stop(app: &mut AppView) {
 /// `app_view::handle_input` and the `DashboardOverlayStop` def both
 /// point here):
 ///
-/// - First press, stoppable activity running (turn, `/compact`, or a
-///   streaming wake turn; `arm_dashboard_stop`) → `Action::CancelTurn`
-///   (the agent view's Ctrl+C behaviour: keep-subagents prompt, prompt
-///   rewind). Never arms, so mashing Ctrl+X to stop a turn can't close
-///   the session.
-/// - First press, any other state (idle, cancel
+/// - First press, local or streaming-wake turn running
+///   (`arm_dashboard_stop`) → `Action::CancelTurn` (agent-view Ctrl+C
+///   behaviour). Never arms, so mashing Ctrl+X to stop a turn can't
+///   close the session. `/compact` is *not* in this first-press set.
+/// - First press, any other state (idle, `/compact` in flight, cancel
 ///   pending) → arms `AppView::pending_action` with the dashboard's
 ///   2s `CONFIRM_WINDOW`; the shortcuts bar paints "press Ctrl+x
-///   again to close this session". Cancel can't help in the non-idle
-///   variants of this arm — `dispatch_cancel_turn` no-ops unless a
-///   turn is running, and command cancellation isn't implemented (see
-///   `handle_agent_action`'s `CancelTurn` TODO) — so the two-press
-///   close is the only termination the user can reach, matching the
-///   dashboard list's Ctrl+X which arms even while busy.
+///   again to close this session".
 /// - Second press inside the window lands here via the pending-action
-///   fast path; any other key disarms via that same path. A turn that
-///   STARTED inside the window (queued prompt drained, user sent one)
-///   downgrades the confirmed press to a cancel instead of closing
-///   work in flight.
+///   fast path; any other key disarms via that same path. A turn or
+///   `/compact` that is (still) running at confirm time — including
+///   work that STARTED inside the window — downgrades to cancel
+///   instead of closing mid-flight.
 ///
 /// Mirrors `dispatch_dashboard_stop`'s second press, except the user
 /// is INSIDE the session being closed: the view returns to the
@@ -551,9 +545,13 @@ pub(super) fn dispatch_dashboard_overlay_stop(app: &mut AppView) -> Vec<Effect> 
     let Some(id) = app.dashboard.as_ref().and_then(|d| d.attached_agent) else {
         return vec![];
     };
+    // Confirmed press: cancel any stoppable activity, including `/compact`
+    // (first-press overlay Ctrl+X intentionally arms instead — see
+    // `arm_dashboard_stop`).
     if let Some(agent) = app.agents.get_mut(&id)
-        && agent.arm_dashboard_stop()
+        && agent.stoppable_activity_running()
     {
+        agent.cancel_trigger_hint = Some(crate::app::actions::CancelTrigger::DashboardStop);
         return dispatch_cancel_turn(app);
     }
     // Land on the dashboard BEFORE closing: `dispatch_sessions_confirm_close`

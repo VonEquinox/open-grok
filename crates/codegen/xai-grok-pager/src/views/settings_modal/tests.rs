@@ -780,13 +780,14 @@ fn default_registry_contains_meta_api_key_secret() {
     assert!(matches!(meta.kind, SettingKind::Secret));
 }
 
-/// The default registry contains Appearance settings
-/// (3 bools + 3 enums + 1 int = 7 entries), the Editor entry
-/// `multiline_mode`, the Agent entries `permission_mode` and
-/// `plan_mode`, the Privacy entry `coding_data_sharing`, the
-/// Models entry `default_model`, and the Advanced entries
-/// `show_tips` and `auto_update`. `default_reasoning_effort` and
-/// `auto_compact_threshold_percent` are not exposed in the modal.
+/// Exhaustive visible-row contract for the default (non-minimal, voice-off,
+/// no-antigravity) settings modal. Pins category headers and every top-level
+/// setting key in registry order, including Open Grok provider/Code Mode
+/// rows and Advanced opt-in feature flags (telemetry, web_fetch localhost,
+/// remember-mode, crash handler, mouse reporting toggle, shell/AI
+/// suggestions, sandbox auto-allow bash, respect gitignore).
+/// `default_reasoning_effort` and `auto_compact_threshold_percent` stay
+/// unexposed; voice and antigravity rows stay gated out of this fixture.
 #[test]
 fn rows_contain_categories_and_settings_through_pr_14() {
     let prev_voice = crate::app::voice_mode_enabled();
@@ -958,12 +959,23 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "hunk_tracker_mode",
             "memory.enabled",
             "memory.dream.enabled",
+            // Advanced opt-in feature flags (config/env-only until exposed
+            // in Settings → Advanced; keep registry order).
+            "features.telemetry",
             "features.lsp_tools",
             "features.web_fetch",
+            "toolset.web_fetch.allow_local",
             "features.two_pass_compaction",
             "features.non_git_warning",
+            "features.remember_mode",
             "doom_loop_recovery.enabled",
             "features.subagent_worktree_snapshot",
+            "diagnostics.crash_handler",
+            "ui.mouse_reporting_toggle",
+            "suggestions.enabled",
+            "suggestions.ai_enabled",
+            "sandbox.auto_allow_bash",
+            "tools.respect_gitignore",
         ]
     );
 }

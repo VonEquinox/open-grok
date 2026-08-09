@@ -1372,8 +1372,10 @@ pub fn is_command_complete(line: &str, registry: &CommandRegistry) -> bool {
 
 /// True when Enter should send `text` unchanged.
 ///
-/// Accept turns `/doctor` into `/doctor ` and opens the arg menu. Skip accept
-/// only when the highlighted row is the typed command (or an alias of it).
+/// Command-phase accept appends a trailing space whenever `takes_args` is
+/// true (including optional args). Skip accept when the highlighted row is
+/// the typed command (or an alias of it) so Enter sends the bare token —
+/// e.g. `/doctor` rather than `/doctor ` then the arg menu.
 pub(crate) fn is_typed_slash_selected(
     snap: &SlashSnapshot,
     text: &str,
@@ -1399,6 +1401,27 @@ pub(crate) fn is_typed_slash_selected(
                     .get_for_dispatch(row.command_name())
                     .is_some_and(|selected| selected.name() == typed.name())
         }
+    }
+}
+
+/// Whether Enter on the current slash selection should accept and wait for
+/// more input, rather than accept-and-send.
+///
+/// Command-phase rows append a trailing space whenever `takes_args` is true,
+/// including optional-arg commands (Open Grok `/login [provider]`). That
+/// space is for Tab into the arg menu; Enter only chains when args are
+/// required. Arg-phase rows keep the trailing-space chain signal (e.g.
+/// `/model` → effort).
+pub(crate) fn slash_enter_should_chain(snap: &SlashSnapshot, registry: &CommandRegistry) -> bool {
+    let Some(row) = snap.selection() else {
+        return false;
+    };
+    if snap.cursor_in_command {
+        registry
+            .get_for_dispatch(row.command_name())
+            .is_some_and(|cmd| cmd.args_required())
+    } else {
+        row.insert_text.ends_with(' ')
     }
 }
 

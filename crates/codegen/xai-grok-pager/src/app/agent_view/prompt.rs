@@ -231,27 +231,33 @@ impl AgentView {
                     self.prompt.slash_close();
                     return InputOutcome::Changed;
                 }
-                // Enter: accept completion, then send (terminal row) or
-                // stay open (row's insert_text ends with space => chains).
+                // Enter: accept completion, then send (terminal / optional-arg
+                // command) or stay open (required args, or arg-phase chain).
                 KeyCode::Enter if key.modifiers.is_empty() => {
                     let snap = self.prompt.slash_snapshot();
-                    let exact_command = crate::slash::is_typed_slash_selected(
-                        &snap,
-                        self.prompt.text(),
-                        self.prompt.slash_controller.registry(),
-                    );
+                    let registry = self.prompt.slash_controller.registry();
+                    let exact_command =
+                        crate::slash::is_typed_slash_selected(&snap, self.prompt.text(), registry);
                     if exact_command {
                         self.prompt.slash_commit_preview();
                         self.prompt.slash_close();
                         slash_accepted_send = true;
                     } else {
-                        let chains = snap
-                            .selection()
-                            .is_some_and(|row| row.insert_text.ends_with(' '));
+                        let chains = crate::slash::slash_enter_should_chain(&snap, registry);
+                        let trim_accept = snap.cursor_in_command && !chains;
                         self.prompt.slash_commit_preview();
                         self.prompt.accept_slash_completion(&self.session.models);
                         if chains {
                             return InputOutcome::Changed;
+                        }
+                        // Optional-arg command rows insert a trailing space for
+                        // Tab; strip it before send so `/login` stays bare.
+                        if trim_accept {
+                            let trimmed = self.prompt.text().trim_end().to_owned();
+                            if trimmed != self.prompt.text() {
+                                self.prompt.set_text(&trimmed);
+                                self.prompt.set_cursor(trimmed.len());
+                            }
                         }
                         self.prompt.slash_close();
                         slash_accepted_send = true;

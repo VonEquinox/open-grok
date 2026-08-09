@@ -2286,6 +2286,7 @@ fn registry_kind_membership_through_pr_14() {
             SettingKind::Int { .. } => "Int",
 
             SettingKind::DynamicEnum { .. } => "DynamicEnum",
+            SettingKind::DynamicMultiSelect { .. } => "DynamicMultiSelect",
             SettingKind::Group { .. } => "Group",
             SettingKind::Secret => "Secret",
             other => panic!(
@@ -2304,47 +2305,60 @@ fn registry_kind_membership_through_pr_14() {
     assert_eq!(
         bool_keys,
         vec![
-            "compact_mode",
-            "group_tool_verbs",
+            "antigravity_skip_permissions",
+            "antigravity_subagents",
+            "auto_update",
             "collapsed_edit_blocks",
-            "invert_scroll",
+            "combine_queued_prompts",
+            "compact_mode",
+            "confirm_before_rewind",
+            // Per-tip contextual-hint children (hidden from the top-level list,
+            // toggled inside the group sub-sheet) are still Bool settings.
+            "contextual_hints.image_input",
+            "contextual_hints.plan_mode",
+            "contextual_hints.send_now",
+            "contextual_hints.small_screen",
+            "contextual_hints.ssh_wrap",
+            "contextual_hints.undo",
+            "contextual_hints.word_select",
+            "diagnostics.crash_handler",
             "display_refresh_auto_cadence",
+            "doom_loop_recovery.enabled",
+            "enter_steers",
+            "features.lsp_tools",
+            "features.non_git_warning",
+            "features.remember_mode",
+            "features.subagent_worktree_snapshot",
+            "features.telemetry",
+            "features.two_pass_compaction",
+            "features.web_fetch",
+            "group_tool_verbs",
+            "invert_scroll",
+            "memory.dream.enabled",
+            "memory.enabled",
             "multiline_mode",
+            "page_flip_on_send",
             "prompt_suggestions",
+            "remember_tool_approvals",
             "respect_manual_folds",
+            "sandbox.auto_allow_bash",
             "show_thinking_blocks",
             "show_timeline",
             "show_timestamps",
-            "page_flip_on_send",
-            "confirm_before_rewind",
-            "combine_queued_prompts",
-            "enter_steers",
+            "show_tips",
             "simple_mode",
+            "suggestions.ai_enabled",
+            "suggestions.enabled",
             "swarm_mode",
-            "antigravity_subagents",
-            "antigravity_skip_permissions",
-            "vim_mode",
-            "remember_tool_approvals",
+            "tools.respect_gitignore",
             "toolset.ask_user_question.timeout_enabled",
             "toolset.perplexity_web_search.enabled",
+            "toolset.web_fetch.allow_local",
             "toolset.x_search.enabled",
-            "auto_update",
-            "show_tips",
+            "ui.mouse_reporting_toggle",
+            "vim_mode",
             "voice_keybind_enabled",
-            // Per-tip contextual-hint children (hidden from the top-level list,
-            // toggled inside the group sub-sheet) are still Bool settings.
-            "contextual_hints.undo",
-            "contextual_hints.plan_mode",
-            "contextual_hints.image_input",
-            "contextual_hints.send_now",
-            "contextual_hints.small_screen",
-            "contextual_hints.word_select",
-            "contextual_hints.ssh_wrap",
-        ]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>(),
+        ],
         "Bool kind membership drift",
     );
 
@@ -2368,10 +2382,11 @@ fn registry_kind_membership_through_pr_14() {
             "scroll_mode",
             "theme",
             "toolset.web_search_source.codex",
-            "toolset.web_search_source.fireworks",
             "toolset.web_search_source.deepseek",
+            "toolset.web_search_source.fireworks",
             "toolset.web_search_source.kimi_code",
             "toolset.web_search_source.kimi_platform",
+            "toolset.web_search_source.opencode_go",
             "toolset.web_search_source.xai",
             "voice_capture_mode",
             "voice_stt_language",
@@ -2398,6 +2413,13 @@ fn registry_kind_membership_through_pr_14() {
         "DynamicEnum kind membership drift",
     );
 
+    let dynamic_multi_select_keys = by_kind.remove("DynamicMultiSelect").unwrap_or_default();
+    assert_eq!(
+        dynamic_multi_select_keys,
+        vec!["opencode_go_models"],
+        "DynamicMultiSelect kind membership drift",
+    );
+
     let int_keys = by_kind.remove("Int").unwrap_or_default();
     let mut sorted_int = int_keys.clone();
     sorted_int.sort();
@@ -2422,7 +2444,10 @@ fn registry_kind_membership_through_pr_14() {
             "fireworks_api_key",
             "kimi_api_key",
             "kimi_code_api_key",
-            "perplexity_api_key"
+            "meta_api_key",
+            "opencode_go_api_key",
+            "perplexity_api_key",
+            "wafer_api_key",
         ],
         "Secret kind membership drift",
     );
@@ -2464,10 +2489,11 @@ fn enum_settings_membership_through_pr_14() {
             "scroll_mode",
             "theme",
             "toolset.web_search_source.codex",
-            "toolset.web_search_source.fireworks",
             "toolset.web_search_source.deepseek",
+            "toolset.web_search_source.fireworks",
             "toolset.web_search_source.kimi_code",
             "toolset.web_search_source.kimi_platform",
+            "toolset.web_search_source.opencode_go",
             "toolset.web_search_source.xai",
             "voice_capture_mode",
             "voice_stt_language",

@@ -3513,19 +3513,24 @@ impl DashboardState {
                     return InputOutcome::Changed;
                 }
                 KeyCode::Enter if key.modifiers.is_empty() => {
-                    // Accept the selected completion; if its insert text
-                    // ends with a space the row "chains" (more input
-                    // expected, e.g. `/model `), otherwise close the
-                    // dropdown and fall through to the Enter handler which
-                    // dispatches the slash command.
+                    // Accept the selected completion; chain only when more
+                    // input is required (see `slash_enter_should_chain`).
+                    // Optional-arg commands (e.g. Open Grok `/login`) send.
                     let snap = self.dispatch.slash_snapshot();
-                    let chains = snap
-                        .selection()
-                        .is_some_and(|row| row.insert_text.ends_with(' '));
+                    let registry = self.dispatch.slash_controller.registry();
+                    let chains = crate::slash::slash_enter_should_chain(&snap, registry);
+                    let trim_accept = snap.cursor_in_command && !chains;
                     // Accept records MRU + queues an off-thread persist internally.
                     self.dispatch.accept_slash_completion(&self.models);
                     if chains {
                         return InputOutcome::Changed;
+                    }
+                    if trim_accept {
+                        let trimmed = self.dispatch.text().trim_end().to_owned();
+                        if trimmed != self.dispatch.text() {
+                            self.dispatch.set_text(&trimmed);
+                            self.dispatch.set_cursor(trimmed.len());
+                        }
                     }
                     self.dispatch.slash_close();
                     slash_accepted_send = true;
