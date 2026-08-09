@@ -662,32 +662,115 @@ impl JsonlStorageAdapter {
             }
             Err(error) => return Err(error),
         };
-        let mut entries: Vec<_> = std::fs::read_dir(&workflows_dir)?
-            .filter_map(Result::ok)
+        let mut entries_iter = std::fs::read_dir(&workflows_dir)?.filter_map(Result::ok);
+        let mut entries: Vec<_> = entries_iter
+            .by_ref()
             .take(MAX_RESTORED_WORKFLOW_RUNS.saturating_add(1))
             .collect();
+        // #region agent log
+        {
+            use std::io::Write;
+            let names: Vec<String> = entries
+                .iter()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "A",
+                        "location": "jsonl/mod.rs:load_workflow_runs_sync:pre_truncate",
+                        "message": "dirents after take before truncate",
+                        "data": {
+                            "taken": names.len(),
+                            "cap": MAX_RESTORED_WORKFLOW_RUNS,
+                            "includes_symlink": names.iter().any(|n| n == "wf_symlink"),
+                            "names": names
+                        },
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+                    })
+                );
+            }
+        }
+        // #endregion
         let entries_truncated = entries.len() > MAX_RESTORED_WORKFLOW_RUNS;
+        let overflow_entries = if entries_truncated {
+            entries.split_off(MAX_RESTORED_WORKFLOW_RUNS)
+        } else {
+            Vec::new()
+        };
         entries.truncate(MAX_RESTORED_WORKFLOW_RUNS);
         entries.sort_by_key(|entry| entry.file_name());
-        if entries_truncated {
-            tracing::warn!(
-                path = %workflows_dir.display(),
-                limit = MAX_RESTORED_WORKFLOW_RUNS,
-                "workflow restore run-count cap reached; ignoring remaining entries"
-            );
+        // #region agent log
+        {
+            use std::io::Write;
+            let names: Vec<String> = entries
+                .iter()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "B",
+                        "location": "jsonl/mod.rs:load_workflow_runs_sync:post_truncate",
+                        "message": "dirents kept after truncate+sort",
+                        "data": {
+                            "kept": names.len(),
+                            "entries_truncated": entries_truncated,
+                            "includes_symlink": names.iter().any(|n| n == "wf_symlink"),
+                            "first": names.first(),
+                            "last": names.last()
+                        },
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+                    })
+                );
+            }
         }
+        // #endregion
         let mut restored = Vec::new();
-        for entry in entries {
+        // #region agent log
+        let mut skip_symlink_manifest = 0usize;
+        let mut skip_other = 0usize;
+        let mut skip_reasons: Vec<String> = Vec::new();
+        // #endregion
+        for entry in entries
+            .into_iter()
+            .chain(overflow_entries)
+            .chain(entries_iter)
+        {
             let run_dir = entry.path();
             let Ok(run_meta) = std::fs::symlink_metadata(&run_dir) else {
+                // #region agent log
+                skip_other += 1;
+                skip_reasons.push(format!("meta_err:{}", run_dir.display()));
+                // #endregion
                 continue;
             };
             if run_meta.file_type().is_symlink() || !run_meta.is_dir() {
+                // #region agent log
+                skip_other += 1;
+                skip_reasons.push(format!("not_dir:{}", run_dir.display()));
+                // #endregion
                 continue;
             }
             if std::fs::symlink_metadata(run_dir.join("cleared"))
                 .is_ok_and(|meta| meta.is_file() && !meta.file_type().is_symlink())
             {
+                // #region agent log
+                skip_other += 1;
+                skip_reasons.push(format!("cleared:{}", run_dir.display()));
+                // #endregion
                 continue;
             }
             let manifest_path = run_dir.join("state.json");
@@ -699,9 +782,28 @@ impl JsonlStorageAdapter {
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
                 }) {
                 Ok(manifest) => manifest,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    // #region agent log
+                    skip_other += 1;
+                    skip_reasons.push(format!("manifest_missing:{}", manifest_path.display()));
+                    // #endregion
+                    continue;
+                }
                 Err(error) => {
                     tracing::warn!(path = %manifest_path.display(), %error, "skipping invalid workflow manifest");
+                    // #region agent log
+                    let name = run_dir.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                    if name == "wf_symlink" || error.to_string().contains("not a regular file") {
+                        skip_symlink_manifest += 1;
+                    } else {
+                        skip_other += 1;
+                    }
+                    skip_reasons.push(format!(
+                        "manifest_err:{}:{}",
+                        name,
+                        error
+                    ));
+                    // #endregion
                     continue;
                 }
             };
@@ -714,6 +816,10 @@ impl JsonlStorageAdapter {
                     != Some(manifest.state.run_id.as_str())
             {
                 tracing::warn!(path = %manifest_path.display(), "skipping unsupported or mismatched workflow manifest");
+                // #region agent log
+                skip_other += 1;
+                skip_reasons.push(format!("mismatch:{}", manifest_path.display()));
+                // #endregion
                 continue;
             }
             let script_path = crate::session::workflow::store::script_revision_path(
@@ -731,6 +837,10 @@ impl JsonlStorageAdapter {
                 Ok(script) => script,
                 Err(error) => {
                     tracing::warn!(path = %script_path.display(), %error, "skipping workflow with missing immutable script");
+                    // #region agent log
+                    skip_other += 1;
+                    skip_reasons.push(format!("script_err:{}:{}", script_path.display(), error));
+                    // #endregion
                     continue;
                 }
             };
@@ -744,6 +854,10 @@ impl JsonlStorageAdapter {
                 Ok(args) => args,
                 Err(error) => {
                     tracing::warn!(path = %args_path.display(), %error, "skipping workflow with missing immutable args");
+                    // #region agent log
+                    skip_other += 1;
+                    skip_reasons.push(format!("args_err:{}:{}", args_path.display(), error));
+                    // #endregion
                     continue;
                 }
             };
@@ -752,7 +866,45 @@ impl JsonlStorageAdapter {
                 script,
                 args,
             });
+            if restored.len() == MAX_RESTORED_WORKFLOW_RUNS {
+                break;
+            }
         }
+        if restored.len() == MAX_RESTORED_WORKFLOW_RUNS {
+            tracing::warn!(
+                path = %workflows_dir.display(),
+                limit = MAX_RESTORED_WORKFLOW_RUNS,
+                "workflow restore valid-run cap reached"
+            );
+        }
+        // #region agent log
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "C",
+                        "location": "jsonl/mod.rs:load_workflow_runs_sync:exit",
+                        "message": "restore result after validation",
+                        "data": {
+                            "restored": restored.len(),
+                            "skip_symlink_manifest": skip_symlink_manifest,
+                            "skip_other": skip_other,
+                            "skip_reasons": skip_reasons,
+                            "cap": MAX_RESTORED_WORKFLOW_RUNS
+                        },
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+                    })
+                );
+            }
+        }
+        // #endregion
         Ok(restored)
     }
     /// Read chat history from JSONL file, handling both legacy ChatRequestMessage format
