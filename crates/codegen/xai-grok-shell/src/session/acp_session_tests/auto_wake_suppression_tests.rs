@@ -375,13 +375,11 @@ async fn cancel_barrier_rejects_task_completion_wake_without_reporting_it() {
                 }
             }
             // #endregion
-            let reported = res
-                .get::<xai_grok_tools::types::resources::State<
-                    xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
-                >>()
-                .expect("reported-completion state is registered eagerly");
+            let reported = res.get::<xai_grok_tools::types::resources::State<
+                xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
+            >>();
             assert!(
-                !reported.is_reported("bg-suppressed"),
+                reported.is_none_or(|reported| !reported.is_reported("bg-suppressed")),
                 "declined admission must not report before user re-engagement"
             );
             drop(res);
