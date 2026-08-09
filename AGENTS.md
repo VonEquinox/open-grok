@@ -15,7 +15,7 @@ Instructions for AI coding agents (and humans) working in this repository.
 | Public binary | `open-grok` (not `grok`) |
 | User state | `$OPENGROK_HOME` or `~/.opengrok` — **never** `~/.grok` |
 | Project config | `.opengrok/` in the repo |
-| Language | Rust (edition 2024), toolchain pin in `rust-toolchain.toml` |
+| Language | Rust (edition 2024), Rust 1.94.0 pin in `rust-toolchain.toml` |
 | Root `Cargo.toml` | **Generated / read-only** — edit per-crate `Cargo.toml` only |
 
 Open Grok is **not** affiliated with xAI or OpenAI. Credentials, sessions, skills, plugins, and caches are **fully isolated** from upstream Grok Build installs.

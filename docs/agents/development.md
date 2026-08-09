@@ -6,7 +6,7 @@ Also see: root [`README.md`](../../README.md), [`CONTRIBUTING.md`](../../CONTRIB
 
 ## Prerequisites
 
-- Rust pin: `rust-toolchain.toml` (currently **1.92.0** + rustfmt, clippy)
+- Rust pin: `rust-toolchain.toml` (currently **1.94.0** + rustfmt, clippy)
 - `protoc` via `./bin/protoc` (Dotslash) or `PROTOC` / `PATH`
 - Xcode CLT for signed macOS release artifacts (Apple Silicon release path)
 
@@ -133,7 +133,7 @@ cargo test --locked -p xai-grok-shell --test codex_auth_contract -- <filter>
 
 | Item | Detail |
 | --- | --- |
-| Canonical version | `OPEN_GROK_VERSION` (e.g. `0.1.220-open-grok.9`) |
+| Canonical version | `OPEN_GROK_VERSION` (e.g. `1.0.0-open-grok.59`) |
 | Embedded version | Build injects `GROK_VERSION` → `xai-grok-version` |
 | Public command | `open-grok` only |
 | Managed install path | `$OPENGROK_HOME/bin/open-grok` |
@@ -141,6 +141,11 @@ cargo test --locked -p xai-grok-shell --test codex_auth_contract -- <filter>
 | CLI | `open-grok update --check` / `open-grok update` |
 | Disable auto | `[cli] auto_update = false`, `--no-auto-update`, `OPENGROK_DISABLE_AUTOUPDATER=1` |
 | Release notes | `docs/releases/` |
+
+The public version follows the upstream Grok Build release line and keeps
+Open Grok's monotonic fork serial as SemVer prerelease metadata. For example,
+the first fork release based on upstream `1.0.0` is
+`1.0.0-open-grok.59`, following `0.1.220-open-grok.58`.
 
 ### macOS release build (Apple Silicon)
 

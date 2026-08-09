@@ -451,10 +451,7 @@ pub(super) fn render_version_badge(
         spans.push(sep);
     }
 
-    // Upstream uses `xai_grok_update::channel_label()`. Open Grok's updater has
-    // not yet exported that helper in this cherry-pick set, so keep the badge
-    // channel-ready with an empty suffix (never hardcode "Beta").
-    let channel = "";
+    let channel = xai_grok_update::channel_label();
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(

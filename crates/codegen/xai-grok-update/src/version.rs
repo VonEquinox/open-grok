@@ -461,7 +461,11 @@ pub async fn write_version_cache(version: &str, stable_version: Option<&str>) {
 /// - `"gh-release"` — uses `gh release list` against GitHub Releases.
 pub async fn get_latest_version(installer: &str, config: &UpdateConfig) -> Result<String> {
     let version = fetch_latest_version(installer, config).await?;
-    let stable_ptr = try_fetch_stable_pointer().await;
+    // Open Grok publishes one full GitHub Release lane, so the fetched latest
+    // release is also the stable pointer when no separate pointer exists.
+    let stable_ptr = try_fetch_stable_pointer()
+        .await
+        .or_else(|| Some(version.clone()));
     write_version_cache(&version, stable_ptr.as_deref()).await;
     Ok(version)
 }
@@ -563,12 +567,62 @@ pub(crate) async fn try_fetch_stable_pointer() -> Option<String> {
     None
 }
 
+/// Read the cached stable version from `~/.opengrok/version.json`.
+pub fn cached_stable_version() -> Option<String> {
+    let version_path = grok_home().join("version.json");
+    let content = std::fs::read_to_string(&version_path).ok()?;
+    let version: GrokVersion = serde_json::from_str(&content).ok()?;
+    version.stable_version
+}
+
+fn derive_channel(current: &str, stable: &str) -> Option<&'static str> {
+    let current = semver::Version::parse(current).ok()?;
+    let stable = semver::Version::parse(stable).ok()?;
+    Some(if current > stable { "alpha" } else { "stable" })
+}
+
+/// Machine-readable release channel derived from the cached stable release.
+pub fn channel_name() -> Option<&'static str> {
+    use std::sync::OnceLock;
+
+    static NAME: OnceLock<Option<&'static str>> = OnceLock::new();
+    *NAME.get_or_init(|| {
+        let stable = cached_stable_version()?;
+        derive_channel(xai_grok_version::VERSION, &stable)
+    })
+}
+
+/// User-facing channel suffix derived from the cached stable release.
+pub fn channel_label() -> &'static str {
+    use std::sync::OnceLock;
+
+    static LABEL: OnceLock<&'static str> = OnceLock::new();
+    LABEL.get_or_init(|| match channel_name() {
+        Some("alpha") => " [alpha]",
+        Some(_) => " [stable]",
+        None => "",
+    })
+}
+
 /// Machine-readable provenance for Open Grok releases.
 pub const RELEASE_SOURCE: &str = "github";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derive_channel_compares_current_with_stable_release() {
+        assert_eq!(
+            derive_channel("1.0.0-open-grok.59", "0.1.220-open-grok.58"),
+            Some("alpha")
+        );
+        assert_eq!(
+            derive_channel("1.0.0-open-grok.59", "1.0.0-open-grok.59"),
+            Some("stable")
+        );
+        assert_eq!(derive_channel("not-semver", "1.0.0"), None);
+    }
 
     /// Verifies that a future `checked_at` timestamp (e.g. from clock skew or
     /// NTP time-warp) is never considered fresh. Without the clock-skew guard
