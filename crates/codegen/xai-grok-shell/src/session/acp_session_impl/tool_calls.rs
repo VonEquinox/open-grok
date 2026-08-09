@@ -1127,23 +1127,26 @@ impl SessionActor {
         let response = match result {
             Ok(tool_result) => {
                 async {
-                    let structured = tool_result.output.code_mode_result().map_err(|error| {
-                        format!("failed to encode `{tool_name}` output: {error}")
-                    })?;
-                    let post_tool_use_result = self
-                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
-                        .then(|| structured.clone());
+                    // Match the batch tool path: harvest tool-layer images before
+                    // Code Mode / PostToolUse serialize and bridge success handling.
                     let effective_tool_name = tool_result
                         .effective_tool_name
                         .clone()
                         .or_else(|| prepared.dispatch_target_name.clone())
                         .unwrap_or_else(|| prepared.tool_name.clone());
+                    let drained = DrainedToolSuccess::new(tool_result);
+                    let structured = drained.output().code_mode_result().map_err(|error| {
+                        format!("failed to encode `{tool_name}` output: {error}")
+                    })?;
+                    let post_tool_use_result = self
+                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
+                        .then(|| structured.clone());
                     self.handle_bridge_tool_success(
                         &prepared.tool_call_id,
                         &prepared.call_id,
                         &prepared.tool_name,
                         &effective_tool_name,
-                        tool_result,
+                        drained,
                         prepared.concatenated_json_count,
                         &prepared.model_id,
                         &prepared.parsed_args,

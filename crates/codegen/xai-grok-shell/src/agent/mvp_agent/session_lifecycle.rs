@@ -218,7 +218,9 @@ impl MvpAgent {
     }
     /// Per-session prompt-intake lock: prompts land in submission order and a
     /// cancel cannot overtake the prompt it targets. Keep preambles lean.
-    pub(super) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
+    /// `pub(crate)` so sibling handlers (e.g. `handlers::model_switch`) can
+    /// serialize harness/model switches with prompt intake.
+    pub(crate) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
         self.session_registry.dispatch_lock(id)
     }
     /// Record the coarse lifecycle state for a session.

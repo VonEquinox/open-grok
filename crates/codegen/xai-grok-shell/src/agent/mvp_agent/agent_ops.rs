@@ -603,6 +603,14 @@ impl MvpAgent {
     pub(crate) fn is_data_collection_disabled(&self) -> bool {
         self.auth_manager.is_data_collection_disabled()
     }
+    /// Telemetry enabled and not ZDR. Same gate as session `telemetry_enabled`.
+    pub(crate) fn product_analytics_enabled(&self) -> bool {
+        self.cfg.borrow().is_telemetry_enabled()
+            && !self
+                .auth_manager
+                .current_or_expired()
+                .is_some_and(|a| a.is_zdr_team())
+    }
     /// Re-sync the `Send` mirror of `cfg.is_trace_upload_enabled()` that the
     /// per-session collection gates read (`cfg` is `!Send`; the gates run on
     /// the tokio pool). Must be called after any mid-session config change

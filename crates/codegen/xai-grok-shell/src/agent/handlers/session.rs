@@ -287,3 +287,141 @@ async fn handle_session_list(
         .to_ext_response()
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
+
+/// Force `kind: ["build"]` on a list request (ACP `session/list` is build-only).
+/// Mirrors upstream `unified_list::force_kind(..., SessionKind::Build)` which
+/// this fork has not yet re-exported as a generic helper.
+fn force_kind_build(req: &mut crate::session::unified_list::ListReq) {
+    use crate::session::unified_list::{KIND_FACET_KEY, SessionKind};
+    let mut meta = match req.meta.take() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    let mut filters = match meta.remove("x.ai/facetFilters") {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    filters.insert(
+        KIND_FACET_KEY.to_owned(),
+        serde_json::json!([SessionKind::Build.as_str()]),
+    );
+    meta.insert(
+        "x.ai/facetFilters".to_owned(),
+        serde_json::Value::Object(filters),
+    );
+    req.meta = Some(serde_json::Value::Object(meta));
+}
+
+fn acp_list_response_meta(
+    result: &crate::session::unified_list::UnifiedListResult,
+) -> Option<acp::Meta> {
+    use crate::session::unified_list::{ExtListResponseMeta, PartialInfo, PartialReason};
+    let meta = ExtListResponseMeta {
+        facets: result.facets.clone(),
+        partial: PartialInfo {
+            conversations: result.conversations_partial.is_some(),
+            reason: result.conversations_partial.map(|r| match r {
+                PartialReason::Timeout => "timeout",
+                PartialReason::Error => "error",
+                PartialReason::NoOauth => "no_oauth",
+            }),
+        },
+        list_scope: result.scope.is_relaxed().then_some(result.scope.as_str()),
+    };
+    match serde_json::to_value(meta) {
+        Ok(serde_json::Value::Object(map)) => Some(map),
+        Ok(other) => {
+            tracing::warn!(kind = ?other, "session list _meta was not an object");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "session list _meta failed to serialize");
+            None
+        }
+    }
+}
+
+/// ACP schema requires an absolute `cwd`; rows without one are dropped.
+fn try_acp_session_info(
+    info: crate::session::unified_list::SessionInfo,
+) -> Option<acp::SessionInfo> {
+    if !PathBuf::from(&info.cwd).is_absolute() {
+        return None;
+    }
+    let crate::session::unified_list::SessionInfo {
+        session_id,
+        cwd,
+        title,
+        updated_at,
+        meta,
+    } = info;
+    let meta = match serde_json::to_value(&meta) {
+        Ok(serde_json::Value::Object(map)) => Some(map),
+        _ => None,
+    };
+    Some(
+        acp::SessionInfo::new(acp::SessionId::new(session_id), PathBuf::from(cwd))
+            .title(title)
+            .updated_at(updated_at)
+            .meta(meta),
+    )
+}
+
+/// Build sessions in exactly the requested directory. A page walk cannot reach
+/// past `over_fetch(limit)` rows per cwd: the local lane re-scans that window
+/// each page instead of seeking to the cursor.
+pub(crate) async fn handle_list_sessions(
+    agent: &MvpAgent,
+    args: acp::ListSessionsRequest,
+) -> Result<acp::ListSessionsResponse, acp::Error> {
+    use crate::session::unified_list;
+
+    // Kept in step with the capability, withheld under chat mode.
+    if crate::agent::chat_modes::process_chat_mode_enabled() {
+        return Err(acp::Error::method_not_found());
+    }
+
+    let additional_directories = args.additional_directories.len();
+    let cwd = args.cwd.map(|p| p.to_string_lossy().into_owned());
+    // Upstream sets `cwd_scope: CwdScope::Only`. This fork's `ListReq` still
+    // exposes `allow_relax` only (`false` → `WithSiblings`). Exact-cwd-only
+    // fetch needs the upstream `cwd_scope` field on unified_list.
+    let mut req = unified_list::ListReq {
+        cwd: cwd.clone(),
+        cursor: args.cursor,
+        meta: args.meta.map(serde_json::Value::Object),
+        allow_relax: false,
+        ..Default::default()
+    };
+    force_kind_build(&mut req);
+
+    let registry_client = agent.session_registry_client();
+    let conversations_client = agent.conversations_client();
+    let result = unified_list::build_unified_list(
+        registry_client.as_ref(),
+        conversations_client.as_ref(),
+        req,
+    )
+    .await;
+
+    let meta = acp_list_response_meta(&result);
+    // Drop rows the ACP schema cannot represent (non-absolute cwd), matching
+    // upstream `into_session_info().try_into().ok()` filtering.
+    let sessions: Vec<acp::SessionInfo> = result
+        .rows
+        .into_iter()
+        .filter_map(|row| try_acp_session_info(row.into_session_info()))
+        .collect();
+
+    tracing::debug!(
+        cwd = cwd.as_deref().unwrap_or("<all>"),
+        paged = result.next_cursor.is_some(),
+        returned = sessions.len(),
+        additional_directories,
+        "session/list"
+    );
+
+    Ok(acp::ListSessionsResponse::new(sessions)
+        .next_cursor(result.next_cursor)
+        .meta(meta))
+}

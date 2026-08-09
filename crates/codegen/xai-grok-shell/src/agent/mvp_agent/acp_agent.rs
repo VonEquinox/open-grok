@@ -2693,12 +2693,10 @@ impl acp::Agent for MvpAgent {
                     candidates: prepared.candidates,
                     standalone_active: false,
                 };
-                let sessions = self
-                    .sessions
-                    .borrow()
-                    .iter()
-                    .map(|(session_id, handle)| (session_id.clone(), handle.cmd_tx.clone()))
-                    .collect::<Vec<_>>();
+                let mut sessions = Vec::new();
+                self.for_each_resident(|session_id, handle| {
+                    sessions.push((session_id.clone(), handle.cmd_tx.clone()));
+                });
                 for (session_id, tx) in &sessions {
                     let (responds_to, response) = tokio::sync::oneshot::channel();
                     tx.send(SessionCommand::ReloadWebSearchToolset {

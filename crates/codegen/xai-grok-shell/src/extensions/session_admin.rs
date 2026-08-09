@@ -117,14 +117,12 @@ async fn handle_session_rename(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
 
     let info = summary.info.clone();
     let provider_boundary = agent
-        .sessions
-        .borrow()
-        .get(&session_id)
+        .resident_handle(&session_id)
         .map(|handle| handle.feedback_manager.provider_boundary());
     let allows_xai_export = !summary.ever_used_codex
-        && provider_boundary
-            .as_ref()
-            .is_none_or(|boundary| boundary.allows_xai_export());
+        && provider_boundary.as_ref().is_none_or(
+            |boundary: &crate::session::persistence::ProviderBoundary| boundary.allows_xai_export(),
+        );
 
     // Update the session title in local storage
     let storage = JsonlStorageAdapter::default();
@@ -175,10 +173,11 @@ async fn handle_session_rename(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
             Some(req.title.clone())
         };
         tokio::spawn(async move {
-            if provider_boundary
-                .as_ref()
-                .is_some_and(|boundary| !boundary.allows_xai_export())
-            {
+            if provider_boundary.as_ref().is_some_and(
+                |boundary: &crate::session::persistence::ProviderBoundary| {
+                    !boundary.allows_xai_export()
+                },
+            ) {
                 return;
             }
             let update = crate::agent::session_registry_client::UpdateRequest {
