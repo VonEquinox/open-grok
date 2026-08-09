@@ -1525,6 +1525,12 @@ async fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
+            // #region agent log
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{}", serde_json::json!({"hypothesisId":"B","location":"cancel_running_task_tests.rs:synthetic_test","message":"test setup start","data":{"stack_hint":"libtest_default"},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+            });
+            // #endregion
             let actor = actor_with_persistence_drain().await;
             actor.events.set_pending_interrupt_reminder();
             let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(
@@ -1532,7 +1538,19 @@ async fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
             ))];
             let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
             let actor_for_prompt = actor.clone();
+            // #region agent log
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{}", serde_json::json!({"hypothesisId":"B","location":"cancel_running_task_tests.rs:synthetic_test","message":"about to spawn_local handle_prompt","data":{"prompt_id":"scheduler-fired-test-1"},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+            });
+            // #endregion
             let prompt_task = tokio::task::spawn_local(async move {
+                // #region agent log
+                let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(f, "{}", serde_json::json!({"hypothesisId":"B","location":"cancel_running_task_tests.rs:synthetic_test","message":"inside spawn_local before handle_prompt call","data":{},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+                });
+                // #endregion
                 actor_for_prompt
                     .handle_prompt(
                         "scheduler-fired-test-1",
@@ -1550,6 +1568,12 @@ async fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
                     .await
             });
             assert!(ack_rx.await.is_ok(), "persist ack should resolve");
+            // #region agent log
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{}", serde_json::json!({"hypothesisId":"C","location":"cancel_running_task_tests.rs:synthetic_test","message":"persist ack resolved","data":{},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+            });
+            // #endregion
             assert!(
                 actor.events.take_pending_interrupt_reminder(),
                 "a synthetic-origin turn must NOT consume the interrupt reminder"

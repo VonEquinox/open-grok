@@ -12,6 +12,11 @@ const STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 /// Max times the model may re-call `StructuredOutput` with non-conforming args
 /// before the turn ends with the last validation error.
 const STRUCTURED_OUTPUT_MAX_RETRIES: u32 = 3;
+// #region agent log
+thread_local! {
+    static AGENT_HANDLE_PROMPT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+// #endregion
 fn is_rate_limited_turn_result(result: &Result<TurnOutcome, acp::Error>) -> bool {
     matches!(
         result,
@@ -309,6 +314,17 @@ impl SessionActor {
         persist_ack: Option<oneshot::Sender<()>>,
         parsed_prompt_tx: Option<oneshot::Sender<ParsedPromptInfo>>,
     ) -> PromptTurnResult {
+        // #region agent log
+        let hp_depth = AGENT_HANDLE_PROMPT_DEPTH.with(|d| {
+            let n = d.get() + 1;
+            d.set(n);
+            n
+        });
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "{}", serde_json::json!({"hypothesisId":"A","location":"turn.rs:handle_prompt:entry","message":"handle_prompt entered","data":{"prompt_id":prompt_id,"depth":hp_depth,"has_persist_ack":persist_ack.is_some()},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+        });
+        // #endregion
         let handle_prompt_start = std::time::Instant::now();
         // Allocate Codex's sticky-routing cell at the outer prompt boundary,
         // including manual `/compact` prompts that return before inference.
@@ -333,6 +349,12 @@ impl SessionActor {
             })),
         );
         let origin = super::super::PromptOrigin::from_prompt_id(prompt_id);
+        // #region agent log
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "{}", serde_json::json!({"hypothesisId":"D","location":"turn.rs:handle_prompt:origin","message":"origin classified","data":{"prompt_id":prompt_id,"origin":format!("{origin:?}"),"is_synthetic":origin.is_synthetic(),"depth":hp_depth},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+        });
+        // #endregion
         if let Some(completion_id) = origin.completion_id() {
             self.mark_completions_reported(&[completion_id]).await;
         }
@@ -833,7 +855,14 @@ impl SessionActor {
                 self.chat_state_handle.begin_turn_capture();
             }
             let origin = super::super::PromptOrigin::from_prompt_id(prompt_id);
-            if matches!(origin, super::super::PromptOrigin::User) {
+            // #region agent log
+            let inject_interrupt = matches!(origin, super::super::PromptOrigin::User);
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{}", serde_json::json!({"hypothesisId":"D","location":"turn.rs:handle_prompt:interrupt_gate","message":"interrupt reminder gate","data":{"prompt_id":prompt_id,"origin":format!("{origin:?}"),"inject_interrupt":inject_interrupt},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+            });
+            // #endregion
+            if inject_interrupt {
                 self.maybe_inject_interrupt_reminder().await;
             }
             let mut user_chat = match &origin {
@@ -901,6 +930,12 @@ impl SessionActor {
                         .is_ok()
                         && matches!(flush_rx.await, Ok(Ok(())))
                     {
+                        // #region agent log
+                        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(f, "{}", serde_json::json!({"hypothesisId":"C","location":"turn.rs:handle_prompt:persist_ack","message":"persist ack sending","data":{"prompt_id":prompt_id},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
+                        });
+                        // #endregion
                         let _ = ack.send(());
                     } else {
                         tracing::error!(
