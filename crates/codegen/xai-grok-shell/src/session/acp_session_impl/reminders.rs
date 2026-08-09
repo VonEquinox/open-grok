@@ -549,12 +549,6 @@ impl SessionActor {
     /// prompts). Skipped for the harness that owns this surface; unlike the date-rollover reminder,
     /// no template scoping applies to an interrupt notice.
     pub(super) async fn maybe_inject_interrupt_reminder(&self) {
-        // #region agent log
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
-            use std::io::Write;
-            writeln!(f, "{}", serde_json::json!({"hypothesisId":"D","location":"reminders.rs:maybe_inject_interrupt_reminder","message":"interrupt inject entered","data":{},"timestamp":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()}))
-        });
-        // #endregion
         if !self.events.take_pending_interrupt_reminder() {
             return;
         }
