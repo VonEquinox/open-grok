@@ -1469,12 +1469,6 @@ mod tests {
         /// Max time to wait for events after debounce (debounce + buffer)
         const EVENT_WAIT_MS: u64 = 300;
         /// Timeout for watcher initialization in tests
-        // FSEvents rebuilds its stream for every watch registration, so the
-        // forced per-directory strategy tests need enough time to install the
-        // same watch set that inotify installs nearly instantly.
-        #[cfg(target_os = "macos")]
-        const TEST_INIT_TIMEOUT: Duration = Duration::from_secs(60);
-        #[cfg(not(target_os = "macos"))]
         const TEST_INIT_TIMEOUT: Duration = Duration::from_secs(15);
         /// Number of retries for starting watcher (helps with flaky FSEvents)
         const START_RETRIES: usize = 3;
@@ -2486,6 +2480,10 @@ mod tests {
         /// Worktrees parked inside a project cost no watches of their own.
         #[test]
         #[serial]
+        #[cfg_attr(
+            not(target_os = "linux"),
+            ignore = "per-dir watch strategy is production-only on Linux; FSEvents rebuilds its stream per watch"
+        )]
         fn project_dir_nested_worktrees_cost_no_extra_watches() {
             const HIDDEN_PARENT: &str = ".harness/worktrees";
             const PLAIN_PARENT: &str = "worktrees";
@@ -2542,6 +2540,10 @@ mod tests {
         /// and `.git` costs a handful, not one per internal dir.
         #[test]
         #[serial]
+        #[cfg_attr(
+            not(target_os = "linux"),
+            ignore = "per-dir watch strategy is production-only on Linux; FSEvents rebuilds its stream per watch"
+        )]
         fn test_per_dir_watch_count_excludes_ignored_and_git_internals() {
             let temp = TempDir::new().unwrap();
             let root = dunce::canonicalize(temp.path()).unwrap();
