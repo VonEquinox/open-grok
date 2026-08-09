@@ -323,65 +323,7 @@ async fn workflow_restore_rejects_symlinks_and_caps_run_count() {
     let symlinked = workflows.join("wf_symlink");
     std::fs::create_dir_all(symlinked.join("scripts")).unwrap();
     symlink(&attacker, symlinked.join("state.json")).unwrap();
-    // #region agent log
-    {
-        use std::io::Write;
-        let dirents: Vec<String> = std::fs::read_dir(&workflows)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/opt/cursor/logs/debug.log")
-        {
-            let _ = writeln!(
-                f,
-                "{}",
-                serde_json::json!({
-                    "hypothesisId": "D",
-                    "location": "jsonl/tests.rs:workflow_restore_rejects_symlinks_and_caps_run_count",
-                    "message": "test fixture before load",
-                    "data": {
-                        "dirent_count": dirents.len(),
-                        "valid_created": MAX_RESTORED_WORKFLOW_RUNS + 1,
-                        "includes_symlink": dirents.iter().any(|n| n == "wf_symlink"),
-                        "cap": MAX_RESTORED_WORKFLOW_RUNS
-                    },
-                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
-                })
-            );
-        }
-    }
-    // #endregion
     let loaded = adapter.load_session_without_updates(&info).await.unwrap();
-    // #region agent log
-    {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/opt/cursor/logs/debug.log")
-        {
-            let _ = writeln!(
-                f,
-                "{}",
-                serde_json::json!({
-                    "hypothesisId": "E",
-                    "location": "jsonl/tests.rs:after_load",
-                    "message": "loaded workflow_runs length",
-                    "data": {
-                        "loaded": loaded.workflow_runs.len(),
-                        "expected": MAX_RESTORED_WORKFLOW_RUNS,
-                        "has_symlink_run": loaded.workflow_runs.iter().any(|r| r.manifest.state.run_id == "wf_symlink")
-                    },
-                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
-                })
-            );
-        }
-    }
-    // #endregion
     assert_eq!(loaded.workflow_runs.len(), MAX_RESTORED_WORKFLOW_RUNS);
     assert!(
             loaded
