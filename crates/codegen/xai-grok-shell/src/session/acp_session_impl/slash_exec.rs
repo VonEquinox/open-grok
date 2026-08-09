@@ -90,6 +90,17 @@ impl SessionActor {
                 );
                 ok_end_turn(0, None)
             }
+            BuiltinAction::ToggleAllTurns => {
+                self.execute_all_turns_command(None).await?;
+                ok_end_turn(0, None)
+            }
+            BuiltinAction::SetAllTurns { enabled } => {
+                self.execute_all_turns_command(Some(enabled)).await?;
+                ok_end_turn(0, None)
+            }
+            BuiltinAction::InvalidAllTurnsArgument => {
+                Err(acp::Error::invalid_params().data("Usage: /all-turns [on|off]"))
+            }
             BuiltinAction::FlushMemory => {
                 if self.memory.is_enabled() {
                     let did_flush = self.run_memory_flush("slash_command", None).await;
@@ -1002,6 +1013,35 @@ impl SessionActor {
                 ok_end_turn(0, None)
             }
         }
+    }
+
+    async fn execute_all_turns_command(&self, requested: Option<bool>) -> Result<(), acp::Error> {
+        let current = crate::util::config::load_reasoning_all_turns_sync().unwrap_or(false);
+        let enabled = requested.unwrap_or(!current);
+        let route = self.chat_state_handle.get_sampling_config().await;
+        let compatible = route.as_ref().is_some_and(|config| {
+            config.provider == xai_grok_sampling_types::ModelProvider::Codex
+                && config.api_backend == xai_grok_sampling_types::ApiBackend::Responses
+        });
+        if enabled && !compatible {
+            return Err(acp::Error::invalid_request().data(
+                "All Turns is available only for models using the Codex Responses provider.",
+            ));
+        }
+        crate::util::config::set_reasoning_all_turns(enabled)
+            .await
+            .map_err(|error| {
+                acp::Error::internal_error().data(format!(
+                    "Failed to update All Turns in config.toml: {error}"
+                ))
+            })?;
+        let context = if enabled { "all_turns" } else { "current_turn" };
+        self.send_host_turn_slash_command_output(&format!(
+            "All Turns {} globally (`reasoning.context = {context}`).",
+            if enabled { "enabled" } else { "disabled" },
+        ))
+        .await;
+        Ok(())
     }
 
     async fn execute_feedback_command(self: &Arc<Self>, text: String) -> PromptTurnResult {

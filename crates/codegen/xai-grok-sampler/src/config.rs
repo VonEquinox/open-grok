@@ -16,6 +16,22 @@ use xai_grok_sampling_types::{
 use crate::attribution::SharedAttributionCallback;
 use crate::retry::{DEFAULT_MAX_RETRIES, RATE_LIMIT_RETRY_THRESHOLD};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningContext {
+    CurrentTurn,
+    AllTurns,
+}
+
+impl ReasoningContext {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CurrentTurn => "current_turn",
+            Self::AllTurns => "all_turns",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthScheme {
@@ -82,6 +98,10 @@ pub struct SamplerConfig {
 
     // Reasoning effort
     pub reasoning_effort: Option<ReasoningEffort>,
+
+    /// Responses API `reasoning.context` override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_context: Option<ReasoningContext>,
 
     /// Responses API `service_tier` request value (`priority`, `flex`, …).
     /// `None` omits the field (standard routing).
@@ -182,6 +202,7 @@ impl Default for SamplerConfig {
             stream_tool_calls: false,
             idle_timeout_secs: None,
             reasoning_effort: None,
+            reasoning_context: None,
             service_tier: None,
             reasoning_summary: None,
             origin_client: None,

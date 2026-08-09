@@ -138,6 +138,36 @@ pub fn load_local_feature_flags_sync() -> BTreeMap<&'static str, bool> {
         .collect()
 }
 
+pub fn load_reasoning_all_turns_sync() -> Option<bool> {
+    super::load_effective_config()
+        .ok()
+        .as_ref()
+        .and_then(|root| read_nested_bool(root, "reasoning.all_turns"))
+}
+
+pub async fn set_reasoning_all_turns(value: bool) -> Result<()> {
+    let _guard = lock_config_writes().await;
+    let path = user_config_path();
+    let contents = read_to_string_or_empty(&path)?;
+    let mut root = if contents.trim().is_empty() {
+        TomlValue::Table(TomlMap::new())
+    } else {
+        toml::from_str::<TomlValue>(&contents).map_err(|parse_err| {
+            anyhow::anyhow!(
+                "refusing to overwrite unparseable {}: {}; save a backup and fix the syntax error before retrying",
+                path.display(),
+                parse_err,
+            )
+        })?
+    };
+    if !root.is_table() {
+        root = TomlValue::Table(TomlMap::new());
+    }
+    set_nested_bool(&mut root, "reasoning.all_turns", value);
+    atomic_write_string(&path, &toml::to_string_pretty(&root)?)?;
+    Ok(())
+}
+
 /// Persist the provider-local OpenCode Go model allowlist. Empty disables all
 /// discovered models while retaining the provider credential and catalog.
 pub async fn set_opencode_go_enabled_models(mut models: Vec<String>) -> Result<()> {
@@ -724,5 +754,13 @@ mod tests {
         assert_eq!(read_nested_bool(&root, "features.web_fetch"), Some(true));
         assert_eq!(read_nested_bool(&root, "features.lsp_tools"), Some(true));
         assert_eq!(read_nested_bool(&root, "memory.dream.enabled"), Some(true));
+    }
+
+    #[test]
+    fn reasoning_all_turns_uses_nested_boolean_shape() {
+        let mut root: TomlValue = toml::from_str("[reasoning]\nfuture_mode = true\n").unwrap();
+        set_nested_bool(&mut root, "reasoning.all_turns", true);
+        assert_eq!(read_nested_bool(&root, "reasoning.all_turns"), Some(true));
+        assert_eq!(read_nested_bool(&root, "reasoning.future_mode"), Some(true));
     }
 }

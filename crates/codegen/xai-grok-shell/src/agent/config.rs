@@ -1095,6 +1095,20 @@ pub struct DiagnosticsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crash_handler: Option<bool>,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_turns: Option<bool>,
+}
+
+impl ReasoningConfig {
+    fn is_empty(&self) -> bool {
+        self.all_turns.is_none()
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelsConfig {
@@ -1472,6 +1486,9 @@ pub struct Config {
     pub endpoints: EndpointsConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    /// `[reasoning]` Responses API reasoning-context overrides.
+    #[serde(default, skip_serializing_if = "ReasoningConfig::is_empty")]
+    pub reasoning: ReasoningConfig,
     /// Session behavior configuration.
     #[serde(default)]
     pub session: SessionConfig,
@@ -1898,6 +1915,7 @@ impl Default for Config {
             shell_environment_policy: ShellEnvironmentPolicyKnownKeys::default(),
             endpoints,
             telemetry: TelemetryConfig::default(),
+            reasoning: ReasoningConfig::default(),
             session: SessionConfig::default(),
             agent: AgentSelectionConfig::default(),
             repo_changes_dedup: RepoChangesDedupConfig::default(),
@@ -6066,6 +6084,7 @@ pub fn sampling_config_for_model(
             .then_some(client_version)
             .flatten(),
         reasoning_effort: info.reasoning_effort,
+        reasoning_context: None,
         service_tier: None,
         reasoning_summary: model_reasoning_summary(info),
         force_http1: false,

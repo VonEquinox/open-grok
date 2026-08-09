@@ -528,6 +528,7 @@ fn patch_codex_request_compat(
             multi_agent_v2,
             local_effort,
             reasoning_summary,
+            ..Default::default()
         },
     );
 }
@@ -1184,6 +1185,7 @@ struct ClientDefaults {
     idle_timeout_secs: Option<u64>,
     codex_multi_agent_v2: bool,
     reasoning_effort: Option<xai_grok_sampling_types::ReasoningEffort>,
+    reasoning_context: Option<crate::config::ReasoningContext>,
     service_tier: Option<String>,
     reasoning_summary: Option<xai_grok_sampling_types::ReasoningSummary>,
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
@@ -1381,6 +1383,14 @@ impl SamplingClient {
     ) -> Result<Self> {
         let provider_adapter = provider_adapter(config.provider);
         provider_adapter.validate_backend(&config.api_backend)?;
+        if config.reasoning_context.is_some()
+            && (config.provider != ModelProvider::Codex
+                || config.api_backend != ApiBackend::Responses)
+        {
+            return Err(SamplingError::InvalidConfiguration(
+                "reasoning.context is available only for the Codex Responses provider",
+            ));
+        }
         let codex_turn_state = provider_adapter
             .supports_turn_state(&config.api_backend)
             .then_some(codex_turn_state)
@@ -1496,6 +1506,7 @@ impl SamplingClient {
             idle_timeout_secs: config.idle_timeout_secs,
             codex_multi_agent_v2: config.codex_multi_agent_v2,
             reasoning_effort: config.reasoning_effort,
+            reasoning_context: config.reasoning_context,
             service_tier: config.service_tier,
             reasoning_summary: config.reasoning_summary,
             doom_loop_recovery: config.doom_loop_recovery,
@@ -2182,6 +2193,7 @@ impl SamplingClient {
             ResponsesRequestPolicy {
                 multi_agent_v2: self.defaults.codex_multi_agent_v2,
                 local_effort: local_reasoning_effort,
+                reasoning_context: self.defaults.reasoning_context,
                 reasoning_summary: self.defaults.reasoning_summary,
             },
         );
@@ -2551,6 +2563,7 @@ impl SamplingClient {
             ResponsesRequestPolicy {
                 multi_agent_v2: self.defaults.codex_multi_agent_v2,
                 local_effort: request.local_reasoning_effort,
+                reasoning_context: self.defaults.reasoning_context,
                 reasoning_summary: self.defaults.reasoning_summary,
             },
         );
@@ -2722,6 +2735,7 @@ impl SamplingClient {
             ResponsesRequestPolicy {
                 multi_agent_v2: self.defaults.codex_multi_agent_v2,
                 local_effort: request.local_reasoning_effort,
+                reasoning_context: self.defaults.reasoning_context,
                 reasoning_summary: self.defaults.reasoning_summary,
             },
         );
@@ -3787,6 +3801,7 @@ mod tests {
             stream_tool_calls: false,
             idle_timeout_secs: None,
             reasoning_effort: None,
+            reasoning_context: None,
             service_tier: None,
             reasoning_summary: None,
             origin_client: None,
@@ -3804,6 +3819,25 @@ mod tests {
             doom_loop_recovery: None,
             header_injector: None,
         }
+    }
+
+    #[test]
+    fn reasoning_context_requires_codex_responses() {
+        let mut config = minimal_config();
+        config.reasoning_context = Some(crate::config::ReasoningContext::AllTurns);
+        assert!(matches!(
+            SamplingClient::new(config.clone()),
+            Err(SamplingError::InvalidConfiguration(_))
+        ));
+
+        config.provider = ModelProvider::Codex;
+        assert!(matches!(
+            SamplingClient::new(config.clone()),
+            Err(SamplingError::InvalidConfiguration(_))
+        ));
+
+        config.api_backend = ApiBackend::Responses;
+        SamplingClient::new(config).expect("Codex Responses supports reasoning.context");
     }
 
     #[test]

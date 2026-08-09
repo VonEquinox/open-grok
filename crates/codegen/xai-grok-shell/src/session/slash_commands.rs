@@ -77,6 +77,21 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         },
     },
     BuiltinCommand {
+        name: "all-turns",
+        description: "Toggle GPT-5.6 all-turns reasoning context",
+        argument_hint: Some("on|off"),
+        aliases: &["all_turns", "allturns"],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |args| match args.trim().to_ascii_lowercase().as_str() {
+            "" => BuiltinAction::ToggleAllTurns,
+            "on" | "true" | "1" | "yes" | "enable" => BuiltinAction::SetAllTurns { enabled: true },
+            "off" | "false" | "0" | "no" | "disable" => {
+                BuiltinAction::SetAllTurns { enabled: false }
+            }
+            _ => BuiltinAction::InvalidAllTurnsArgument,
+        },
+    },
+    BuiltinCommand {
         name: "flush",
         description: "Flush conversation memory to disk now",
         argument_hint: None,
@@ -817,6 +832,11 @@ pub(super) enum BuiltinAction {
     SetYolo {
         enabled: bool,
     },
+    ToggleAllTurns,
+    SetAllTurns {
+        enabled: bool,
+    },
+    InvalidAllTurnsArgument,
     ToggleSwarm,
     SetSwarm {
         enabled: bool,
@@ -887,6 +907,9 @@ impl BuiltinAction {
         match self {
             BuiltinAction::Compact { .. } => "compact",
             BuiltinAction::SetYolo { .. } => "yolo",
+            BuiltinAction::ToggleAllTurns
+            | BuiltinAction::SetAllTurns { .. }
+            | BuiltinAction::InvalidAllTurnsArgument => "all-turns",
             BuiltinAction::ToggleSwarm | BuiltinAction::SetSwarm { .. } => "swarm",
             BuiltinAction::FlushMemory => "flush",
             BuiltinAction::Dream => "dream",
@@ -923,6 +946,8 @@ impl BuiltinAction {
         match self {
             BuiltinAction::Compact { user_context } => user_context.is_some(),
             BuiltinAction::SetYolo { .. } => true,
+            BuiltinAction::ToggleAllTurns => false,
+            BuiltinAction::SetAllTurns { .. } | BuiltinAction::InvalidAllTurnsArgument => true,
             BuiltinAction::ToggleSwarm => false,
             BuiltinAction::SetSwarm { .. } => true,
             BuiltinAction::FlushMemory => false,
@@ -1132,9 +1157,24 @@ pub(super) fn resolve(
     workflows: &[crate::session::workflow::registry::WorkflowListing],
     loop_fire_mode: LoopFireMode,
 ) -> Result<Vec<acp::ContentBlock>, SlashCommandOutcome> {
-    let Some((command_name, args)) = parse_slash_prefix(&prompt_blocks) else {
+    let Some((mut command_name, mut args)) = parse_slash_prefix(&prompt_blocks) else {
         return Ok(prompt_blocks);
     };
+    if command_name.eq_ignore_ascii_case("all") {
+        let mut parts = args.splitn(2, char::is_whitespace);
+        if parts
+            .next()
+            .is_some_and(|part| part.eq_ignore_ascii_case("turns"))
+        {
+            command_name = "all-turns";
+            args = parts.next().unwrap_or_default().trim();
+        }
+    } else if ["all-turns", "all_turns", "allturns"]
+        .iter()
+        .any(|name| command_name.eq_ignore_ascii_case(name))
+    {
+        command_name = "all-turns";
+    }
 
     // Prompt-only commands (e.g. /loop) need a full agent round-trip, not
     // a direct BuiltinAction. They're filtered against the same gate the
@@ -1461,6 +1501,53 @@ mod tests {
                 ),
                 "expected off for {arg:?}",
             );
+        }
+    }
+
+    #[test]
+    fn all_turns_parses_toggle_explicit_and_literal_spelling() {
+        assert!(matches!(
+            resolve_builtin("all-turns", ""),
+            Some(BuiltinAction::ToggleAllTurns)
+        ));
+        assert!(matches!(
+            resolve_builtin("all-turns", "on"),
+            Some(BuiltinAction::SetAllTurns { enabled: true })
+        ));
+        assert!(matches!(
+            resolve_builtin("all-turns", "off"),
+            Some(BuiltinAction::SetAllTurns { enabled: false })
+        ));
+        assert!(matches!(
+            resolve_builtin("all-turns", "sometimes"),
+            Some(BuiltinAction::InvalidAllTurnsArgument)
+        ));
+
+        for command in ["/All Turns", "/All Turns on", "/ALL_TURNS off"] {
+            let outcome = resolve(
+                vec![text_block(command)],
+                &[],
+                all_gated(),
+                SkillSlashRewrite::default(),
+                &[],
+            )
+            .unwrap_err();
+            match command {
+                "/All Turns" => {
+                    assert!(matches!(
+                        outcome,
+                        SlashCommandOutcome::Builtin(BuiltinAction::ToggleAllTurns)
+                    ))
+                }
+                "/All Turns on" => assert!(matches!(
+                    outcome,
+                    SlashCommandOutcome::Builtin(BuiltinAction::SetAllTurns { enabled: true })
+                )),
+                _ => assert!(matches!(
+                    outcome,
+                    SlashCommandOutcome::Builtin(BuiltinAction::SetAllTurns { enabled: false })
+                )),
+            }
         }
     }
 

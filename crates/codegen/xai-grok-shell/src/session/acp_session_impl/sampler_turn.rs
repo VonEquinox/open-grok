@@ -776,6 +776,16 @@ impl SessionActor {
             self.rebuild_spec.multi_agent_policy_enabled,
         );
         let reasoning_summary = self.models_manager.model_reasoning_summary(&cfg.model);
+        let reasoning_context = match crate::util::config::load_reasoning_all_turns_sync() {
+            Some(true) => Some(xai_grok_sampler::ReasoningContext::AllTurns),
+            Some(false)
+                if provider == xai_grok_sampling_types::ModelProvider::Codex
+                    && cfg.api_backend == xai_grok_sampling_types::ApiBackend::Responses =>
+            {
+                Some(xai_grok_sampler::ReasoningContext::CurrentTurn)
+            }
+            _ => None,
+        };
         SamplingConfig {
             api_key,
             base_url: cfg.base_url,
@@ -792,6 +802,7 @@ impl SessionActor {
             context_window: cfg.context_window.get(),
             client_version: creds.client_version,
             reasoning_effort: cfg.reasoning_effort,
+            reasoning_context,
             service_tier: cfg.service_tier.clone(),
             reasoning_summary,
             force_http1: false,

@@ -14,7 +14,7 @@ use xai_grok_sampling_types::{
     ReasoningSummary, RequestMetadataPolicy, ResponsesDialect, SamplingError,
 };
 
-use crate::config::SamplerConfig;
+use crate::config::{ReasoningContext, SamplerConfig};
 
 /// Process-level fallback for the `x-grok-client-identifier` header.
 const DEFAULT_CLIENT_IDENTIFIER: &str = "grok-shell";
@@ -30,6 +30,7 @@ pub(crate) const PROACTIVE_MULTI_AGENT_MODE_TEXT: &str = "Proactive multi-agent 
 pub struct ResponsesRequestPolicy {
     pub multi_agent_v2: bool,
     pub local_effort: Option<ReasoningEffort>,
+    pub reasoning_context: Option<ReasoningContext>,
     pub reasoning_summary: Option<ReasoningSummary>,
 }
 
@@ -576,6 +577,11 @@ fn patch_codex_responses_request(request_body: &mut Value, policy: ResponsesRequ
         }
     }
 
+    if let Some(context) = policy.reasoning_context {
+        ensure_reasoning_object(request_body);
+        request_body["reasoning"]["context"] = Value::String(context.as_str().to_owned());
+    }
+
     match policy
         .reasoning_summary
         .and_then(|summary| summary.wire_value())
@@ -860,6 +866,7 @@ mod tests {
                     multi_agent_v2: false,
                     local_effort: Some(ReasoningEffort::Max),
                     reasoning_summary: None,
+                    ..Default::default()
                 },
             );
 
@@ -877,6 +884,35 @@ mod tests {
                 }
                 _ => assert_eq!(request, original),
             }
+        }
+    }
+
+    #[test]
+    fn codex_projects_reasoning_context_without_touching_other_providers() {
+        for (context, expected) in [
+            (ReasoningContext::CurrentTurn, "current_turn"),
+            (ReasoningContext::AllTurns, "all_turns"),
+        ] {
+            let mut codex = base_request();
+            provider_adapter(ModelProvider::Codex).patch_responses_request(
+                &mut codex,
+                ResponsesRequestPolicy {
+                    reasoning_context: Some(context),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(codex["reasoning"]["context"], expected);
+
+            let mut xai = base_request();
+            let original = xai.clone();
+            provider_adapter(ModelProvider::Xai).patch_responses_request(
+                &mut xai,
+                ResponsesRequestPolicy {
+                    reasoning_context: Some(context),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(xai, original);
         }
     }
 
@@ -1084,6 +1120,7 @@ mod tests {
                 stream_tool_calls: false,
                 idle_timeout_secs: None,
                 reasoning_effort: None,
+                reasoning_context: None,
                 service_tier: None,
                 reasoning_summary: None,
                 origin_client: None,
