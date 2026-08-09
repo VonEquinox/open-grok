@@ -15,7 +15,6 @@ fn fireworks_task_entry(model_id: &str, api_key: Option<&str>) -> ModelEntry {
     entry
 }
 
-
 #[test]
 fn task_model_gate_rejects_fireworks_model_without_credentials() {
     let catalog = IndexMap::from([(
@@ -27,8 +26,6 @@ fn task_model_gate_rejects_fireworks_model_without_credentials() {
     assert!(error.contains("Fireworks AI API key"), "got: {error}");
     assert!(error.contains("glm-test"), "got: {error}");
 }
-
-
 
 #[test]
 fn task_model_gate_allows_fireworks_model_with_own_credential() {
@@ -2310,7 +2307,6 @@ async fn identity_switch_clears_user_pick_latch() {
     );
 }
 
-
 #[test]
 fn configured_default_hint_uses_the_default_resolver_precedence() {
     let mut cfg = config::Config::default();
@@ -2320,8 +2316,6 @@ fn configured_default_hint_uses_the_default_resolver_precedence() {
     assert_eq!(cli.value, "cli-model");
     assert_eq!(cli.source, config::ConfigSource::Cli);
 }
-
-
 
 #[test]
 fn clearing_kimi_catalog_invalidates_in_flight_query_generation() {
@@ -2333,8 +2327,6 @@ fn clearing_kimi_catalog_invalidates_in_flight_query_generation() {
         start + 1
     );
 }
-
-
 
 #[tokio::test]
 async fn kimi_endpoint_switch_rebuilds_only_the_selected_partition() {
@@ -2381,8 +2373,6 @@ async fn kimi_endpoint_switch_rebuilds_only_the_selected_partition() {
     assert!(!models.contains_key("kimi-for-coding-highspeed"));
 }
 
-
-
 #[test]
 fn bundled_default_wins_over_earlier_provider_without_explicit_preference() {
     let mut kimi = make_model_entry("kimi-k3");
@@ -2406,8 +2396,6 @@ fn bundled_default_wins_over_earlier_provider_without_explicit_preference() {
     assert_eq!(source, config::ConfigSource::Default);
 }
 
-
-
 #[test]
 fn clearing_xai_identity_preserves_independent_codex_fallback() {
     let mgr = test_manager();
@@ -2425,8 +2413,6 @@ fn clearing_xai_identity_preserves_independent_codex_fallback() {
         xai_grok_sampling_types::ModelProvider::Codex
     );
 }
-
-
 
 #[test]
 fn combined_catalog_visibility_uses_each_providers_own_oauth() {
@@ -2461,8 +2447,6 @@ fn combined_catalog_visibility_uses_each_providers_own_oauth() {
     assert!(codex_only.contains_key(&acp::ModelId::new("codex-private")));
 }
 
-
-
 #[test]
 fn combined_catalog_hides_api_key_provider_without_credentials() {
     let catalog = IndexMap::from([
@@ -2480,8 +2464,6 @@ fn combined_catalog_hides_api_key_provider_without_credentials() {
     assert!(!available.contains_key(&acp::ModelId::new("glm-keyless")));
     assert!(available.contains_key(&acp::ModelId::new("glm-keyed")));
 }
-
-
 
 #[test]
 fn default_resolution_skips_api_key_provider_without_credentials() {
@@ -2502,8 +2484,6 @@ fn default_resolution_skips_api_key_provider_without_credentials() {
     assert_eq!(source, config::ConfigSource::Default);
 }
 
-
-
 #[test]
 fn new_session_reselection_repairs_removed_current_model() {
     let manager = test_manager();
@@ -2518,8 +2498,6 @@ fn new_session_reselection_repairs_removed_current_model() {
 
     assert_eq!(manager.current_model_id().0.as_ref(), fallback);
 }
-
-
 
 #[test]
 fn resolve_model_tool_mode_honors_selected_key_and_last_slug_override() {

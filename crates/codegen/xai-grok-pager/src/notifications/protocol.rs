@@ -83,9 +83,7 @@ fn notification_sequence(
         NotificationProtocol::Osc99 => {
             format!("\x1b]99;i=open-grok;{body} \u{b7} {title}\x1b\\").into()
         }
-        NotificationProtocol::Osc777 => {
-            format!("\x1b]777;notify;Open Grok;{body}\x1b\\").into()
-        }
+        NotificationProtocol::Osc777 => format!("\x1b]777;notify;Open Grok;{body}\x1b\\").into(),
         NotificationProtocol::Bel => Cow::Borrowed("\x07"),
         NotificationProtocol::None => return None,
     })

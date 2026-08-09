@@ -3,7 +3,7 @@
 //! All key bindings are defined here — not scattered across event handlers.
 
 use crate::key;
-use crate::terminal::{terminal_context, TerminalName};
+use crate::terminal::{TerminalName, terminal_context};
 
 use super::{ActionDef, ActionId, Category, When};
 

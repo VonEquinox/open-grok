@@ -1326,7 +1326,6 @@ async fn cancel_parent_session_rejects_late_spawn_until_admission_reopens() {
     harness.actor.abort();
 }
 
-
 #[tokio::test]
 async fn cancel_parent_session_spares_nested_workflow_children() {
     // wait_before_start only: keep one child in pending through ParentSession.

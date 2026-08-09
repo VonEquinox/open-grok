@@ -1482,7 +1482,6 @@ pub(crate) fn replay_updates_path_in_dir(
     updates_path.exists().then_some(updates_path)
 }
 
-
 // Open Grok: Code Mode transport-aware replay helpers (wrappers stay hidden).
 /// `_meta` key holding the running token count.
 const TOTAL_TOKENS_KEY: &str = "totalTokens";
@@ -1819,7 +1818,6 @@ pub(crate) fn filter_delta_replay_lines_with_prior_and_transport_ids<'a>(
         .filter(|line| !line_is_code_mode_transport_update(line, &transport_ids))
         .collect()
 }
-
 
 // ============================================================================
 // Selective prompt-extraction parser
@@ -3259,7 +3257,8 @@ mod tests {
         );
         let raw = format!("{outer}\n{nested}\n{nested_done}\n{outer_done}\n{wait}\n");
 
-        let full = prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
+        let full =
+            prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
         assert_eq!(full.lines.len(), 2);
         assert_eq!(full.total_live, 2);
         assert!(full.lines.iter().all(|line| line.contains("nested")));
@@ -3268,7 +3267,11 @@ mod tests {
 
         // The reconnect cursor lands on the hidden outer base. Its terminal
         // update still must not leak from the post-cursor slice.
-        let cursor = prepare_replay_lines_with_transport_ids(&raw, Some("ev1"), &std::collections::HashSet::new());
+        let cursor = prepare_replay_lines_with_transport_ids(
+            &raw,
+            Some("ev1"),
+            &std::collections::HashSet::new(),
+        );
         assert!(!cursor.mark_replay);
         assert_eq!(cursor.lines.len(), 2);
         assert!(cursor.lines.iter().all(|line| line.contains("nested")));
@@ -3289,7 +3292,8 @@ mod tests {
         );
         let raw = format!("{exec}\n{exec_done}\n{wait}\n");
 
-        let full = prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
+        let full =
+            prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
         assert_eq!(full.lines.len(), 3);
         assert!(full.lines.iter().any(|line| line.contains("plugin-exec")));
         assert!(full.lines.iter().any(|line| line.contains("mcp-wait")));
@@ -3332,7 +3336,8 @@ mod tests {
 
         // No marker and no current-conversation ids: this is the shape left by
         // a pre-marker session whose model history was replaced by compaction.
-        let replay = prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
+        let replay =
+            prepare_replay_lines_with_transport_ids(&raw, None, &std::collections::HashSet::new());
         assert_eq!(replay.lines.len(), 2);
         assert!(replay.lines.iter().any(|line| line.contains("nested")));
         assert!(replay.lines.iter().any(|line| line.contains("plugin-wait")));

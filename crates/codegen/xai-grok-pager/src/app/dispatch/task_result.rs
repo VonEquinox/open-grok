@@ -2237,9 +2237,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                     state.billing_loading = false;
                     state.billing_error = Some(error.clone());
                 }
-                if app.uses_xai_access_controls()
-                    && !silent
-                {
+                if app.uses_xai_access_controls() && !silent {
                     agent.scrollback.push_block(RenderBlock::System(
                         crate::scrollback::blocks::SystemMessageBlock::new(format!(
                             "Billing error: {error}"

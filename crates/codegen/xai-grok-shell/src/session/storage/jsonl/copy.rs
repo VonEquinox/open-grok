@@ -485,8 +485,9 @@ fn fork_summary(
         .unwrap_or_else(|| source_model_id.clone());
     // Provider transport is model-route state. A model-changing fork must
     // resolve it afresh instead of inheriting an incompatible provider pin.
-    let resolved_tool_policy =
-        (target_model_id == source_model_id).then_some(source.resolved_tool_policy).flatten();
+    let resolved_tool_policy = (target_model_id == source_model_id)
+        .then_some(source.resolved_tool_policy)
+        .flatten();
     Summary {
         info: target_info.clone(),
         cwd_generation: source.cwd_generation,

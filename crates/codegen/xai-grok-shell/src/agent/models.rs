@@ -1252,7 +1252,7 @@ impl ModelsManager {
             is_campaign_only_flip(&old_preferred, &new_preferred, &campaign_defaults);
         let current_still_ok = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             let cur = self.inner.current_model_id.read();
             models
                 .get(cur.0.as_ref())
@@ -1329,7 +1329,7 @@ impl ModelsManager {
     pub fn available(&self) -> IndexMap<acp::ModelId, acp::ModelInfo> {
         let snapshot = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             models.clone()
         };
 
@@ -1404,7 +1404,10 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> config::LazinessDetectorPerModelConfig {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .map(|e| e.info().laziness_detector.clone())
             .unwrap_or_default()
@@ -1428,7 +1431,10 @@ impl ModelsManager {
 
     /// Whether the given model supports reasoning effort according to the catalog.
     pub(crate) fn model_supports_reasoning_effort(&self, model_id: &str) -> bool {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .map(|e| e.info().supports_reasoning_effort)
             .unwrap_or(false)
@@ -1439,7 +1445,10 @@ impl ModelsManager {
     /// nor the global config sets an explicit effort, so surfaced config stays
     /// consistent with the effort sampling actually uses.
     pub(crate) fn model_default_reasoning_effort(&self, model_id: &str) -> Option<ReasoningEffort> {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .and_then(|e| e.info().reasoning_effort)
     }
@@ -1449,7 +1458,10 @@ impl ModelsManager {
     /// session modes). Distinct from the pager's gate-first, fallback-applied
     /// `ModelState::reasoning_effort_options`.
     pub(crate) fn model_reasoning_efforts(&self, model_id: &str) -> Vec<ReasoningEffortOption> {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .map(|e| e.info().reasoning_efforts.clone())
             .unwrap_or_default()
@@ -1460,7 +1472,10 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> Vec<xai_grok_sampling_types::ModelServiceTier> {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .map(|e| e.info().service_tiers.clone())
             .unwrap_or_default()
@@ -1499,7 +1514,10 @@ impl ModelsManager {
     }
 
     pub(crate) fn model_supports_backend_search(&self, model_id: &str) -> bool {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .map(|e| e.info().supports_backend_search)
             .unwrap_or(false)
@@ -1537,7 +1555,7 @@ impl ModelsManager {
     ) -> Option<CodexCompactionMetadata> {
         let routing_slug = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             let entry = config::find_model_by_id(&models, model_id)?;
             (entry.info.provider == xai_grok_sampling_types::ModelProvider::Codex)
                 .then(|| entry.info.model.clone())?
@@ -1553,7 +1571,10 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> Option<xai_grok_sampling_types::CompactionsRemaining> {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .and_then(|e| e.info().compactions_remaining)
     }
@@ -1562,7 +1583,10 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> Option<xai_grok_sampling_types::CompactionAtTokens> {
-        self.inner.catalog.read().models
+        self.inner
+            .catalog
+            .read()
+            .models
             .get(model_id)
             .and_then(|e| e.info().compaction_at_tokens)
     }
@@ -2019,7 +2043,6 @@ impl ModelsManager {
         self.spawn_catalog_retry(remote_fetch_enabled);
     }
 
-
     pub fn start_auth_refresh_watcher(&self, notify: Arc<tokio::sync::Notify>) {
         let mgr = self.clone();
         let had_catalog_at_start = self.inner.catalog.read().has_fetched_real_catalog;
@@ -2342,7 +2365,6 @@ impl ModelsManager {
         }
     }
 
-
     /// Publish a resolved catalog, then reselect the model (default on first
     /// real catalog, else keep current if present). Provider catalogs are
     /// merged via [`Self::rebuild`].
@@ -2449,7 +2471,6 @@ impl ModelsManager {
         self.apply_catalog_fenced(config, new_prefetched, new_etag, Some(generation))
     }
 
-
     pub fn allowlist_excludes_all(&self) -> bool {
         self.inner.catalog.read().allowlist_excludes_all
     }
@@ -2464,7 +2485,7 @@ impl ModelsManager {
         let has_codex_session = self.is_codex_session_auth();
         let needs_reselection = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             match models.get(current.0.as_ref()) {
                 None => true,
                 Some(entry) => {
@@ -2483,7 +2504,7 @@ impl ModelsManager {
         }
         let (key, _, source) = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             resolve_default_model_with_provider_auth(
                 config,
                 models,
@@ -2506,7 +2527,7 @@ impl ModelsManager {
     fn reselect_default_model(&self, config: &config::Config) {
         let (key, _, source) = {
             let cat = self.inner.catalog.read();
-        let models = &cat.models;
+            let models = &cat.models;
             resolve_default_model_with_provider_auth(
                 config,
                 models,
