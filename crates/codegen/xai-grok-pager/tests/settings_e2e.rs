@@ -56,6 +56,10 @@ const ALL_SETTINGS_EXERCISED: &[&str] = &[
     "kimi_code_api_key",
     "fireworks_api_key",
     "deepseek_api_key",
+    "meta_api_key",
+    "opencode_go_api_key",
+    "wafer_api_key",
+    "opencode_go_models",
     "toolset.perplexity_web_search.enabled",
     "perplexity_api_key",
     "toolset.web_search_source.xai",
@@ -64,6 +68,7 @@ const ALL_SETTINGS_EXERCISED: &[&str] = &[
     "toolset.web_search_source.kimi_code",
     "toolset.web_search_source.fireworks",
     "toolset.web_search_source.deepseek",
+    "toolset.web_search_source.opencode_go",
     "toolset.x_search.enabled",
     "recap_model",
     "memory_model",
@@ -100,6 +105,46 @@ const ALL_SETTINGS_EXERCISED: &[&str] = &[
     "contextual_hints.small_screen",
     "contextual_hints.word_select",
     "contextual_hints.ssh_wrap",
+    // Advanced local feature flags (SetLocalFeatureFlag).
+    "memory.enabled",
+    "memory.dream.enabled",
+    "features.telemetry",
+    "features.lsp_tools",
+    "features.web_fetch",
+    "toolset.web_fetch.allow_local",
+    "features.two_pass_compaction",
+    "features.non_git_warning",
+    "features.remember_mode",
+    "doom_loop_recovery.enabled",
+    "features.subagent_worktree_snapshot",
+    "diagnostics.crash_handler",
+    "ui.mouse_reporting_toggle",
+    "suggestions.enabled",
+    "suggestions.ai_enabled",
+    "sandbox.auto_allow_bash",
+    "tools.respect_gitignore",
+];
+
+/// Local feature-flag rows and their registry defaults. Space/mouse tests
+/// toggle each to `!default` via `Action::SetLocalFeatureFlag`.
+const LOCAL_FEATURE_FLAG_KEYS: &[(&str, bool)] = &[
+    ("memory.enabled", false),
+    ("memory.dream.enabled", true),
+    ("features.telemetry", false),
+    ("features.lsp_tools", false),
+    ("features.web_fetch", false),
+    ("toolset.web_fetch.allow_local", false),
+    ("features.two_pass_compaction", false),
+    ("features.non_git_warning", false),
+    ("features.remember_mode", false),
+    ("doom_loop_recovery.enabled", true),
+    ("features.subagent_worktree_snapshot", false),
+    ("diagnostics.crash_handler", false),
+    ("ui.mouse_reporting_toggle", false),
+    ("suggestions.enabled", false),
+    ("suggestions.ai_enabled", false),
+    ("sandbox.auto_allow_bash", false),
+    ("tools.respect_gitignore", false),
 ];
 
 #[test]
@@ -353,6 +398,21 @@ fn assert_set_bool_action(outcome: SettingsKeyOutcome, key: &str, expected: bool
             assert_eq!(
                 b, expected,
                 "SetAntigravitySkipPermissions value differs from expected"
+            )
+        }
+        ("toolset.x_search.enabled", Action::SetXSearchEnabled(b)) => {
+            assert_eq!(b, expected, "SetXSearchEnabled value differs from expected")
+        }
+        (
+            key,
+            Action::SetLocalFeatureFlag {
+                key: action_key,
+                enabled,
+            },
+        ) if action_key == key => {
+            assert_eq!(
+                enabled, expected,
+                "SetLocalFeatureFlag(`{key}`) value differs from expected"
             )
         }
         (key, action) => panic!(
@@ -652,7 +712,16 @@ fn enter_on_kimi_service_opens_picker_and_commits_code() {
 
 #[test]
 fn enter_on_each_provider_api_key_opens_matching_empty_secret_editor() {
-    for setting_key in ["kimi_api_key", "kimi_code_api_key", "perplexity_api_key"] {
+    for setting_key in [
+        "kimi_api_key",
+        "kimi_code_api_key",
+        "fireworks_api_key",
+        "deepseek_api_key",
+        "meta_api_key",
+        "opencode_go_api_key",
+        "wafer_api_key",
+        "perplexity_api_key",
+    ] {
         let mut s = make_state();
         navigate_to(&mut s, setting_key);
 
@@ -1172,7 +1241,16 @@ fn mouse_click_on_perplexity_web_search_indicator_toggles_in_one_click() {
 
 #[test]
 fn mouse_click_on_each_provider_key_value_opens_matching_secret_editor() {
-    for setting_key in ["kimi_api_key", "kimi_code_api_key", "perplexity_api_key"] {
+    for setting_key in [
+        "kimi_api_key",
+        "kimi_code_api_key",
+        "fireworks_api_key",
+        "deepseek_api_key",
+        "meta_api_key",
+        "opencode_go_api_key",
+        "wafer_api_key",
+        "perplexity_api_key",
+    ] {
         let mut s = make_state();
         synth_rects(&mut s);
         let row_y = row_idx_for(&s, setting_key) as u16;
@@ -1194,6 +1272,167 @@ fn mouse_click_on_each_provider_key_value_opens_matching_secret_editor() {
                 validation_error: None,
             } if key == setting_key
         ));
+    }
+}
+
+#[test]
+fn enter_on_opencode_go_web_search_source_opens_picker_and_commits() {
+    let mut s = make_state();
+    navigate_to(&mut s, "toolset.web_search_source.opencode_go");
+    assert!(matches!(
+        handle_settings_key(&mut s, &press(KeyCode::Enter)),
+        SettingsKeyOutcome::Changed
+    ));
+    assert!(matches!(
+        s.mode(),
+        SettingsModalMode::PickingEnum {
+            key: "toolset.web_search_source.opencode_go",
+            choices_idx: 0,
+            supports_preview: false,
+            original_value: SettingValue::Enum("xai"),
+        }
+    ));
+    assert!(matches!(
+        handle_settings_key(&mut s, &press(KeyCode::Down)),
+        SettingsKeyOutcome::Changed
+    ));
+    assert!(matches!(
+        handle_settings_key(&mut s, &press(KeyCode::Enter)),
+        SettingsKeyOutcome::Action(Action::SetWebSearchSource {
+            key: "toolset.web_search_source.opencode_go",
+            choice: "perplexity",
+        })
+    ));
+}
+
+#[test]
+fn mouse_click_on_opencode_go_web_search_source_indicator_opens_picker() {
+    let mut s = make_state();
+    synth_rects(&mut s);
+    let row_y = row_idx_for(&s, "toolset.web_search_source.opencode_go") as u16;
+    let outcome = handle_settings_mouse(
+        &mut s,
+        MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        72,
+        row_y,
+    );
+    assert!(matches!(outcome, SettingsKeyOutcome::Changed));
+    assert!(matches!(
+        s.mode(),
+        SettingsModalMode::PickingEnum {
+            key: "toolset.web_search_source.opencode_go",
+            choices_idx: 0,
+            supports_preview: false,
+            ..
+        }
+    ));
+}
+
+fn seed_opencode_go_model_catalog(state: &mut SettingsModalState) {
+    state.pager_snapshot.opencode_go_models = vec![
+        xai_grok_shell::opencode_go_models::OpenCodeGoModelDescriptor {
+            key: "go-model".to_string(),
+            id: "opencode-go/model".to_string(),
+            name: "Go Model".to_string(),
+            api_backend: xai_grok_shell::sampling::ApiBackend::ChatCompletions,
+        },
+    ];
+    state.pager_snapshot.opencode_go_enabled_models.clear();
+}
+
+#[test]
+fn enter_on_opencode_go_models_opens_sub_sheet_and_toggles_enabled() {
+    let mut s = make_state();
+    seed_opencode_go_model_catalog(&mut s);
+    navigate_to(&mut s, "opencode_go_models");
+
+    let out = handle_settings_key(&mut s, &press(KeyCode::Enter));
+    assert!(matches!(out, SettingsKeyOutcome::Changed));
+    assert!(matches!(
+        s.mode(),
+        SettingsModalMode::PickingGroup { child_idx: 0, .. }
+    ));
+
+    let out = handle_settings_key(&mut s, &press(KeyCode::Char(' ')));
+    assert!(
+        matches!(
+            out,
+            SettingsKeyOutcome::Action(Action::SetOpenCodeGoEnabledModels { ref models })
+                if models == &["opencode-go/model".to_string()]
+        ),
+        "Space on a discovered OpenCode Go model must enable it, got {out:?}",
+    );
+
+    let out = handle_settings_key(&mut s, &press(KeyCode::Esc));
+    assert!(matches!(out, SettingsKeyOutcome::Changed));
+    assert!(matches!(s.mode(), SettingsModalMode::Browse));
+}
+
+#[test]
+fn mouse_click_on_opencode_go_models_opens_sub_sheet_and_toggles_enabled() {
+    let mut s = make_state();
+    seed_opencode_go_model_catalog(&mut s);
+    synth_rects(&mut s);
+    let group_row = row_idx_for(&s, "opencode_go_models") as u16;
+
+    let out = handle_settings_mouse(
+        &mut s,
+        MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        72,
+        group_row,
+    );
+    assert!(matches!(out, SettingsKeyOutcome::Changed));
+    assert!(
+        matches!(s.mode(), SettingsModalMode::PickingGroup { .. }),
+        "click on OpenCode Go models value column must open the sub-sheet, got {:?}",
+        s.mode(),
+    );
+
+    s.picker_choice_rects = vec![Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 1,
+    }];
+    let out = handle_settings_mouse(
+        &mut s,
+        MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        1,
+        0,
+    );
+    assert!(
+        matches!(
+            out,
+            SettingsKeyOutcome::Action(Action::SetOpenCodeGoEnabledModels { ref models })
+                if models == &["opencode-go/model".to_string()]
+        ),
+        "click on a discovered OpenCode Go model must enable it, got {out:?}",
+    );
+}
+
+#[test]
+fn space_on_each_local_feature_flag_dispatches_typed_setter() {
+    for &(key, default_on) in LOCAL_FEATURE_FLAG_KEYS {
+        let mut s = make_state();
+        navigate_to(&mut s, key);
+        let outcome = handle_settings_key(&mut s, &press(KeyCode::Char(' ')));
+        assert_set_bool_action(outcome, key, !default_on);
+    }
+}
+
+#[test]
+fn mouse_click_on_each_local_feature_flag_indicator_toggles_in_one_click() {
+    for &(key, default_on) in LOCAL_FEATURE_FLAG_KEYS {
+        let mut s = make_state();
+        synth_rects(&mut s);
+        let row_y = row_idx_for(&s, key) as u16;
+        let outcome = handle_settings_mouse(
+            &mut s,
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            72,
+            row_y,
+        );
+        assert_set_bool_action(outcome, key, !default_on);
     }
 }
 
@@ -2567,6 +2806,15 @@ fn defaults_round_trip_through_registry() {
             "deepseek_api_key" => {
                 SettingValue::SecretStatus(xai_grok_pager::settings::SecretStatus::Missing)
             }
+            "meta_api_key" => {
+                SettingValue::SecretStatus(xai_grok_pager::settings::SecretStatus::Missing)
+            }
+            "opencode_go_api_key" => {
+                SettingValue::SecretStatus(xai_grok_pager::settings::SecretStatus::Missing)
+            }
+            "wafer_api_key" => {
+                SettingValue::SecretStatus(xai_grok_pager::settings::SecretStatus::Missing)
+            }
             "toolset.perplexity_web_search.enabled" => SettingValue::Bool(false),
             "toolset.web_search_source.xai" => SettingValue::Enum("xai"),
             "toolset.web_search_source.codex" => SettingValue::Enum("native"),
@@ -2574,10 +2822,28 @@ fn defaults_round_trip_through_registry() {
             "toolset.web_search_source.kimi_code" => SettingValue::Enum("xai"),
             "toolset.web_search_source.fireworks" => SettingValue::Enum("xai"),
             "toolset.web_search_source.deepseek" => SettingValue::Enum("xai"),
+            "toolset.web_search_source.opencode_go" => SettingValue::Enum("xai"),
             "toolset.x_search.enabled" => SettingValue::Bool(true),
             "perplexity_api_key" => {
                 SettingValue::SecretStatus(xai_grok_pager::settings::SecretStatus::Missing)
             }
+            "memory.enabled" => SettingValue::Bool(false),
+            "memory.dream.enabled" => SettingValue::Bool(true),
+            "features.telemetry" => SettingValue::Bool(false),
+            "features.lsp_tools" => SettingValue::Bool(false),
+            "features.web_fetch" => SettingValue::Bool(false),
+            "toolset.web_fetch.allow_local" => SettingValue::Bool(false),
+            "features.two_pass_compaction" => SettingValue::Bool(false),
+            "features.non_git_warning" => SettingValue::Bool(false),
+            "features.remember_mode" => SettingValue::Bool(false),
+            "doom_loop_recovery.enabled" => SettingValue::Bool(true),
+            "features.subagent_worktree_snapshot" => SettingValue::Bool(false),
+            "diagnostics.crash_handler" => SettingValue::Bool(false),
+            "ui.mouse_reporting_toggle" => SettingValue::Bool(false),
+            "suggestions.enabled" => SettingValue::Bool(false),
+            "suggestions.ai_enabled" => SettingValue::Bool(false),
+            "sandbox.auto_allow_bash" => SettingValue::Bool(false),
+            "tools.respect_gitignore" => SettingValue::Bool(false),
             "recap_model" => SettingValue::String(String::new()),
             "memory_model" => SettingValue::String(String::new()),
             "max_thoughts_width" => SettingValue::Int(120),
@@ -2616,8 +2882,13 @@ fn defaults_round_trip_through_registry() {
     };
 
     for meta in reg.all() {
-        // Group rows carry no scalar value/default to round-trip.
-        if matches!(meta.kind, SettingKind::Group { .. }) {
+        // Group / DynamicMultiSelect rows carry no scalar value/default to
+        // round-trip (`current_value_for` has no arm; default is a Bool(false)
+        // placeholder used only by reset).
+        if matches!(
+            meta.kind,
+            SettingKind::Group { .. } | SettingKind::DynamicMultiSelect { .. }
+        ) {
             continue;
         }
         let live_value = current_value_for(meta.key, &ui, &pager)
@@ -2690,7 +2961,9 @@ fn settings_value_payload_matches_kind() {
             | SettingsKeyOutcome::Action(Action::SetAntigravitySubagents(_))
             | SettingsKeyOutcome::Action(Action::SetAntigravitySkipPermissions(_))
             | SettingsKeyOutcome::Action(Action::SetXSearchEnabled(_))
-            | SettingsKeyOutcome::Action(Action::SetVoiceKeybindEnabled(_)) => {}
+            | SettingsKeyOutcome::Action(Action::SetVoiceKeybindEnabled(_))
+            | SettingsKeyOutcome::Action(Action::SetEnterSteers(_))
+            | SettingsKeyOutcome::Action(Action::SetLocalFeatureFlag { .. }) => {}
             other => panic!(
                 "expected a typed bool setter for `{}`, got {:?}",
                 meta.key, other
@@ -5585,7 +5858,11 @@ fn pr9_coding_data_sharing_choices_use_canonical_strings() {
     );
 }
 
-/// Search "privacy" finds exactly `coding_data_sharing`.
+/// Search "privacy" finds `coding_data_sharing`.
+///
+/// `features.telemetry` also legitimately matches because its description
+/// contrasts product telemetry with Privacy → coding-data sharing. Keep a
+/// presence check rather than an exact singleton — both hits are intentional.
 #[test]
 fn pr9_search_privacy_matches_coding_data_sharing() {
     let reg = SettingsRegistry::defaults();
@@ -5594,21 +5871,14 @@ fn pr9_search_privacy_matches_coding_data_sharing() {
     // part of `search()`'s haystack (search ignores categories);
     // matches come from the meta's keywords + label + description.
     let hit_keys: Vec<&str> = hits.iter().map(|m| m.key).collect();
-    assert_eq!(
-        hits.len(),
-        1,
-        "search('privacy') must return EXACTLY one result (coding_data_sharing). \
-         Found {} results: {hit_keys:?}. \
-         If this fails because another setting added 'privacy' to its keywords/label/\
-         description, decide: (a) is 'privacy' a real keyword for that setting? If yes, \
-         loosen this assertion to a presence-only check `hit_keys.contains(&\"coding_data_sharing\")`. \
-         (b) If no, remove 'privacy' from the other setting's haystack — search relevance \
-         is more important than tag promiscuity.",
-        hits.len(),
+    assert!(
+        hit_keys.contains(&"coding_data_sharing"),
+        "search('privacy') must include coding_data_sharing; got {hit_keys:?}",
     );
-    assert_eq!(
-        hits[0].key, "coding_data_sharing",
-        "search('privacy') unique result must be coding_data_sharing"
+    assert!(
+        hit_keys.contains(&"features.telemetry"),
+        "search('privacy') must include features.telemetry (description contrasts \
+         Privacy → coding-data sharing); got {hit_keys:?}",
     );
 }
 
