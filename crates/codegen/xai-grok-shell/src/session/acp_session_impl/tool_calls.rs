@@ -513,12 +513,7 @@ impl SessionActor {
                         self.emit_event(xai_file_utils::events::Event::McpToolCallCompleted {
                             server_name: server.to_string(),
                             tool_name: tool.to_string(),
-                            call_id: format!(
-                                "{}{}{}",
-                                server,
-                                crate::session::mcp_servers::MCP_TOOL_NAME_DELIMITER,
-                                tool
-                            ),
+                            call_id: call_name.clone(),
                             duration_ms: 0,
                             success: false,
                             is_timeout: false,

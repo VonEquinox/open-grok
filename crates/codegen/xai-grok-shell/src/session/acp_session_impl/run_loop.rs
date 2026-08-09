@@ -1361,11 +1361,8 @@ pub(super) async fn run_session(
                             }
 
                             for name in &diff.removed {
-                                let prefix = format!(
-                                    "{}{}",
-                                    name,
-                                    crate::session::mcp_servers::MCP_TOOL_NAME_DELIMITER
-                                );
+                                let prefix =
+                                    crate::session::mcp_servers::mcp_tool_name_prefix(name);
                                 let removed_count = session
                                     .agent
                                     .borrow()
@@ -1449,11 +1446,8 @@ pub(super) async fn run_session(
                             }
 
                             for name in &diff.removed {
-                                let prefix = format!(
-                                    "{}{}",
-                                    name,
-                                    crate::session::mcp_servers::MCP_TOOL_NAME_DELIMITER
-                                );
+                                let prefix =
+                                    crate::session::mcp_servers::mcp_tool_name_prefix(name);
                                 let removed_count = session
                                     .agent
                                     .borrow()
@@ -1564,12 +1558,20 @@ pub(super) async fn run_session(
                                 });
                                 continue;
                             }
-                            let qualified = format!(
-                                "{}{}{}",
-                                server_name,
-                                crate::session::mcp_servers::MCP_TOOL_NAME_DELIMITER,
-                                tool_name,
-                            );
+                            let Some(qualified) =
+                                crate::session::mcp_servers::qualified_mcp_tool_name(
+                                    &server_name,
+                                    &tool_name,
+                                )
+                            else {
+                                let _ = respond_to.send(Err(
+                                    acp::Error::invalid_params().data(format!(
+                                        "MCP tool '{}::{}' cannot be represented as a provider-safe tool name",
+                                        server_name, tool_name
+                                    )),
+                                ));
+                                continue;
+                            };
                             let mut mcp_state = session.mcp_state.lock().await;
 
                             if enabled {
