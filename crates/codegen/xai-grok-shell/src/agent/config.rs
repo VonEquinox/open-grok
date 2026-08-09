@@ -2871,7 +2871,7 @@ impl Config {
             .default(true)
             .resolve()
     }
-    /// Background workflows (`workflow` tool, `.grok/workflows/*.rhai`,
+    /// Background workflows (`workflow` tool, `.opengrok/workflows/*.rhai`,
     /// `/deep-research`, host-owned `/goal` driver). Default ON: deployments
     /// that never receive remote settings still get workflows; `Some(false)`
     /// remote / config / env remains a kill-switch.

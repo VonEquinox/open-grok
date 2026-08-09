@@ -980,7 +980,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn project_scope_allowed_denies_untrusted_permission_only_repo() {
-        // Bridge: a clone whose ONLY repo-local config is `.grok/config.toml`
+        // Bridge: a clone whose ONLY repo-local config is `.opengrok/config.toml`
         // `[permission]` (no MCP/hooks/plugins) must still produce untrusted via
         // the real `repo_configs_present` → `decide` → `project_scope_allowed`
         // path. Resolver unit tests inject `project_trusted = false` directly and

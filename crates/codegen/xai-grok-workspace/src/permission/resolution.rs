@@ -242,7 +242,7 @@ fn load_config_toml_permissions(cwd: &Path, project_trusted: bool) -> Vec<Source
 
     // Project-scoped configs walking from git root down to cwd, gated on trust.
     // An untrusted clone must not contribute allow/deny/ask rules via
-    // `.grok/config.toml` (same gate as project `.claude/settings.json`).
+    // `.opengrok/config.toml` (same gate as project `.claude/settings.json`).
     if project_trusted {
         for path in crate::project_config::find_project_configs(cwd) {
             match xai_grok_config::load_config_file(&path) {
@@ -284,7 +284,7 @@ fn managed_config_permissions(
 /// `Allow Edit` rule appended to the Claude rules.
 ///
 /// `project_trusted` gates project-tier `.claude/settings.json` and
-/// `.grok/config.toml` permission rules (mirrors [`load_claude_env_with_project`]).
+/// `.opengrok/config.toml` permission rules (mirrors [`load_claude_env_with_project`]).
 /// Global/user/admin tiers always load. Callers pass the folder-trust bridge
 /// verdict for local sessions; hub/cloud defaults trusted.
 pub async fn resolve_permission_config_with_fallback(
@@ -413,7 +413,7 @@ struct ResolveInputs<'a> {
     managed: &'a ManagedSettings,
     managed_config_rules: Vec<Sourced<PermissionRule>>,
     /// Folder-trust verdict for `cwd`. When false, project-tier
-    /// `.claude/settings.json` / `.grok/config.toml` permission rules are dropped
+    /// `.claude/settings.json` / `.opengrok/config.toml` permission rules are dropped
     /// (global/user/admin tiers still load).
     project_trusted: bool,
 }
@@ -451,7 +451,7 @@ impl ResolveInputs<'static> {
 /// (`[ui] disable_bypass_permissions_mode = true`). Pair managed `dontAsk` with
 /// that pin when org policy must not be bypassable by `--always-approve`.
 ///
-/// `project_trusted` gates project-tier Claude settings and `.grok/config.toml`
+/// `project_trusted` gates project-tier Claude settings and `.opengrok/config.toml`
 /// permission rules the same way [`load_claude_env_with_project`] gates env.
 /// Without this, an untrusted clone can ship `defaultMode: bypassPermissions`
 /// or broad allow rules and disable approval prompts.
@@ -2897,7 +2897,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let _home_guard = EnvVarGuard::set("HOME", home.path());
-        let _grok_guard = EnvVarGuard::set("GROK_HOME", home.path());
+        let _opengrok_guard = EnvVarGuard::set("OPENGROK_HOME", home.path());
         let _marker_guard = EnvVarGuard::unset("_GROK_CLAUDE_MARKER_OVERRIDE");
 
         // Global user-tier allow (must survive untrusted project).
@@ -2950,23 +2950,23 @@ mod tests {
         );
     }
 
-    /// Untrusted clone must not contribute project `.grok/config.toml` [permission].
+    /// Untrusted clone must not contribute project `.opengrok/config.toml` [permission].
     ///
     /// Sync + `block_on` so `ENV_LOCK` is not held across `.await` (clippy
     /// `await_holding_lock`). Does not assert exact global rule counts:
     /// `xai_grok_config::grok_home()` is a process-wide `OnceLock`, so under
     /// single-process `cargo test` an earlier test may have already pinned
-    /// `GROK_HOME`. Project-rule filtering is independent of that; global
+    /// `OPENGROK_HOME`. Project-rule filtering is independent of that; global
     /// survival is checked only when our temp home is the live `user_grok_home()`.
     #[test]
     fn untrusted_project_config_toml_permissions_are_not_honored() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let _home_guard = EnvVarGuard::set("HOME", home.path());
-        let _grok_guard = EnvVarGuard::set("GROK_HOME", home.path());
+        let _opengrok_guard = EnvVarGuard::set("OPENGROK_HOME", home.path());
         let _marker_guard = EnvVarGuard::unset("_GROK_CLAUDE_MARKER_OVERRIDE");
 
-        // Global allow (survives untrusted project when GROK_HOME resolves here).
+        // Global allow (survives untrusted project when OPENGROK_HOME resolves here).
         std::fs::write(
             home.path().join("config.toml"),
             r#"[permission]
@@ -2992,7 +2992,7 @@ allow = ["Bash(evil *)"]
             .enable_all()
             .build()
             .expect("test runtime");
-        // Untrusted may be None when no global rules load (GROK_HOME OnceLock
+        // Untrusted may be None when no global rules load (OPENGROK_HOME OnceLock
         // already pinned by another test) — empty after dropping project is OK.
         let untrusted = rt.block_on(resolve_permissions_with_provenance_inner(
             tmp.path(),
@@ -3027,7 +3027,7 @@ allow = ["Bash(evil *)"]
         let global_live = xai_grok_config::user_grok_home()
             .is_some_and(|g| g == home.path() || g.starts_with(home.path()));
         if global_live {
-            let untrusted = untrusted.expect("global rules present when GROK_HOME is live");
+            let untrusted = untrusted.expect("global rules present when OPENGROK_HOME is live");
             assert!(
                 untrusted
                     .config

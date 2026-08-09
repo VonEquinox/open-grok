@@ -860,7 +860,7 @@ mod tests {
     #[tokio::test]
     async fn missing_skill_read_suggests_registered_path() {
         let tmp = TempDir::new().unwrap();
-        let skill_dir = tmp.path().join(".grok/skills/code-review");
+        let skill_dir = tmp.path().join(".opengrok/skills/code-review");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let skill_path = skill_dir.join("SKILL.md");
         std::fs::write(&skill_path, "# Code review\n").unwrap();
@@ -885,7 +885,7 @@ mod tests {
     #[tokio::test]
     async fn missing_skill_read_uses_display_path() {
         let tmp = TempDir::new().unwrap();
-        let skill_dir = tmp.path().join(".grok/skills/review");
+        let skill_dir = tmp.path().join(".opengrok/skills/review");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let skill_path = skill_dir.join("SKILL.md");
         std::fs::write(&skill_path, "# Review\n").unwrap();
@@ -910,7 +910,7 @@ mod tests {
             msg,
             "Error: /wrong/root/review/SKILL.md does not exist.\n\
              The skill you are looking for is registered at:\n\
-             /display/project/.grok/skills/review/SKILL.md"
+             /display/project/.opengrok/skills/review/SKILL.md"
         );
     }
     #[tokio::test]
@@ -949,7 +949,7 @@ mod tests {
     #[tokio::test]
     async fn missing_skill_read_omits_stale_registered_path() {
         let tmp = TempDir::new().unwrap();
-        let stale_path = tmp.path().join(".grok/skills/review/SKILL.md");
+        let stale_path = tmp.path().join(".opengrok/skills/review/SKILL.md");
         let mut resources = test_resources(tmp.path());
         resources.insert(PathNotFoundHints(true));
         resources.insert(seeded_manager(vec![SkillInfo {
@@ -1986,7 +1986,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
     #[tokio::test]
     async fn md_in_skills_dir_ignores_model_offset_and_limit() {
         let tmp = TempDir::new().unwrap();
-        let skill_dir = tmp.path().join(".grok/skills/my-skill");
+        let skill_dir = tmp.path().join(".opengrok/skills/my-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let content = (1..=1200)
             .map(|n| format!("line{n}"))
@@ -1996,7 +1996,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let tool = ReadFileTool;
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
-            path: ".grok/skills/my-skill/reference.md".to_string(),
+            path: ".opengrok/skills/my-skill/reference.md".to_string(),
             offset: Some(3),
             limit: Some(1),
             pages: None,

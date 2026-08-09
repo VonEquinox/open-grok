@@ -266,7 +266,7 @@ pub fn campaign_driven_models_default() -> Option<CampaignModelsDefault> {
 }
 
 /// Env-free resolution core of [`campaign_driven_models_default`] (unit-testable
-/// without touching `GROK_HOME` / the process-global cache).
+/// without touching `OPENGROK_HOME` / the process-global cache).
 fn campaign_driven_models_default_from(
     layers: &ConfigLayers,
     remote: &[CampaignEntry],

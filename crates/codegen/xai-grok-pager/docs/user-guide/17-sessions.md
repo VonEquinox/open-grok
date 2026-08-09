@@ -275,7 +275,7 @@ Resume a session in a fresh worktree with `open-grok -w -r <session-id>`.
 `open-grok du` (alias: `open-grok disk-usage`) reports what the Open Grok home (`~/.opengrok`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
 
 ```text
-Disk usage for ~/.grok
+Disk usage for ~/.opengrok
     412.3 GB  worktrees
       1.2 GB  sessions
     412.0 MB  (top-level files)
@@ -284,24 +284,24 @@ Disk usage for ~/.grok
 
 Worktrees
         SIZE  TYPE                AGE        LABEL  PATH
-    380.0 GB  session             12d ago    my-fix ~/.grok/worktrees/xai/worktree-abc
-     32.3 GB  untracked (session) 40d ago           ~/.grok/worktrees/xai/worktree-old
+    380.0 GB  session             12d ago    my-fix ~/.opengrok/worktrees/xai/worktree-abc
+     32.3 GB  untracked (session) 40d ago           ~/.opengrok/worktrees/xai/worktree-old
 
-To reclaim space, run `grok worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing.
-Untracked rows are not in the registry, so gc never visits them. Remove one with `grok worktree rm --dry-run <path>`, then without `--dry-run`.
+To reclaim space, run `open-grok worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing.
+Untracked rows are not in the registry, so gc never visits them. Remove one with `open-grok worktree rm --dry-run <path>`, then without `--dry-run`.
 ```
 
-`AGE` is the value `grok worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
+`AGE` is the value `open-grok worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
 
-Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `grok worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
+Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `open-grok worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
 
 The report measures a single filesystem, the one holding the Open Grok home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug open-grok du` to name each one.
 
 Every worktree row in `--json` also carries `created_at`, `last_accessed_at`, and `last_modified_at` in unix seconds, plus `repo_name` and `git_ref`. Registry fields are `null` for untracked rows. `git_ref` is the branch recorded when the worktree was registered, not the branch checked out now.
 
-When the registry is unavailable, every row appears as `untracked` and the report names the reason. The `--json` `registry` field carries the same value: `read`, `absent`, `busy`, `unopenable`, or `corrupt`. A `busy` registry is held by another process, so retry. An `unopenable` one has a permission or I/O problem, so check the file. A `corrupt` one is the only case that calls for deletion: remove the file the report names, then run `grok worktree db rebuild`.
+When the registry is unavailable, every row appears as `untracked` and the report names the reason. The `--json` `registry` field carries the same value: `read`, `absent`, `busy`, `unopenable`, or `corrupt`. A `busy` registry is held by another process, so retry. An `unopenable` one has a permission or I/O problem, so check the file. A `corrupt` one is the only case that calls for deletion: remove the file the report names, then run `open-grok worktree db rebuild`.
 
-To reclaim space, run `grok worktree gc --max-age 7d`, which removes tracked worktrees older than the age you give. Without `--max-age`, gc expires nothing, and it visits only worktrees the registry tracks. Remove an untracked worktree with `grok worktree rm <path>`. Both commands take `--dry-run` and report what they would do: gc counts the worktrees it would remove, and `rm` names the path. Neither inspects the working tree for uncommitted or unpushed work, so read the preview first.
+To reclaim space, run `open-grok worktree gc --max-age 7d`, which removes tracked worktrees older than the age you give. Without `--max-age`, gc expires nothing, and it visits only worktrees the registry tracks. Remove an untracked worktree with `open-grok worktree rm <path>`. Both commands take `--dry-run` and report what they would do: gc counts the worktrees it would remove, and `rm` names the path. Neither inspects the working tree for uncommitted or unpushed work, so read the preview first.
 
 ---
 

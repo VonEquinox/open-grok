@@ -3463,7 +3463,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = dunce::canonicalize(tmp.path()).unwrap().join("grok-home");
         std::fs::create_dir_all(&home).unwrap();
-        let _env = crate::LockedTestEnv::lock().set("GROK_HOME", &home);
+        let _env = crate::LockedTestEnv::lock().set("OPENGROK_HOME", &home);
         let wt = tmp.path().join("clone");
         init_repo_on_branch(&wt, "wt-branch");
         let source = PathBuf::from("/src/main-repo");
@@ -3480,7 +3480,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = dunce::canonicalize(tmp.path()).unwrap().join("grok-home");
         std::fs::create_dir_all(&home).unwrap();
-        let _env = crate::LockedTestEnv::lock().set("GROK_HOME", &home);
+        let _env = crate::LockedTestEnv::lock().set("OPENGROK_HOME", &home);
         let wt = tmp.path().join("clone");
         init_repo_on_branch(&wt, "wt-branch");
         register_db_worktree(&home, &wt, Path::new("/src/main-repo"), "db-label");

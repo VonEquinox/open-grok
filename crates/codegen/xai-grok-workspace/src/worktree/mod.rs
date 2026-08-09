@@ -2452,7 +2452,7 @@ pub fn worktree_auto_gc_layer_from_settings(
     }
 }
 
-/// Env + `$GROK_HOME/config.toml` only — **`remote=None` is intentional**.
+/// Env + `$OPENGROK_HOME/config.toml` only — **`remote=None` is intentional**.
 ///
 /// Workspace handle startup has no remote-settings blob (unlike shell agent
 /// init, which resolves env > TOML > remote). Remote `worktree_auto_gc`

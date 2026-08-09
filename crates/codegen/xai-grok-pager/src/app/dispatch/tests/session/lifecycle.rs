@@ -3041,13 +3041,14 @@ mod welcome_workspace_mode {
     #[test]
     #[serial_test::serial(OPENGROK_CHAT_LOCAL_WORKSPACE_ACK)]
     #[serial_test::serial(OPENGROK_ACTIVE_LOCAL_WORKSPACE)]
+    #[serial_test::serial(OPENGROK_HOME)]
     fn confirm_ack_skips_reapply_and_sets_oneshot() {
         let _ack = xai_grok_test_support::EnvGuard::unset(
             crate::app::session_startup::OPENGROK_CHAT_LOCAL_WORKSPACE_ACK_ENV,
         );
         let home = tempfile::tempdir().unwrap();
         let _home =
-            xai_grok_test_support::EnvGuard::set("GROK_HOME", home.path().to_str().unwrap());
+            xai_grok_test_support::EnvGuard::set("OPENGROK_HOME", home.path().to_str().unwrap());
         set_active_local_workspace(None).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let mut app = test_app();
@@ -3156,13 +3157,14 @@ mod welcome_workspace_mode {
     }
     #[test]
     #[serial_test::serial(OPENGROK_CHAT_LOCAL_WORKSPACE_ACK)]
+    #[serial_test::serial(OPENGROK_HOME)]
     fn confirm_ack_honors_worktree_always() {
         let _ack = xai_grok_test_support::EnvGuard::unset(
             crate::app::session_startup::OPENGROK_CHAT_LOCAL_WORKSPACE_ACK_ENV,
         );
         let home = tempfile::tempdir().unwrap();
         let _home =
-            xai_grok_test_support::EnvGuard::set("GROK_HOME", home.path().to_str().unwrap());
+            xai_grok_test_support::EnvGuard::set("OPENGROK_HOME", home.path().to_str().unwrap());
         set_active_local_workspace(None).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let mut app = test_app();

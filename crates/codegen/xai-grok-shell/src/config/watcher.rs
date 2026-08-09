@@ -99,7 +99,7 @@ pub enum ConfigChangeEvent {
 }
 
 /// Watches `~/.opengrok/` for `auth.json`, `config.toml`, and `models_cache.json`
-/// changes, plus any extra paths (project `.grok/config.toml`, `.mcp.json`,
+/// changes, plus any extra paths (project `.opengrok/config.toml`, `.mcp.json`,
 /// etc.) provided at startup.
 ///
 /// Uses `notify-debouncer-mini` for built-in debounce that coalesces rapid
@@ -346,7 +346,7 @@ fn parent_is_dir(parent: Option<&Path>, dir: &Path) -> bool {
 /// no reasonable recovery path beyond the existing user-triggered refresh.
 ///
 /// **Known limitation:** if `<cwd>/.opengrok/` does not yet
-/// exist at session-open time, the `.grok/` watch fails ENOENT and is
+/// exist at session-open time, the `.opengrok/` watch fails ENOENT and is
 /// swallowed at `debug!`. A later `mkdir <cwd>/.opengrok/` followed by a
 /// write to `<cwd>/.opengrok/config.toml` will NOT be observed — the
 /// `<cwd>/` watch is non-recursive, so subdirectory creation isn't

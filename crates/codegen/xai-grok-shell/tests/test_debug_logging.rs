@@ -81,7 +81,7 @@ fn debug_cmd(
     sandbox
         .set_env("HOME", home)
         .set_env("USERPROFILE", home)
-        .set_env("GROK_HOME", home.join(".grok"));
+        .set_env("OPENGROK_HOME", home.join(".opengrok"));
     let mut cmd = tokio::process::Command::new(grok_binary());
     cmd.args(["-p", "say hi", "--yolo", "--output-format", "json"])
         .args(extra)

@@ -1,5 +1,5 @@
-//! `grok du`: what the user grok home uses on disk. It creates no grok home,
-//! registry file, or schema, but a read-only open of a WAL database leaves
+//! `open-grok du`: what the user Open Grok home uses on disk. It creates no
+//! home, registry file, or schema, but a read-only open of a WAL database leaves
 //! `-shm` and `-wal` sidecars, so sizes are collected before it opens.
 
 mod display;
@@ -26,9 +26,9 @@ const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, clap::Args)]
 #[command(
-    after_help = "Lists every top-level directory in the grok home, largest first, then every \
+    after_help = "Lists every top-level directory in the Open Grok home, largest first, then every \
 worktree under `worktrees/` and `worktree_pool/` with its size, age, and label. To reclaim space, preview a sweep with \
-`grok worktree gc --max-age 7d --dry-run`: without `--max-age`, gc expires nothing, and it \
+`open-grok worktree gc --max-age 7d --dry-run`: without `--max-age`, gc expires nothing, and it \
 visits only worktrees the registry tracks."
 )]
 pub struct DiskUsageArgs {

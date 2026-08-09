@@ -1367,7 +1367,7 @@ mod tests {
         assert!(git2::Repository::discover(&dir).is_err());
         assert!(parent_session_is_worktree("any-sid", &dir));
     }
-    #[serial_test::serial(GROK_HOME)]
+    #[serial_test::serial(OPENGROK_HOME)]
     #[test]
     fn parent_session_is_worktree_summary_session_kind() {
         let mut fx = crate::test_util::GrokHomeFixture::new();
@@ -1380,7 +1380,7 @@ mod tests {
         );
         assert!(parent_session_is_worktree("sid-kind", &repo.path));
     }
-    #[serial_test::serial(GROK_HOME)]
+    #[serial_test::serial(OPENGROK_HOME)]
     #[test]
     fn parent_session_is_worktree_summary_source_workspace_dir() {
         let mut fx = crate::test_util::GrokHomeFixture::new();
@@ -1399,7 +1399,7 @@ mod tests {
         );
         assert!(!parent_session_is_worktree("sid-src-empty", &repo.path));
     }
-    #[serial_test::serial(GROK_HOME)]
+    #[serial_test::serial(OPENGROK_HOME)]
     #[test]
     fn parent_session_is_worktree_summary_worktree_label() {
         let mut fx = crate::test_util::GrokHomeFixture::new();

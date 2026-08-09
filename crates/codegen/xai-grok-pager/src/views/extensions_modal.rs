@@ -7072,7 +7072,7 @@ mod tests {
         project_z.scope = xai_grok_tools::implementations::skills::types::SkillScope::Local;
         project_z.config_source = Some(
             xai_grok_tools::types::config_source::ConfigSource::Project {
-                path: std::path::PathBuf::from("/repo/.grok/skills/zzz"),
+                path: std::path::PathBuf::from("/repo/.opengrok/skills/zzz"),
             },
         );
         project_z.display_name = Some("zeta-proj".into());
@@ -7081,7 +7081,7 @@ mod tests {
         project_a.scope = xai_grok_tools::implementations::skills::types::SkillScope::Repo;
         project_a.config_source = Some(
             xai_grok_tools::types::config_source::ConfigSource::Project {
-                path: std::path::PathBuf::from("/repo/.grok/skills/aaa"),
+                path: std::path::PathBuf::from("/repo/.opengrok/skills/aaa"),
             },
         );
         project_a.display_name = Some("alpha-proj".into());
@@ -7179,7 +7179,7 @@ mod tests {
         let hooks = vec![
             make_hook("c", "/zzz/custom", false),
             h_stop,
-            make_hook("a", "/repo/.grok/hooks", false),
+            make_hook("a", "/repo/.opengrok/hooks", false),
             h_pre,
             h_notify,
             make_hook("b", "/aaa/custom", false),
@@ -7190,7 +7190,7 @@ mod tests {
         assert_eq!(
             dirs,
             [
-                "/repo/.grok/hooks",
+                "/repo/.opengrok/hooks",
                 "/aaa/custom",
                 "/tmp/hooks-src",
                 "/zzz/custom"

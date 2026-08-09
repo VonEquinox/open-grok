@@ -297,7 +297,7 @@ async fn relaunch_for_update_drives_real_old_leader_to_exit() {
                         .expect("close old client before relaunch");
 
                     let control = LeaderClient::connect(
-                        sandbox.home().join(".grok").join("leader.sock"),
+                        sandbox.home().join(".opengrok").join("leader.sock"),
                         "grok-pager-update",
                         ClientMode::Stdio,
                         ClientCapabilities::default(),
@@ -373,7 +373,7 @@ async fn eviction_leaves_single_leader_and_single_auth_owner() {
                     let old_pid = wait_for_live_leader(sandbox.home(), Duration::from_secs(10))
                         .await
                         .expect("no live old leader");
-                    let auth_path = sandbox.home().join(".grok").join("auth.json");
+                    let auth_path = sandbox.home().join(".opengrok").join("auth.json");
                     let auth_before = std::fs::metadata(&auth_path)
                         .ok()
                         .and_then(|metadata| metadata.modified().ok());
