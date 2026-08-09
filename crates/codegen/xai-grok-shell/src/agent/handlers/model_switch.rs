@@ -71,11 +71,7 @@ async fn apply_with_resolved_tool_policy(
     let required_agent_type =
         resolve_required_agent_type(Some(model.info().agent_type.as_str()), session_default);
     let previous_model_id = handle.model_id.0.clone();
-    let running_prompt = handle
-        .current_prompt_id
-        .lock()
-        .ok()
-        .and_then(|g| g.clone());
+    let running_prompt = handle.current_prompt_id.lock().ok().and_then(|g| g.clone());
     // #region agent log
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
