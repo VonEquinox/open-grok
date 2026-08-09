@@ -1520,11 +1520,10 @@ async fn handle_prompt_injects_interrupt_reminder_before_user_message() {
 /// between the abort and the user's resend must NOT consume the one-shot or
 /// inject the reminder — it has to survive to the next *genuine* user turn.
 /// Guards the `PromptOrigin::User` gate on the injection call.
-#[tokio::test(flavor = "current_thread")]
-async fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
+#[test]
+fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
+    run_on_session_sized_stack(|| {
+        Box::pin(async {
             // #region agent log
             let _ = std::fs::OpenOptions::new().create(true).append(true).open("/opt/cursor/logs/debug.log").and_then(|mut f| {
                 use std::io::Write;
@@ -1587,7 +1586,7 @@ async fn handle_prompt_synthetic_origin_preserves_interrupt_reminder() {
             );
             prompt_task.abort();
         })
-        .await;
+    });
 }
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_running_task_interactive_preserves_queued_work() {
