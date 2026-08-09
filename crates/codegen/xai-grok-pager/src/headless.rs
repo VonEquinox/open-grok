@@ -946,6 +946,18 @@ pub async fn run_single_turn(
         agent_config.cli_agents = parse_cli_agents(json)?;
     }
 
+    let mut pending_startup = Some(PendingStartup::new());
+    let timer = xai_grok_telemetry::startup::begin(crate::acp::Owner::Client);
+    let mut report_startup_failure = |timer: &crate::acp::StartupTimer| {
+        timer.emit_telemetry(
+            crate::acp::AgentKind::Embedded,
+            crate::acp::StartupOutcome::Error,
+            None,
+            false,
+        );
+        PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
+    };
+
     // Materialize resume/fork intent before authentication so provider auth is
     // chosen from the persisted session model, not an unrelated configured
     // default. This remains the same startup plan consumed below.
@@ -970,7 +982,7 @@ pub async fn run_single_turn(
     )
     .await
     .inspect_err(|_| {
-        xai_grok_telemetry::startup::report_total(crate::acp::StartupOutcome::Error)
+        report_startup_failure(&timer);
     })?;
     let persisted_model = match &materialized {
         MaterializedStartup::Resume { session_id, .. } => {
@@ -1054,17 +1066,6 @@ pub async fn run_single_turn(
 
     let cancel = CancellationToken::new();
     let memory_config = agent_config.memory_config.clone();
-    let mut pending_startup = Some(PendingStartup::new());
-    let timer = xai_grok_telemetry::startup::begin(crate::acp::Owner::Client);
-    let mut report_startup_failure = |timer: &crate::acp::StartupTimer| {
-        timer.emit_telemetry(
-            crate::acp::AgentKind::Embedded,
-            crate::acp::StartupOutcome::Error,
-            None,
-            false,
-        );
-        PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
-    };
     let spawned = match spawn_grok_shell(agent_config, &cancel, memory_config).await {
         Ok(s) => s,
         Err(e) => {

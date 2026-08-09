@@ -2230,6 +2230,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             silent,
             nonce,
         } => {
+            let show_error = app.uses_xai_access_controls() && !silent;
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 if let Some(state) = usage_modal_state_mut(agent)
                     && state.fetch_nonce == nonce
@@ -2237,7 +2238,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                     state.billing_loading = false;
                     state.billing_error = Some(error.clone());
                 }
-                if app.uses_xai_access_controls() && !silent {
+                if show_error {
                     agent.scrollback.push_block(RenderBlock::System(
                         crate::scrollback::blocks::SystemMessageBlock::new(format!(
                             "Billing error: {error}"
