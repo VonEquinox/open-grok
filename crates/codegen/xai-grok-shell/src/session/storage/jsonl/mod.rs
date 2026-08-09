@@ -1077,6 +1077,7 @@ impl StorageAdapter for JsonlStorageAdapter {
         model_id: &acp::ModelId,
         agent_name: Option<&str>,
         reasoning_effort: Option<Option<xai_grok_sampling_types::ReasoningEffort>>,
+        resolved_tool_policy: Option<crate::session::tool_surface::ResolvedToolPolicy>,
     ) -> io::Result<()> {
         self.apply_summary_patch(
             info,
@@ -1086,6 +1087,31 @@ impl StorageAdapter for JsonlStorageAdapter {
                     agent_name: agent_name.map(String::from),
                     reasoning_effort,
                 }),
+                resolved_tool_policy,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    async fn update_previous_turn_model(
+        &self,
+        info: &Info,
+        previous_turn_model: crate::session::compaction_config::PreviousModelInfo,
+    ) -> io::Result<()> {
+        self.apply_summary_patch(
+            info,
+            super::summary_write::SummaryPatch {
+                previous_turn_model: Some(previous_turn_model),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    async fn mark_ever_used_codex(&self, info: &Info) -> io::Result<()> {
+        self.apply_summary_patch(
+            info,
+            super::summary_write::SummaryPatch {
+                ever_used_codex: true,
                 ..Default::default()
             },
         )

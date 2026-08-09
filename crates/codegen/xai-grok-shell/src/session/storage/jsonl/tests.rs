@@ -79,19 +79,37 @@ async fn update_current_model_persists_leaves_and_clears_reasoning_effort() {
     let info = create_test_info();
     let model = default_model_id();
     adapter.init_session(&info, model.clone()).await.unwrap();
+    let policy = crate::session::tool_surface::ResolvedToolPolicy {
+        resolved: crate::agent::config::ResolvedToolMode {
+            mode: xai_grok_sampling_types::ToolMode::CodeMode,
+            source: crate::agent::config::ToolModeSource::UserPreference,
+        },
+        transport: Some(xai_grok_sampling_types::CodeModeTransport::FunctionEnvelope),
+        route_provider: Some(xai_grok_sampling_types::ModelProvider::Xai),
+        route_backend: Some(xai_grok_sampling_types::ApiBackend::Responses),
+    };
     adapter
         .update_current_model_and_agent(
             &info,
             &model,
             None,
             Some(Some(ReasoningEffort::High)),
+            Some(policy),
         )
         .await
         .unwrap();
     assert_eq!(
-            adapter.read_summary_sync(&info).unwrap().reasoning_effort,
-            Some(ReasoningEffort::High),
-        );
+        adapter.read_summary_sync(&info).unwrap().reasoning_effort,
+        Some(ReasoningEffort::High),
+    );
+    assert_eq!(
+        adapter
+            .read_summary_sync(&info)
+            .unwrap()
+            .resolved_tool_policy,
+        Some(policy),
+        "model identity and its resolved transport must share one summary patch",
+    );
     adapter.update_current_model(&info, &model).await.unwrap();
     assert_eq!(
             adapter.read_summary_sync(&info).unwrap().reasoning_effort,
@@ -99,13 +117,47 @@ async fn update_current_model_persists_leaves_and_clears_reasoning_effort() {
             "model-only update must not wipe the persisted effort",
         );
     adapter
-        .update_current_model_and_agent(&info, &model, None, Some(None))
+        .update_current_model_and_agent(&info, &model, None, Some(None), None)
         .await
         .unwrap();
     assert_eq!(
             adapter.read_summary_sync(&info).unwrap().reasoning_effort,
             None,
         );
+}
+#[tokio::test]
+async fn mark_ever_used_codex_is_monotonic_and_previous_turn_model_persists() {
+    let temp_dir = TempDir::new().unwrap();
+    let adapter = JsonlStorageAdapter::with_root(temp_dir.path().to_path_buf());
+    let info = create_test_info();
+    adapter.init_session(&info, default_model_id()).await.unwrap();
+    assert!(!adapter.read_summary_sync(&info).unwrap().ever_used_codex);
+
+    adapter.mark_ever_used_codex(&info).await.unwrap();
+    assert!(adapter.read_summary_sync(&info).unwrap().ever_used_codex);
+
+    // A later empty/ unrelated patch must not clear the sticky export boundary.
+    adapter
+        .update_current_model(&info, &default_model_id())
+        .await
+        .unwrap();
+    assert!(adapter.read_summary_sync(&info).unwrap().ever_used_codex);
+
+    let previous = crate::session::compaction_config::PreviousModelInfo {
+        model_slug: "gpt-5.6-sol".into(),
+        context_window: 353_400,
+        comp_hash: Some("3000".into()),
+    };
+    adapter
+        .update_previous_turn_model(&info, previous.clone())
+        .await
+        .unwrap();
+    let loaded = adapter.read_summary_sync(&info).unwrap();
+    let stored = loaded.previous_turn_model.expect("previous turn model");
+    assert_eq!(stored.model_slug, previous.model_slug);
+    assert_eq!(stored.context_window, previous.context_window);
+    assert_eq!(stored.comp_hash, previous.comp_hash);
+    assert!(loaded.ever_used_codex);
 }
 #[tokio::test]
 async fn test_jsonl_round_trip() {
@@ -543,6 +595,11 @@ async fn test_subagent_notifications_round_trip() {
             role: None,
             model: None,
             resumed_from: None,
+            swarm_id: None,
+            swarm_description: None,
+            swarm_index: None,
+            swarm_item: None,
+            swarm_expected_members: None,
             workflow_run_id: None,
         },
         meta: None,
@@ -661,6 +718,11 @@ async fn test_subagent_spawned_resumed_roundtrip() {
             role: None,
             model: None,
             resumed_from: Some("source-agent-id".to_string()),
+            swarm_id: None,
+            swarm_description: None,
+            swarm_index: None,
+            swarm_item: None,
+            swarm_expected_members: None,
             workflow_run_id: None,
         },
         meta: None,
@@ -1168,6 +1230,9 @@ fn write_test_summary(
         num_messages: 1,
         num_chat_messages: 1,
         current_model_id: default_model_id(),
+        resolved_tool_policy: None,
+        previous_turn_model: None,
+        ever_used_codex: false,
         parent_session_id: None,
         forked_at: None,
         collection_id: None,
@@ -1727,6 +1792,7 @@ fn read_chat_history_upgrades_raw_output_parallel_tco_reasoning() {
             ConversationItem::ToolResult(_) => "tool_result",
             ConversationItem::BackendToolCall(_) => "backend_tool_call",
             ConversationItem::Reasoning(_) => "reasoning",
+            ConversationItem::CustomToolOutput(_) => "custom_tool_output",
         })
         .collect();
     assert_eq!(
@@ -1788,6 +1854,7 @@ fn read_chat_history_handles_hybrid_legacy_and_post_pr_lines() {
             ConversationItem::ToolResult(_) => "tool_result",
             ConversationItem::BackendToolCall(_) => "backend_tool_call",
             ConversationItem::Reasoning(_) => "reasoning",
+            ConversationItem::CustomToolOutput(_) => "custom_tool_output",
         })
         .collect();
     assert_eq!(
@@ -1863,6 +1930,7 @@ fn read_chat_history_is_idempotent_on_post_pr_sessions() {
             ConversationItem::ToolResult(_) => "tool_result",
             ConversationItem::BackendToolCall(_) => "backend_tool_call",
             ConversationItem::Reasoning(_) => "reasoning",
+            ConversationItem::CustomToolOutput(_) => "custom_tool_output",
         })
         .collect();
     assert_eq!(kinds, vec!["system", "user", "reasoning", "assistant"]);
@@ -2192,11 +2260,13 @@ async fn retry_after_lost_ack_converges_memory_and_disk_to_authoritative_item() 
             temperature: None,
             top_p: None,
             api_backend: Default::default(),
+            provider: Default::default(),
             extra_headers: Default::default(),
             query_params: Default::default(),
             env_http_headers: Default::default(),
             context_window: std::num::NonZeroU64::new(128_000).unwrap(),
             reasoning_effort: None,
+            service_tier: None,
             stream_tool_calls: None,
         },
         Box::new(persistence),

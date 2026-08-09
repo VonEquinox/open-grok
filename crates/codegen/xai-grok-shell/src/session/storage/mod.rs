@@ -1058,7 +1058,7 @@ pub trait StorageAdapter: Send + Sync {
     /// Update the current model in summary (delegates to
     /// `update_current_model_and_agent` with `agent_name = None`).
     async fn update_current_model(&self, info: &Info, model_id: &acp::ModelId) -> io::Result<()> {
-        self.update_current_model_and_agent(info, model_id, None, None)
+        self.update_current_model_and_agent(info, model_id, None, None, None)
             .await
     }
 
@@ -1067,13 +1067,26 @@ pub trait StorageAdapter: Send + Sync {
     /// persisted so session resume doesn't depend on the mutable model catalog.
     /// `None` leaves the existing `agent_name` unchanged (used by legacy callers
     /// that only update the model ID).
+    /// `resolved_tool_policy` persists the provider-route tool surface alongside
+    /// the model identity when present; `None` leaves any existing policy alone.
     async fn update_current_model_and_agent(
         &self,
         info: &Info,
         model_id: &acp::ModelId,
         agent_name: Option<&str>,
         reasoning_effort: Option<Option<ReasoningEffort>>,
+        resolved_tool_policy: Option<crate::session::tool_surface::ResolvedToolPolicy>,
     ) -> io::Result<()>;
+
+    async fn update_previous_turn_model(
+        &self,
+        info: &Info,
+        previous_turn_model: crate::session::compaction_config::PreviousModelInfo,
+    ) -> io::Result<()>;
+
+    /// Persist the monotonic marker that this session has carried Codex
+    /// content. Implementations must never clear an existing marker.
+    async fn mark_ever_used_codex(&self, info: &Info) -> io::Result<()>;
 
     /// Update the collection ID for telemetry tracing
     async fn update_collection_id(&self, info: &Info, collection_id: &str) -> io::Result<()>;
