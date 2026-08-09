@@ -218,11 +218,13 @@ fn serialize_counts<S: Serializer>(
         pending,
         active,
         completed,
+        queued,
     } = counts;
-    let mut map = serializer.serialize_map(Some(3))?;
+    let mut map = serializer.serialize_map(Some(4))?;
     map.serialize_entry("pending", pending)?;
     map.serialize_entry("active", active)?;
     map.serialize_entry("completed", completed)?;
+    map.serialize_entry("queued", queued)?;
     map.end()
 }
 
@@ -254,15 +256,15 @@ async fn quiesce(backend: &ChannelBackend) -> bool {
     const SLEEP: Duration = Duration::from_millis(5);
     for _ in 0..MAX_POLLS {
         let counts = backend.registry_counts().await;
-        if counts.pending == 0 && counts.active == 0 {
+        if counts.pending == 0 && counts.active == 0 && counts.queued == 0 {
             return true;
         }
         tokio::time::sleep(SLEEP).await;
     }
     let counts = backend.registry_counts().await;
     eprintln!(
-        "[soak] quiesce budget expired with pending={} active={}; snapshot may be noisy",
-        counts.pending, counts.active
+        "[soak] quiesce budget expired with pending={} active={} queued={}; snapshot may be noisy",
+        counts.pending, counts.active, counts.queued
     );
     false
 }
@@ -299,6 +301,7 @@ impl ChildRunner for SoakRunner {
                 request,
                 cancellation,
                 reporter,
+                ..
             } = run;
             let promoted = reporter
                 .started(StartedChild {
@@ -664,6 +667,7 @@ mod tests {
                 pending: 0,
                 active: 0,
                 completed: 0,
+                queued: 0,
             },
             heap,
             quiesced: true,
