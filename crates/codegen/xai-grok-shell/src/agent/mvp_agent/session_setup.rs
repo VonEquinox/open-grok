@@ -229,6 +229,10 @@ impl MvpAgent {
             acp::Error::invalid_params().data("initialize must be called before new_session")
         })?;
         self.seed_client_config_auth_if_available();
+        if let Err(error) = self.models_manager.refresh_codex_models(false).await {
+            tracing::warn!(%error, "Codex model catalog refresh failed during new session; keeping cached/embedded models");
+        }
+        self.models_manager.ensure_current_model_available();
         self.spawn_settings_reapply();
         let SessionWorkspace {
             cwd,
@@ -285,6 +289,7 @@ impl MvpAgent {
             self.default_auto_mode,
             session_yolo_mode,
         );
+        let session_swarm_mode = resolve_session_swarm_mode(arguments.meta.as_ref());
         let session_id = match client_session_id {
             Some(s) => {
                 uuid::Uuid::try_parse(s).map_err(|e| {
@@ -410,7 +415,13 @@ impl MvpAgent {
             session_sampling.reasoning_effort = Some(effort);
         }
         let (summary_client, summary_model) = self.build_summary_client(&session_sampling)?;
-        let relay_sync = self.start_relay_sync(&session_id, &session_info);
+        let relay_sync = if session_sampling.provider
+            == xai_grok_sampling_types::ModelProvider::Xai
+        {
+            self.start_relay_sync(&session_id, &session_info)
+        } else {
+            None
+        };
         let model_id = match &session_initial_model {
             Some(chat_model) => acp::ModelId::new(chat_model.clone()),
             None => resolved_custom_model
@@ -419,7 +430,9 @@ impl MvpAgent {
         };
         let session_model_id = model_id.clone();
         let persistence = if is_chat_kind {
-            crate::session::persistence::PersistenceHandle::noop()
+            crate::session::persistence::PersistenceHandle::noop_for_provider(
+                session_sampling.provider,
+            )
         } else {
             let _timer = crate::instrumentation_timer!("session.persistence_init");
             let registry_title_sync = self.registry_title_sync();
@@ -479,14 +492,17 @@ impl MvpAgent {
                     persisted_goal_mode: None,
                     persisted_workflow_runs: Vec::new(),
                     persisted_announcement_state: None,
+                    previous_turn_model: None,
+                    resolved_tool_policy_override: None,
+                    persist_initial_model: true,
                     session_meta: arguments.meta.as_ref(),
                     managed_mcp_expires_at,
                     model_agent_type: model_agent_type.as_deref(),
                     session_model_id,
                     session_yolo_mode,
                     session_auto_mode: session_auto_mode && !session_yolo_mode,
+                    session_swarm_mode,
                     prompt_display_cwd: None,
-                    is_chat_kind: false,
                 }
             };
             self.spawn_and_register_session(init, spawn_opts).await
@@ -659,6 +675,9 @@ impl MvpAgent {
             acp::Error::invalid_params().data("initialize must be called before load_session")
         })?;
         self.seed_client_config_auth_if_available();
+        if let Err(error) = self.models_manager.refresh_codex_models(false).await {
+            tracing::warn!(%error, "Codex model catalog refresh failed while loading session; keeping cached/embedded models");
+        }
         let persist_data = arguments
             .meta
             .as_ref()
@@ -676,6 +695,31 @@ impl MvpAgent {
             meta: request_meta,
             ..
         } = arguments;
+        let requested_model_id = request_meta
+            .as_ref()
+            .and_then(|meta| meta.get("modelId"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| {
+                let model_id = acp::ModelId::new(value.to_string());
+                match self.resolve_model_id(&model_id) {
+                    Ok(model) if model.info().user_selectable => Some(model_id),
+                    Ok(_) => {
+                        tracing::warn!(
+                            requested_model = value,
+                            "Load-session model override is not user-selectable; restoring persisted model"
+                        );
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            requested_model = value,
+                            "Load-session model override is unknown; restoring persisted model"
+                        );
+                        None
+                    }
+                }
+            });
         let policy = AttachPolicy::resolve(op, request_meta.as_ref(), self.restore_code);
         let SessionWorkspace {
             cwd,
@@ -731,7 +775,27 @@ impl MvpAgent {
             origin_client.clone(),
         );
         let (summary_client, summary_model) = self.build_summary_client(&load_session_sampling)?;
-        let relay_sync = self.start_relay_sync(&session_id, &session_info);
+        // RelaySync connects as soon as it is constructed, so fail closed
+        // before loading the persistence actor. A missing/legacy summary is
+        // not enough provenance to start an xAI-only relay.
+        let persisted_relay_allowed =
+            crate::session::persistence::find_summary_by_session_id(&session_id.0)
+                .is_some_and(|summary| {
+                    if summary.ever_used_codex {
+                        return false;
+                    }
+                    self.resolve_sampling_config_for_model(
+                        &summary.current_model_id,
+                        origin_client.clone(),
+                    )
+                    .provider
+                        == xai_grok_sampling_types::ModelProvider::Xai
+                });
+        let relay_sync = if persisted_relay_allowed {
+            self.start_relay_sync(&session_id, &session_info)
+        } else {
+            None
+        };
         let mut persistence_timer = crate::instrumentation_timer!("session.load_light");
         persistence_timer.with_field("session_id", session_id.0.as_ref());
         let backend = if self.build_registry_config().is_some() {
@@ -768,6 +832,55 @@ impl MvpAgent {
         } = persistence_info;
         let restored =
             RestoredSignals::read(persisted_signals.as_ref(), persisted_plan_mode.as_ref());
+        let startup_model_id = requested_model_id
+            .clone()
+            .unwrap_or_else(|| summary.current_model_id.clone());
+        // Session summaries persist the routing slug, not necessarily the
+        // catalog key. Resolve it through the selectable projection before
+        // checking credentials so a configured BYOK alias can win over an
+        // unavailable embedded OAuth row with the same slug.
+        let startup_auth_model_id = if requested_model_id.is_none() {
+            let models = self.models_manager.models();
+            let available = self.models_manager.available();
+            selectable_catalog_key_for_persisted(&models, &available, &startup_model_id)
+                .unwrap_or_else(|| startup_model_id.clone())
+        } else {
+            // An explicit request is a catalog identity, not an ambiguous
+            // persisted routing slug. Preserve exact-key semantics.
+            startup_model_id.clone()
+        };
+        let startup_sampling = self.resolve_sampling_config_for_model(
+            &startup_auth_model_id,
+            origin_client.clone(),
+        );
+        let startup_tool_policy_override = requested_model_id
+            .is_none()
+            .then_some(summary.resolved_tool_policy.clone())
+            .flatten()
+            .filter(|policy| {
+                policy.is_exact_route(
+                    startup_sampling.provider,
+                    &startup_sampling.api_backend,
+                )
+            });
+        match startup_sampling.provider.profile().session_auth {
+            xai_grok_sampling_types::BuiltInSessionAuthKind::ApiKeyOnly
+                if startup_sampling.api_key.is_none()
+                    || startup_sampling.bearer_resolver.is_some() =>
+            {
+                return Err(acp::Error::auth_required()
+                    .data("the selected provider requires a model API key"));
+            }
+            xai_grok_sampling_types::BuiltInSessionAuthKind::CodexOAuth
+                if !crate::codex_auth::sampling_config_has_credentials(&startup_sampling) =>
+            {
+                // Fail before replay or spawning a promptable session. The
+                // pager recognizes this provider-local error, runs Codex
+                // OAuth, and retries the same deferred load.
+                return Err(crate::codex_auth::auth_required_error());
+            }
+            _ => {}
+        }
         self.set_turn_number(&session_id, summary.next_trace_turn);
         tracing::info!(
             session_id = %session_id.0,
@@ -789,6 +902,7 @@ impl MvpAgent {
             self.default_auto_mode,
             session_yolo_mode,
         );
+        let session_swarm_mode = resolve_session_swarm_mode(request_meta.as_ref());
         #[allow(unused_variables)]
         let session_computer_sessions = resolve_session_computer_sessions(request_meta.as_ref())?;
         let code_restore_info = self
@@ -810,6 +924,7 @@ impl MvpAgent {
             .replay_transcript_gate(
                 &session_id,
                 &cwd,
+                &chat_history,
                 &updates_file_path,
                 ReplayRouting {
                     persist_data: persist_data.as_ref(),
@@ -844,7 +959,7 @@ impl MvpAgent {
                 crate::instrumentation_timer!("session.spawn_and_register_session");
             spawn_timer.with_field("session_id", session_id.0.as_ref());
             let persisted_agent_name: Option<String> = summary.agent_name.clone().or_else(|| {
-                self.resolve_model_id(&summary.current_model_id)
+                self.resolve_model_id(&startup_auth_model_id)
                     .ok()
                     .map(|m| m.info().agent_type.clone())
             });
@@ -871,14 +986,17 @@ impl MvpAgent {
                     persisted_goal_mode: _persisted_goal_mode,
                     persisted_workflow_runs,
                     persisted_announcement_state,
+                    previous_turn_model: summary.previous_turn_model.clone(),
+                    resolved_tool_policy_override: startup_tool_policy_override,
+                    persist_initial_model: false,
                     session_meta: request_meta.as_ref(),
                     managed_mcp_expires_at,
                     model_agent_type: persisted_agent_name.as_deref(),
-                    session_model_id: summary.current_model_id.clone(),
+                    session_model_id: startup_auth_model_id.clone(),
                     session_yolo_mode,
                     session_auto_mode: session_auto_mode && !session_yolo_mode,
+                    session_swarm_mode,
                     prompt_display_cwd,
-                    is_chat_kind: false,
                 },
             )
             .await?;
@@ -937,7 +1055,14 @@ impl MvpAgent {
         );
         self.heal_orphaned_subagents(&session_id, &unfinished_subagents)
             .await;
-        self.restore_persisted_model(&session_id, &summary).await;
+        self.restore_persisted_model(
+            &session_id,
+            &summary,
+            requested_model_id.as_ref(),
+            &startup_model_id,
+            origin_client.clone(),
+        )
+        .await?;
         let (model_state, response_meta) = self
             .build_attach_response_meta(&session_id, &summary, persist_data, code_restore_info)
             .await;
@@ -1049,6 +1174,7 @@ impl MvpAgent {
         &self,
         session_id: &acp::SessionId,
         cwd: &AbsPathBuf,
+        chat_history: &[crate::sampling::ConversationItem],
         updates_file_path: &Option<PathBuf>,
         routing: ReplayRouting<'_>,
         no_replay: bool,
@@ -1070,6 +1196,12 @@ impl MvpAgent {
                 Vec::new(),
             )
         } else {
+            let code_mode_transport_ids = self
+                .persisted_code_mode_transport_ids(
+                    chat_history,
+                    updates_file_path.as_deref(),
+                )
+                .await;
             let (tokens, replay_end_offset, unfinished_subagents) = self
                 .replay_session_updates(
                     &session_id,
@@ -1078,6 +1210,7 @@ impl MvpAgent {
                     persist_data.as_ref(),
                     target_client_id.as_ref(),
                     cursor.as_deref(),
+                    &code_mode_transport_ids,
                 )
                 .await?;
             let cursor_mark_replay = cursor.is_none();
@@ -1090,6 +1223,7 @@ impl MvpAgent {
                     persist_data.as_ref(),
                     target_client_id.as_ref(),
                     cursor_mark_replay,
+                    &code_mode_transport_ids,
                 ),
                 Err(reason) => {
                     tracing::warn!(
@@ -1186,16 +1320,20 @@ impl MvpAgent {
             .await;
         }
     }
-    /// Model-restore phase: point the actor at the persisted model without
+    /// Model-restore phase: point the actor at the selected model without
     /// writing the global `current_model_id` (shared across leader clients).
     /// A vanished model falls back within its family, or blocks prompts.
+    /// Provider-aware selection preserves Open Grok route/tool-policy restore.
     async fn restore_persisted_model(
         &self,
         session_id: &acp::SessionId,
         summary: &crate::session::persistence::Summary,
-    ) {
+        requested_model_id: Option<&acp::ModelId>,
+        startup_model_id: &acp::ModelId,
+        origin_client: Option<crate::http::OriginClientInfo>,
+    ) -> Result<(), acp::Error> {
         let session_id = session_id.clone();
-        let persisted_model = summary.current_model_id.clone();
+        let persisted_model = startup_model_id.clone();
         let models = self.models_manager.models();
         let available = self.models_manager.available();
         self.session_registry.take_unavailable_model(&session_id);
@@ -1223,7 +1361,7 @@ impl MvpAgent {
         };
         let selectable_catalog_key =
             selectable_catalog_key_for_persisted(&models, &available, &persisted_model);
-        let model_id = if let Some(catalog_key) = selectable_catalog_key {
+        let (model_id, model_selection_origin) = if let Some(catalog_key) = selectable_catalog_key {
             if catalog_key != persisted_model {
                 tracing::info!(
                     session_id = %session_id.0,
@@ -1240,7 +1378,7 @@ impl MvpAgent {
                     })),
                 );
             }
-            catalog_key
+            (catalog_key, acp_agent::LoadModelSelectionOrigin::PersistedIdentity)
         } else if available.is_empty() {
             tracing::warn!(
                 session_id = %session_id.0,
@@ -1254,7 +1392,10 @@ impl MvpAgent {
                     "persisted_model": persisted_model.0.as_ref(),
                 })),
             );
-            persisted_model
+            (
+                persisted_model,
+                acp_agent::LoadModelSelectionOrigin::PersistedIdentity,
+            )
         } else if let Some(fallback) = same_family_fallback {
             tracing::warn!(
                 session_id = %session_id.0,
@@ -1268,7 +1409,7 @@ impl MvpAgent {
             );
             self.send_model_auto_switched(&session_id, &persisted_model, &fallback, &reason)
                 .await;
-            fallback
+            (fallback, acp_agent::LoadModelSelectionOrigin::UnavailableFallback)
         } else {
             let fallback = available
                 .keys()
@@ -1301,30 +1442,70 @@ impl MvpAgent {
                 .await;
             self.session_registry
                 .set_unavailable_model(&session_id, persisted_model.clone());
-            fallback
+            (fallback, acp_agent::LoadModelSelectionOrigin::UnavailableFallback)
         };
         tracing::debug!(
             session_id = %session_id.0,
             final_model_id = %model_id.0,
             "load_session: resolved final model_id for set_session_model"
         );
+        let selected_sampling =
+            self.resolve_sampling_config_for_model(&model_id, origin_client.clone());
+        let restored_tool_policy = summary.resolved_tool_policy.filter(|policy| {
+            model_selection_origin.restores_persisted_tool_policy(
+                requested_model_id,
+                *policy,
+                selected_sampling.provider,
+                &selected_sampling.api_backend,
+            )
+        });
+        if requested_model_id.is_none()
+            && model_selection_origin == acp_agent::LoadModelSelectionOrigin::PersistedIdentity
+            && summary.resolved_tool_policy.is_some()
+            && restored_tool_policy.is_none()
+        {
+            tracing::info!(
+                session_id = %session_id.0,
+                provider = %selected_sampling.provider.name(),
+                backend = ?selected_sampling.api_backend,
+                "load_session: persisted tool policy route changed; resolving policy fresh"
+            );
+        }
         {
             let _timer = crate::instrumentation_timer!("session.restore_model");
-            let restore_meta = summary.reasoning_effort.map(|effort| {
-                let mut map = acp::Meta::new();
-                map.insert(
-                    REASONING_EFFORT_META_KEY.to_string(),
-                    reasoning_effort_meta_value(effort),
-                );
-                map
-            });
-            let _ = crate::agent::handlers::model_switch::apply(
-                self,
+            // Reasoning effort only when restoring the persisted model (not an
+            // explicit load override) and the selected model still supports it.
+            let restore_meta = requested_model_id
+                .is_none()
+                .then(|| summary.reasoning_effort)
+                .flatten()
+                .filter(|_| {
+                    self.models_manager
+                        .model_supports_reasoning_effort(&selected_sampling.model)
+                })
+                .map(|effort| {
+                    let mut map = acp::Meta::new();
+                    map.insert(
+                        REASONING_EFFORT_META_KEY.to_string(),
+                        reasoning_effort_meta_value(effort),
+                    );
+                    map
+                });
+            let restore_request =
                 acp::SetSessionModelRequest::new(session_id.to_owned(), model_id)
-                    .meta(restore_meta),
-            )
-            .await;
+                    .meta(restore_meta);
+            if let Some(policy) = restored_tool_policy {
+                crate::agent::handlers::model_switch::apply_restored(
+                    self,
+                    restore_request,
+                    policy,
+                )
+                .await?;
+            } else {
+                crate::agent::handlers::model_switch::apply(self, restore_request).await?;
+            }
         }
+        Ok(())
     }
     /// Response phase: assemble the attach `_meta`, including the running
     /// prompt id a mid-turn loader adopts to pass the `session/update` gate.

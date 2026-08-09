@@ -13826,7 +13826,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-pager"
-version = "0.1.220-alpha.4"
+version = "0.2.120"
 dependencies = [
  "agent-client-protocol",
  "ansi-to-tui",
@@ -13917,7 +13917,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-pager-bin"
-version = "0.1.220-alpha.4"
+version = "0.2.120"
 dependencies = [
  "anyhow",
  "clap",
@@ -14093,6 +14093,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "xai-grok-auth",
  "xai-grok-extra-ca",
  "xai-grok-sampling-types",
  "xai-grok-test-support",
@@ -14184,7 +14185,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-shell"
-version = "0.1.220-alpha.4"
+version = "0.2.120"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -14546,6 +14547,7 @@ dependencies = [
  "xai-computer-hub-core",
  "xai-computer-hub-sdk",
  "xai-file-utils",
+ "xai-grok-auth",
  "xai-grok-code-mode",
  "xai-grok-code-mode-protocol",
  "xai-grok-config",
@@ -14606,7 +14608,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-version"
-version = "0.2.0-dev"
+version = "0.2.120"
 dependencies = [
  "semver",
 ]
