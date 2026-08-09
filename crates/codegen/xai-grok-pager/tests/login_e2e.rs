@@ -30,10 +30,20 @@ fn login_argument_completion_lists_all_providers() {
             ("ChatGPT Codex", "codex"),
             ("Kimi", "kimi"),
             ("Fireworks AI", "fireworks"),
+            ("DeepSeek", "deepseek"),
+            ("Meta API", "meta"),
+            ("OpenCode Go", "opencode-go"),
+            ("Wafer AI", "wafer"),
         ]
     );
-    assert!(snapshot.matches[2].description.contains("API key"));
-    assert!(snapshot.matches[3].description.contains("API key"));
+    for row in &snapshot.matches[2..] {
+        assert!(
+            row.description.contains("API key"),
+            "{} should describe API-key setup, got {:?}",
+            row.display,
+            row.description
+        );
+    }
 }
 
 #[test]
@@ -42,11 +52,36 @@ fn login_provider_completion_filters_by_provider_aliases() {
     let state = SlashState::default();
     let models = ModelState::default();
 
-    for (query, expected) in [("moonshot", "kimi"), ("openai", "codex"), ("grok", "xai")] {
+    // Exact login aliases must rank their provider first. Generic fuzzy queries
+    // may still surface additional secondary matches (e.g. "openai" also hits
+    // OpenCode Go / Wafer), so do not require a singleton result set.
+    for (query, expected) in [
+        ("moonshot", "kimi"),
+        ("openai", "codex"),
+        ("chatgpt", "codex"),
+        ("grok", "xai"),
+        ("deepseek", "deepseek"),
+        ("meta", "meta"),
+        ("go", "opencode-go"),
+        ("opencode", "opencode-go"),
+        ("wafer", "wafer"),
+        ("fireworks", "fireworks"),
+    ] {
         let text = format!("/login {query}");
         controller.refresh(&state, &text, text.len(), &models);
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.matches.len(), 1, "query {query:?}");
-        assert_eq!(snapshot.matches[0].insert_text, expected, "query {query:?}");
+        assert!(
+            !snapshot.matches.is_empty(),
+            "query {query:?} should match at least one provider"
+        );
+        assert_eq!(
+            snapshot.matches[0].insert_text, expected,
+            "query {query:?} should rank {expected:?} first, got {:?}",
+            snapshot
+                .matches
+                .iter()
+                .map(|row| row.insert_text.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 }
