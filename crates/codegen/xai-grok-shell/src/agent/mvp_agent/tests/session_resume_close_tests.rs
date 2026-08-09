@@ -6,8 +6,9 @@ use crate::agent::mvp_agent::session_lifecycle::{
 };
 use crate::agent::mvp_agent::session_setup::{
     AttachOperation, AttachPolicy, RESUME_REFUSES_CHAT, RESUME_REFUSES_EXTRA_DIRS,
-    load_request_for_resume,
+    load_request_for_resume, resume_reuses_active_model,
 };
+use crate::agent::mvp_agent::acp_agent::LoadModelSelectionOrigin;
 use crate::session::SessionLiveState;
 use agent_client_protocol as acp;
 use pretty_assertions::assert_eq;
@@ -120,6 +121,64 @@ fn resume_translation_does_not_rewrite_client_meta() {
         )),
         expected_load(json!({ "noReplay": false, "x.ai/restore_code": true })),
     );
+}
+#[test]
+fn only_resume_of_the_same_active_persisted_model_skips_restore() {
+    let live_model = acp::ModelId::new("grok-4.5");
+    let other_model = acp::ModelId::new("replacement-model");
+    let requested_model = acp::ModelId::new("grok-4.5");
+    let should_reuse = |op, requested, origin, live, resolved, running| {
+        resume_reuses_active_model(op, requested, origin, live, resolved, running)
+    };
+
+    assert!(should_reuse(
+        AttachOperation::Resume,
+        None,
+        LoadModelSelectionOrigin::PersistedIdentity,
+        Some(&live_model),
+        &live_model,
+        Some("turn-1"),
+    ));
+    assert!(!should_reuse(
+        AttachOperation::Load,
+        None,
+        LoadModelSelectionOrigin::PersistedIdentity,
+        Some(&live_model),
+        &live_model,
+        Some("turn-1"),
+    ));
+    assert!(!should_reuse(
+        AttachOperation::Resume,
+        Some(&requested_model),
+        LoadModelSelectionOrigin::PersistedIdentity,
+        Some(&live_model),
+        &live_model,
+        Some("turn-1"),
+    ));
+    assert!(!should_reuse(
+        AttachOperation::Resume,
+        None,
+        LoadModelSelectionOrigin::UnavailableFallback,
+        Some(&live_model),
+        &live_model,
+        Some("turn-1"),
+    ));
+    assert!(!should_reuse(
+        AttachOperation::Resume,
+        None,
+        LoadModelSelectionOrigin::PersistedIdentity,
+        Some(&live_model),
+        &other_model,
+        Some("turn-1"),
+    ));
+    assert!(!should_reuse(
+        AttachOperation::Resume,
+        None,
+        LoadModelSelectionOrigin::PersistedIdentity,
+        Some(&live_model),
+        &live_model,
+        None,
+    ));
 }
 /// A chat load rebuilds the session under the same id, so a close waiting on
 /// intake can find a live replacement with a client attached. Closing by id

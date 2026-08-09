@@ -83,6 +83,20 @@ pub(super) enum AttachOperation {
     Load,
     Resume,
 }
+pub(super) fn resume_reuses_active_model(
+    op: AttachOperation,
+    requested_model_id: Option<&acp::ModelId>,
+    selection_origin: acp_agent::LoadModelSelectionOrigin,
+    live_model_id: Option<&acp::ModelId>,
+    resolved_model_id: &acp::ModelId,
+    running_prompt_id: Option<&str>,
+) -> bool {
+    op == AttachOperation::Resume
+        && requested_model_id.is_none()
+        && selection_origin == acp_agent::LoadModelSelectionOrigin::PersistedIdentity
+        && live_model_id == Some(resolved_model_id)
+        && running_prompt_id.is_some()
+}
 /// What the two attach methods do differently, decided in one exhaustive match
 /// so a branch further down cannot quietly skip [`AttachOperation`]. Not in the
 /// request's `_meta`, where resume used to write it: that lets a client spoof it.
@@ -1114,6 +1128,7 @@ impl MvpAgent {
                 requested_model_id.as_ref(),
                 &startup_model_id,
                 origin_client.clone(),
+                op,
             )
             .await;
         // #region agent log
@@ -1410,6 +1425,7 @@ impl MvpAgent {
         requested_model_id: Option<&acp::ModelId>,
         startup_model_id: &acp::ModelId,
         origin_client: Option<crate::http::OriginClientInfo>,
+        op: AttachOperation,
     ) -> Result<(), acp::Error> {
         let session_id = session_id.clone();
         let persisted_model = startup_model_id.clone();
@@ -1549,6 +1565,51 @@ impl MvpAgent {
                 backend = ?selected_sampling.api_backend,
                 "load_session: persisted tool policy route changed; resolving policy fresh"
             );
+        }
+        let live_handle = self.resident_handle(&session_id);
+        let live_model_id = live_handle.as_ref().map(|handle| &handle.model_id);
+        let running_prompt_id = live_handle
+            .as_ref()
+            .and_then(|handle| handle.current_prompt_id.lock().ok())
+            .and_then(|prompt_id| prompt_id.clone());
+        if resume_reuses_active_model(
+            op,
+            requested_model_id,
+            model_selection_origin,
+            live_model_id,
+            &model_id,
+            running_prompt_id.as_deref(),
+        ) {
+            // `session/resume` reattaches to this exact live turn. Its actor
+            // already owns the model and tool policy; sending SetSessionModel
+            // would turn a no-op attach into a forbidden mid-turn mutation.
+            // #region agent log
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "E",
+                        "location": "session_setup.rs:restore_persisted_model:reuse_active",
+                        "message": "resume reused active resident model without mutation",
+                        "data": {
+                            "resolved_model_id": model_id.0.as_ref(),
+                            "live_model": live_model_id.map(|id| id.0.as_ref()),
+                            "selection_origin": format!("{model_selection_origin:?}"),
+                            "running_prompt_id": running_prompt_id,
+                            "requested_model_id_is_none": requested_model_id.is_none(),
+                        },
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                    })
+                );
+            }
+            // #endregion
+            return Ok(());
         }
         {
             let _timer = crate::instrumentation_timer!("session.restore_model");
