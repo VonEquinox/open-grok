@@ -1475,7 +1475,7 @@ fn rewind_grouped_swarm_card_prunes_stale_swarm_refs_and_keeps_future_progress_u
     dispatch(
         Action::TaskComplete(TaskResult::RewindExecuteComplete {
             agent_id: id,
-            response: rewind_success(0, "all", "alpha"),
+            response: rewind_success(0, "alpha"),
         }),
         &mut app,
     );
