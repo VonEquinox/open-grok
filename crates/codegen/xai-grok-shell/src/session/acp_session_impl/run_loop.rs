@@ -99,6 +99,48 @@ impl SessionActor {
             .task_wake_suppressed
             .as_ref()
             .is_some_and(|gate| gate.get());
+        // #region agent log
+        {
+            use std::io::Write;
+            use xai_grok_tools::reminders::task_completion::ReportedTaskCompletions;
+            use xai_grok_tools::types::resources::State;
+            let bridge = self.agent.borrow().tool_bridge().clone();
+            let resources = bridge.shared_resources().await;
+            let reported_present = resources
+                .lock()
+                .await
+                .get::<State<ReportedTaskCompletions>>()
+                .is_some();
+            let state_suppressed_peek = self.state.lock().await.notifications_suppressed;
+            let admitted_peek = !gate_suppressed && !state_suppressed_peek;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "A,B,D",
+                        "location": "run_loop.rs:admit_task_completion_wake",
+                        "message": "admission decision",
+                        "data": {
+                            "task_id": task_id,
+                            "gate_suppressed": gate_suppressed,
+                            "state_suppressed": state_suppressed_peek,
+                            "admitted": admitted_peek,
+                            "reported_state_present_before_decision": reported_present
+                        },
+                        "timestamp": std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis())
+                            .unwrap_or(0)
+                    })
+                );
+            }
+        }
+        // #endregion
         let mut state = self.state.lock().await;
         let state_suppressed = state.notifications_suppressed;
         let admitted = !gate_suppressed && !state_suppressed;
