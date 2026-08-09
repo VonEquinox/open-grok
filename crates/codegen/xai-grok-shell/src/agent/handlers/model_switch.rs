@@ -71,6 +71,38 @@ async fn apply_with_resolved_tool_policy(
     let required_agent_type =
         resolve_required_agent_type(Some(model.info().agent_type.as_str()), session_default);
     let previous_model_id = handle.model_id.0.clone();
+    let running_prompt = handle
+        .current_prompt_id
+        .lock()
+        .ok()
+        .and_then(|g| g.clone());
+    // #region agent log
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/opt/cursor/logs/debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            f,
+            "{}",
+            serde_json::json!({
+                "hypothesisId": "C",
+                "location": "model_switch.rs:apply_with_resolved_tool_policy:entry",
+                "message": "model_switch apply entry",
+                "data": {
+                    "session_id": session_id.0.as_ref(),
+                    "previous_model_id": previous_model_id.as_str(),
+                    "new_model_id": model_id.0.as_ref(),
+                    "model_unchanged": previous_model_id == model_id.0,
+                    "has_tool_policy_override": resolved_tool_policy_override.is_some(),
+                    "running_prompt_id": running_prompt,
+                },
+                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+            })
+        );
+    }
+    // #endregion
     let mut pending_rebuild: Option<(Box<xai_grok_agent::AgentDefinition>, bool)> = None;
     {
         let required = &required_agent_type;

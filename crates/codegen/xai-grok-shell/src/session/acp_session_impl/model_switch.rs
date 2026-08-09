@@ -149,6 +149,36 @@ impl SessionActor {
                 reason = %blocked.message(),
                 "handle_set_session_model: lifecycle gate unavailable"
             );
+            // #region agent log
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/opt/cursor/logs/debug.log")
+            {
+                use std::io::Write;
+                let turn_slot_active = self.state.try_lock().ok().map(|s| s.running_task.is_some());
+                let turn_future_active = self
+                    .session_turn_active
+                    .load(std::sync::atomic::Ordering::Acquire);
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "hypothesisId": "D",
+                        "location": "model_switch.rs:handle_set_session_model:blocked",
+                        "message": "lifecycle gate blocked model switch",
+                        "data": {
+                            "session_id": self.session_info.id.0.as_ref(),
+                            "selected_model_id": selected_model_id.0.as_ref(),
+                            "block": format!("{blocked:?}"),
+                            "turn_slot_active": turn_slot_active,
+                            "turn_future_active": turn_future_active,
+                        },
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                    })
+                );
+            }
+            // #endregion
             let message = match blocked {
                 LifecycleMutationBlock::ActiveTurn => MODEL_SWITCH_ACTIVE_TURN_ERROR.to_string(),
                 LifecycleMutationBlock::MutationInProgress(_) => blocked.message(),
