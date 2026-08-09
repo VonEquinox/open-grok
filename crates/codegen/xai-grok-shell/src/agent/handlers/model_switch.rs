@@ -92,7 +92,7 @@ async fn apply_with_resolved_tool_policy(
                 "message": "model_switch apply entry",
                 "data": {
                     "session_id": session_id.0.as_ref(),
-                    "previous_model_id": previous_model_id.as_str(),
+                    "previous_model_id": previous_model_id.as_ref(),
                     "new_model_id": model_id.0.as_ref(),
                     "model_unchanged": previous_model_id == model_id.0,
                     "has_tool_policy_override": resolved_tool_policy_override.is_some(),
