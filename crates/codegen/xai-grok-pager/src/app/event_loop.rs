@@ -1044,13 +1044,15 @@ pub(crate) async fn run(
     app.plugin_cta_enabled = xai_grok_config::env_bool("GROK_PLUGIN_CTA")
         .or_else(|| remote_settings.as_ref().and_then(|s| s.plugin_cta))
         .unwrap_or(false);
-    // Voice is GA-on by default. Remote `voice_mode_enabled: false` is a kill
-    // switch; `GROK_VOICE_MODE` overrides for local dev (env > remote > default on).
-    // Free/X Basic still hit SuperGrok upsell via tier gates (separate).
-    let voice_mode_enabled = crate::app::resolve_voice_mode_enabled(
-        xai_grok_config::env_bool("GROK_VOICE_MODE"),
+    // Resolve after auth so API-key and managed policy precedence are known.
+    let voice_mode_enabled = crate::app::resolve_voice_mode_live(
         remote_settings.as_ref().and_then(|s| s.voice_mode_enabled),
+        app.is_api_key_auth,
     );
+    if !voice_mode_enabled {
+        app.voice_reset();
+        app.voice_ui_active = false;
+    }
     app.apply_voice_mode_enabled(voice_mode_enabled);
     app.session_picker_grouped = std::env::var("GROK_SESSION_PICKER_GROUPED")
         .ok()
