@@ -5775,10 +5775,10 @@ pub fn try_resolve_model_credentials(
 /// Per-model auth facts (BYOK status + auth scheme) from one effective-config
 /// load, memoized by the session actor.
 #[derive(Clone, Copy)]
-pub struct ModelAuthFacts {
-    pub byok: ModelByok,
-    pub auth_scheme: AuthScheme,
-    pub provider: ModelProvider,
+pub(crate) struct ModelAuthFacts {
+    pub(crate) byok: ModelByok,
+    pub(crate) auth_scheme: AuthScheme,
+    pub(crate) provider: ModelProvider,
 }
 /// Resolve `model_id` to its auth facts and auth-provider reference from one
 /// effective-config load; both ride the same memo (see
@@ -5786,7 +5786,7 @@ pub struct ModelAuthFacts {
 /// model absent from the catalog → `NotByok`. An empty `model_id` (no sampling
 /// config yet) → `Unknown`, not `NotByok`, so the gate isn't activated for an
 /// unidentified model.
-pub fn resolve_model_auth_facts_and_provider(
+pub(crate) fn resolve_model_auth_facts_and_provider(
     model_id: &str,
 ) -> (ModelAuthFacts, Option<crate::auth::AuthProviderRef>) {
     if model_id.is_empty() {
