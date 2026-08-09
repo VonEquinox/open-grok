@@ -1509,10 +1509,7 @@ fn rejected_actor_model_switch_keeps_resident_handle_unchanged() {
         let mut handle = make_test_handle("original-model", false, None);
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
         handle.cmd_tx = command_tx;
-        agent
-            .sessions
-            .borrow_mut()
-            .insert(session_id.clone(), handle);
+        agent.insert_resident(&session_id, handle);
 
         let actor = tokio::task::spawn_local(async move {
             while let Some(command) = command_rx.recv().await {
@@ -1548,7 +1545,12 @@ fn rejected_actor_model_switch_keeps_resident_handle_unchanged() {
             )
         );
         assert_eq!(
-            agent.sessions.borrow()[&session_id].model_id.0.as_ref(),
+            agent
+                .resident_handle(&session_id)
+                .expect("session remains resident")
+                .model_id
+                .0
+                .as_ref(),
             "original-model",
             "an actor-side rejection must not update the resident session handle"
         );
@@ -1576,10 +1578,7 @@ fn invalid_required_code_mode_route_fails_before_harness_or_handle_mutation() {
         let mut handle = make_test_handle("original-model", false, None);
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
         handle.cmd_tx = command_tx;
-        agent
-            .sessions
-            .borrow_mut()
-            .insert(session_id.clone(), handle);
+        agent.insert_resident(&session_id, handle);
 
         let actor = tokio::task::spawn_local(async move {
             let command = command_rx.recv().await.expect("active-agent query");
@@ -1613,7 +1612,12 @@ fn invalid_required_code_mode_route_fails_before_harness_or_handle_mutation() {
             "unexpected model-route error: {error:?}"
         );
         assert_eq!(
-            agent.sessions.borrow()[&session_id].model_id.0.as_ref(),
+            agent
+                .resident_handle(&session_id)
+                .expect("session remains resident")
+                .model_id
+                .0
+                .as_ref(),
             "original-model"
         );
         assert!(
@@ -2249,6 +2253,33 @@ fn build_agent_with_auth(auth: crate::auth::GrokAuth) -> MvpAgent {
     let gateway = GatewaySender::new(tx);
     let cfg = AgentConfig::default();
     MvpAgent::new(gateway, &cfg, auth_manager, None).expect("valid test config")
+}
+/// Agent with pre-loaded auth, a gateway receiver (to assert emitted
+/// notifications), and the proxy URL pointed at a mock `/mcp/tools/list`.
+/// Uses isolated `AuthManager` home (never `~/.grok` / shared state).
+fn build_agent_with_auth_and_proxy(
+    auth: crate::auth::GrokAuth,
+    proxy_url: String,
+    mode: crate::agent::config::AgentMode,
+) -> (
+    MvpAgent,
+    tokio::sync::mpsc::UnboundedReceiver<xai_acp_lib::AcpClientMessage>,
+) {
+    use crate::agent::config::Config as AgentConfig;
+    use crate::auth::{AuthManager, GrokComConfig};
+    let temp_dir = tempfile::tempdir().unwrap();
+    let auth_manager =
+        std::sync::Arc::new(AuthManager::new(temp_dir.path(), GrokComConfig::default()));
+    auth_manager.hot_swap(auth);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let gateway = GatewaySender::new(tx);
+    let mut cfg = AgentConfig {
+        mode,
+        ..Default::default()
+    };
+    cfg.endpoints.cli_chat_proxy_base_url = Some(proxy_url);
+    let agent = MvpAgent::new(gateway, &cfg, auth_manager, None).expect("valid test config");
+    (agent, rx)
 }
 /// Regression: boot-time plugin discovery is deferred past ACP
 /// `initialize`, so the shared plugin registry starts empty.

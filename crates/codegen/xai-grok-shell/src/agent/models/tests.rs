@@ -2032,6 +2032,11 @@ fn make_entry_config_with_id(
         api_key: None,
         env_key: None,
         api_backend: Default::default(),
+        // Default (xAI) provider: keep catalog helpers off Codex OAuth /
+        // tool-mode / reasoning-summary contracts unless a test opts in.
+        provider: xai_grok_sampling_types::ModelProvider::default(),
+        tool_mode: None,
+        codex_multi_agent_v2: false,
         context_window: std::num::NonZeroU64::new(200_000).unwrap(),
         auto_compact_threshold_percent: None,
         system_prompt_label: None,
@@ -2047,7 +2052,10 @@ fn make_entry_config_with_id(
         reasoning_effort: None,
         supports_reasoning_effort: false,
         reasoning_efforts: Vec::new(),
+        supports_reasoning_summary_parameter: false,
+        default_reasoning_summary: xai_grok_sampling_types::ReasoningSummary::None,
         supports_backend_search: false,
+        supports_standalone_web_search: None,
         compactions_remaining: None,
         compaction_at_tokens: None,
         show_model_fingerprint: false,

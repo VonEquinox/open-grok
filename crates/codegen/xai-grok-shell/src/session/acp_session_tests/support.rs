@@ -59,7 +59,7 @@ pub(crate) fn spawn_persistence_ack_drainer(
     tokio::task::spawn_local(async move {
         while let Some(message) = rx.recv().await {
             if let PersistenceMsg::FlushAndAck { respond_to } = message {
-                let _ = respond_to.send(());
+                let _ = respond_to.send(Ok(()));
             }
         }
     });
