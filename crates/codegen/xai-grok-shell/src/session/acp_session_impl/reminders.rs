@@ -625,31 +625,6 @@ impl SessionActor {
         if ids.is_empty() {
             return;
         }
-        // #region agent log
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/opt/cursor/logs/debug.log")
-            {
-                let _ = writeln!(
-                    f,
-                    "{}",
-                    serde_json::json!({
-                        "hypothesisId": "B",
-                        "location": "reminders.rs:mark_completions_reported",
-                        "message": "mark_completions_reported invoked",
-                        "data": {"ids": ids},
-                        "timestamp": std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis())
-                            .unwrap_or(0)
-                    })
-                );
-            }
-        }
-        // #endregion
         use xai_grok_tools::reminders::task_completion::ReportedTaskCompletions;
         use xai_grok_tools::types::resources::State;
         let bridge = self.agent.borrow().tool_bridge().clone();

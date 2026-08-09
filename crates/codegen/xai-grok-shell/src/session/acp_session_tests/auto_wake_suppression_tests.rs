@@ -242,73 +242,8 @@ async fn cancel_barrier_rejects_task_completion_wake_without_reporting_it() {
                 .await;
             {
                 let mut resources = resources.lock().await;
-                // #region agent log
-                {
-                    use std::io::Write;
-                    let present_before = resources
-                        .get::<xai_grok_tools::types::resources::State<
-                            xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
-                        >>()
-                        .is_some();
-                    let persist_exists =
-                        std::path::Path::new("/tmp/resources_state.json").exists();
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/opt/cursor/logs/debug.log")
-                    {
-                        let _ = writeln!(
-                            f,
-                            "{}",
-                            serde_json::json!({
-                                "hypothesisId": "A,C,E",
-                                "location": "auto_wake_suppression_tests.rs:pre_insert",
-                                "message": "reported state before manual insert",
-                                "data": {
-                                    "reported_present": present_before,
-                                    "persist_file_exists": persist_exists
-                                },
-                                "timestamp": std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis())
-                                    .unwrap_or(0)
-                            })
-                        );
-                    }
-                }
-                // #endregion
                 resources.insert(reservations.clone());
                 resources.insert(gate.clone());
-                // #region agent log
-                {
-                    use std::io::Write;
-                    let present_after = resources
-                        .get::<xai_grok_tools::types::resources::State<
-                            xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
-                        >>()
-                        .is_some();
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/opt/cursor/logs/debug.log")
-                    {
-                        let _ = writeln!(
-                            f,
-                            "{}",
-                            serde_json::json!({
-                                "hypothesisId": "E",
-                                "location": "auto_wake_suppression_tests.rs:post_insert",
-                                "message": "reported state after manual insert",
-                                "data": {"reported_present": present_after},
-                                "timestamp": std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis())
-                                    .unwrap_or(0)
-                            })
-                        );
-                    }
-                }
-                // #endregion
             }
             let origin = crate::session::PromptOrigin::TaskCompleted {
                 task_id: "bg-suppressed".to_string(),
@@ -340,41 +275,6 @@ async fn cancel_barrier_rejects_task_completion_wake_without_reporting_it() {
             drop(state);
             assert!(reservations.contains("bg-suppressed"));
             let res = resources.lock().await;
-            // #region agent log
-            {
-                use std::io::Write;
-                let reported_opt = res.get::<xai_grok_tools::types::resources::State<
-                    xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
-                >>();
-                let is_reported = reported_opt
-                    .map(|r| r.is_reported("bg-suppressed"))
-                    .unwrap_or(false);
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/opt/cursor/logs/debug.log")
-                {
-                    let _ = writeln!(
-                        f,
-                        "{}",
-                        serde_json::json!({
-                            "hypothesisId": "A,B,D",
-                            "location": "auto_wake_suppression_tests.rs:post_admit",
-                            "message": "reported state after declined admission",
-                            "data": {
-                                "reported_present": reported_opt.is_some(),
-                                "is_reported_bg_suppressed": is_reported,
-                                "reservation_still_held": reservations.contains("bg-suppressed")
-                            },
-                            "timestamp": std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis())
-                                .unwrap_or(0)
-                        })
-                    );
-                }
-            }
-            // #endregion
             let reported = res.get::<xai_grok_tools::types::resources::State<
                 xai_grok_tools::reminders::task_completion::ReportedTaskCompletions,
             >>();
