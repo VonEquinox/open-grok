@@ -1081,82 +1081,15 @@ impl MvpAgent {
         );
         self.heal_orphaned_subagents(&session_id, &unfinished_subagents)
             .await;
-        // #region agent log
-        {
-            let handle = self.resident_handle(&session_id);
-            let live_model = handle.as_ref().map(|h| h.model_id.0.to_string());
-            let running_prompt = handle.and_then(|h| {
-                h.current_prompt_id
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone())
-            });
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/opt/cursor/logs/debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(
-                    f,
-                    "{}",
-                    serde_json::json!({
-                        "hypothesisId": "A",
-                        "location": "session_setup.rs:pre_restore_persisted_model",
-                        "message": "attach about to restore model",
-                        "data": {
-                            "op": format!("{op:?}"),
-                            "no_replay": no_replay,
-                            "session_exists": session_exists,
-                            "is_resident": self.is_resident(&session_id),
-                            "live_model": live_model,
-                            "startup_model_id": startup_model_id.0.as_ref(),
-                            "requested_model_id": requested_model_id.as_ref().map(|m| m.0.to_string()),
-                            "running_prompt_id": running_prompt,
-                            "summary_model": summary.current_model_id.0.as_ref(),
-                        },
-                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-                    })
-                );
-            }
-        }
-        // #endregion
-        let restore_result = self
-            .restore_persisted_model(
-                &session_id,
-                &summary,
-                requested_model_id.as_ref(),
-                &startup_model_id,
-                origin_client.clone(),
-                op,
-            )
-            .await;
-        // #region agent log
-        {
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/opt/cursor/logs/debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(
-                    f,
-                    "{}",
-                    serde_json::json!({
-                        "hypothesisId": "A",
-                        "location": "session_setup.rs:post_restore_persisted_model",
-                        "message": "restore_persisted_model returned",
-                        "data": {
-                            "ok": restore_result.is_ok(),
-                            "err": restore_result.as_ref().err().map(|e| e.to_string()),
-                        },
-                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-                    })
-                );
-            }
-        }
-        // #endregion
-        restore_result?;
+        self.restore_persisted_model(
+            &session_id,
+            &summary,
+            requested_model_id.as_ref(),
+            &startup_model_id,
+            origin_client.clone(),
+            op,
+        )
+        .await?;
         let (model_state, response_meta) = self
             .build_attach_response_meta(&session_id, &summary, persist_data, code_restore_info)
             .await;
@@ -1583,32 +1516,6 @@ impl MvpAgent {
             // `session/resume` reattaches to this exact live turn. Its actor
             // already owns the model and tool policy; sending SetSessionModel
             // would turn a no-op attach into a forbidden mid-turn mutation.
-            // #region agent log
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/opt/cursor/logs/debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(
-                    f,
-                    "{}",
-                    serde_json::json!({
-                        "hypothesisId": "E",
-                        "location": "session_setup.rs:restore_persisted_model:reuse_active",
-                        "message": "resume reused active resident model without mutation",
-                        "data": {
-                            "resolved_model_id": model_id.0.as_ref(),
-                            "live_model": live_model_id.map(|id| id.0.as_ref()),
-                            "selection_origin": format!("{model_selection_origin:?}"),
-                            "running_prompt_id": running_prompt_id,
-                            "requested_model_id_is_none": requested_model_id.is_none(),
-                        },
-                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-                    })
-                );
-            }
-            // #endregion
             return Ok(());
         }
         {
@@ -1631,43 +1538,6 @@ impl MvpAgent {
                     );
                     map
                 });
-            let live_model = self
-                .resident_handle(&session_id)
-                .map(|h| h.model_id.0.to_string());
-            let running_prompt = self.resident_handle(&session_id).and_then(|h| {
-                h.current_prompt_id
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone())
-            });
-            // #region agent log
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/opt/cursor/logs/debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(
-                    f,
-                    "{}",
-                    serde_json::json!({
-                        "hypothesisId": "B",
-                        "location": "session_setup.rs:restore_persisted_model:apply",
-                        "message": "calling model_switch apply/apply_restored",
-                        "data": {
-                            "resolved_model_id": model_id.0.as_ref(),
-                            "live_model": live_model,
-                            "model_matches_live": live_model.as_deref() == Some(model_id.0.as_ref()),
-                            "selection_origin": format!("{model_selection_origin:?}"),
-                            "has_restored_tool_policy": restored_tool_policy.is_some(),
-                            "running_prompt_id": running_prompt,
-                            "requested_model_id_is_none": requested_model_id.is_none(),
-                        },
-                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-                    })
-                );
-            }
-            // #endregion
             let restore_request =
                 acp::SetSessionModelRequest::new(session_id.to_owned(), model_id)
                     .meta(restore_meta);
