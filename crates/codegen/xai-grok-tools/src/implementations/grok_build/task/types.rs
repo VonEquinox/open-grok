@@ -207,6 +207,10 @@ pub struct AgentMailboxIdentity {
 
 register_resource!("grok_build", "AgentMailboxIdentity", AgentMailboxIdentity);
 
+/// `Message` is the steering channel: it is pushed into the recipient session
+/// live (a running turn consumes it at an interjection boundary; an idle
+/// recipient starts an agent-message turn). `FollowupTask` is the passive
+/// queue: it waits in the recipient's mailbox until drained via `wait_agent`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -217,8 +221,8 @@ pub enum AgentMailboxMessageKind {
 }
 
 impl AgentMailboxMessageKind {
-    pub fn wakes_recipient(self) -> bool {
-        matches!(self, Self::FollowupTask)
+    pub fn steers_recipient(self) -> bool {
+        matches!(self, Self::Message)
     }
 }
 

@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 struct TestControl {
     cancellation: CancellationToken,
+    followups: mpsc::UnboundedSender<AgentMailboxMessage>,
 }
 
 impl ChildControl for TestControl {
@@ -33,6 +34,10 @@ impl ChildControl for TestControl {
     fn cancel(&self) {
         self.cancellation.cancel();
     }
+
+    fn deliver_followup(&self, message: &AgentMailboxMessage) -> bool {
+        self.followups.send(message.clone()).is_ok()
+    }
 }
 
 struct TestRunner {
@@ -44,6 +49,7 @@ struct TestRunner {
     requests: mpsc::UnboundedSender<SubagentRequest>,
     started: mpsc::UnboundedSender<String>,
     queue_waits: mpsc::UnboundedSender<(String, Option<std::time::Duration>, usize)>,
+    followups: mpsc::UnboundedSender<AgentMailboxMessage>,
 }
 
 impl ChildRunner for TestRunner {
@@ -61,6 +67,7 @@ impl ChildRunner for TestRunner {
         let requests = self.requests.clone();
         let started = self.started.clone();
         let queue_waits = self.queue_waits.clone();
+        let followups = self.followups.clone();
         Box::pin(async move {
             let ChildRunRequest {
                 request,
@@ -98,6 +105,7 @@ impl ChildRunner for TestRunner {
                     definition_background: request.subagent_type == "background-default",
                     control: TestControl {
                         cancellation: cancellation.clone(),
+                        followups,
                     },
                 })
                 .await
@@ -196,6 +204,7 @@ struct Harness {
     requests: mpsc::UnboundedReceiver<SubagentRequest>,
     started: mpsc::UnboundedReceiver<String>,
     queue_waits: mpsc::UnboundedReceiver<(String, Option<std::time::Duration>, usize)>,
+    followups: mpsc::UnboundedReceiver<AgentMailboxMessage>,
     actor: tokio::task::JoinHandle<()>,
 }
 
@@ -225,6 +234,7 @@ fn harness_with_options(
     let (request_tx, requests) = mpsc::unbounded_channel();
     let (started_tx, started) = mpsc::unbounded_channel();
     let (queue_wait_tx, queue_waits) = mpsc::unbounded_channel();
+    let (followup_tx, followups) = mpsc::unbounded_channel();
     let actor = tokio::spawn(
         SubagentCoordinator::new(
             command_rx,
@@ -237,6 +247,7 @@ fn harness_with_options(
                 requests: request_tx,
                 started: started_tx,
                 queue_waits: queue_wait_tx,
+                followups: followup_tx,
             },
             config,
         )
@@ -253,6 +264,7 @@ fn harness_with_options(
         requests,
         started,
         queue_waits,
+        followups,
         actor,
     }
 }
@@ -1786,6 +1798,18 @@ fn mailbox_message(
     }
 }
 
+fn followup_message(
+    id: &str,
+    identity: &AgentMailboxIdentity,
+    target: &str,
+    body: &str,
+) -> AgentMailboxMessage {
+    AgentMailboxMessage {
+        kind: AgentMailboxMessageKind::FollowupTask,
+        ..mailbox_message(id, identity, target, body)
+    }
+}
+
 #[tokio::test]
 async fn team_mailbox_lists_pending_child_and_delivers_fifo() {
     let mut harness = harness(true, std::time::Duration::from_secs(60));
@@ -1823,6 +1847,139 @@ async fn team_mailbox_lists_pending_child_and_delivers_fifo() {
             .map(|message| message.body.as_str())
             .collect::<Vec<_>>(),
         vec!["first", "second"]
+    );
+
+    spawn.abort();
+    harness.actor.abort();
+}
+
+/// A message to a child that is already running is delivered live through the
+/// child control (steering), never parked in the mailbox.
+#[tokio::test]
+async fn team_mailbox_steers_active_child_live() {
+    let mut harness = harness(false, std::time::Duration::from_secs(60));
+    let backend = harness.backend.clone();
+    let spawn = tokio::spawn(async move { backend.spawn(request("steer-child", true)).await });
+    let _ = harness.requests.recv().await.expect("spawn request");
+    assert_eq!(
+        harness.started.recv().await.expect("child started"),
+        "steer-child"
+    );
+
+    let root = mailbox_identity("parent", "parent");
+    let output = harness
+        .backend
+        .send_agent_message(
+            root.clone(),
+            "steer-child",
+            mailbox_message("m1", &root, "steer-child", "stop work"),
+        )
+        .await
+        .expect("message accepted");
+    assert_eq!(output.status, AgentMessageDeliveryStatus::Delivered);
+
+    let delivered = harness.followups.recv().await.expect("live delivery");
+    assert_eq!(delivered.body, "stop work");
+    assert_eq!(delivered.kind, AgentMailboxMessageKind::Message);
+
+    // Nothing lingers in the mailbox after a live delivery.
+    let child = mailbox_identity("parent", "steer-child");
+    let inbox = harness.backend.wait_agent_messages(child, 0).await;
+    assert!(inbox.messages.is_empty());
+
+    spawn.abort();
+    harness.actor.abort();
+}
+
+/// Steering mail queued while the recipient was still pending flushes to the
+/// live session in FIFO order the moment the child starts; queued follow-up
+/// tasks stay in the mailbox for `wait_agent`.
+#[tokio::test]
+async fn queued_mail_flushes_when_pending_child_starts() {
+    let mut harness = harness(true, std::time::Duration::from_secs(60));
+    let backend = harness.backend.clone();
+    let spawn = tokio::spawn(async move { backend.spawn(request("flush-child", true)).await });
+    let _ = harness.requests.recv().await.expect("spawn request");
+
+    let root = mailbox_identity("parent", "parent");
+    for message in [
+        mailbox_message("m1", &root, "flush-child", "first"),
+        followup_message("f1", &root, "flush-child", "later task"),
+        mailbox_message("m2", &root, "flush-child", "second"),
+    ] {
+        let output = harness
+            .backend
+            .send_agent_message(root.clone(), "flush-child", message)
+            .await
+            .expect("message accepted");
+        assert_eq!(output.status, AgentMessageDeliveryStatus::Queued);
+    }
+
+    let _ = harness.start.send(());
+    assert_eq!(
+        harness.started.recv().await.expect("child started"),
+        "flush-child"
+    );
+
+    let first = harness.followups.recv().await.expect("first flushed");
+    let second = harness.followups.recv().await.expect("second flushed");
+    assert_eq!(
+        [first.body.as_str(), second.body.as_str()],
+        ["first", "second"]
+    );
+
+    // The follow-up task did not flush; it waits in the mailbox.
+    let child = mailbox_identity("parent", "flush-child");
+    let inbox = harness.backend.wait_agent_messages(child, 0).await;
+    assert_eq!(
+        inbox
+            .messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["later task"]
+    );
+
+    spawn.abort();
+    harness.actor.abort();
+}
+
+/// A follow-up task to a running child is passive: it queues in the mailbox
+/// instead of interrupting the child's current work.
+#[tokio::test]
+async fn followup_task_queues_mail_for_active_child() {
+    let mut harness = harness(false, std::time::Duration::from_secs(60));
+    let backend = harness.backend.clone();
+    let spawn = tokio::spawn(async move { backend.spawn(request("busy-child", true)).await });
+    let _ = harness.requests.recv().await.expect("spawn request");
+    assert_eq!(
+        harness.started.recv().await.expect("child started"),
+        "busy-child"
+    );
+
+    let root = mailbox_identity("parent", "parent");
+    let output = harness
+        .backend
+        .send_agent_message(
+            root.clone(),
+            "busy-child",
+            followup_message("f1", &root, "busy-child", "next task"),
+        )
+        .await
+        .expect("message accepted");
+    assert_eq!(output.status, AgentMessageDeliveryStatus::Queued);
+
+    // No live delivery happened; the child drains it via wait_agent.
+    assert!(harness.followups.try_recv().is_err());
+    let child = mailbox_identity("parent", "busy-child");
+    let inbox = harness.backend.wait_agent_messages(child, 0).await;
+    assert_eq!(
+        inbox
+            .messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["next task"]
     );
 
     spawn.abort();

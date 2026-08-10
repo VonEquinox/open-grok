@@ -641,13 +641,20 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             team_scope_id: identity.team_scope_id.clone(),
             agent_id: target.clone(),
         };
+        // Delivery preference: a blocked `wait_agent` waiter first. Then
+        // steering messages are pushed into the recipient session live (a
+        // running turn consumes them at an interjection boundary; an idle
+        // session starts an agent-message turn) and only queue when the
+        // recipient cannot receive yet — passive mail that nobody polls is
+        // how urgent peer messages rot unread. Follow-up tasks are passive
+        // by design and always queue for `wait_agent`.
         let status = if let Some(waiter) = self.mailbox_waiters.remove(&key) {
             let _ = waiter.respond_to.send(WaitAgentMessagesOutput {
                 messages: vec![message.clone()],
                 timed_out: false,
             });
             AgentMessageDeliveryStatus::Delivered
-        } else if message.kind.wakes_recipient() {
+        } else if message.kind.steers_recipient() {
             let delivered = if target == identity.team_scope_id {
                 self.runner.deliver_root_followup(&target, &message)
             } else {
@@ -657,11 +664,13 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             };
             if delivered {
                 AgentMessageDeliveryStatus::Delivered
-            } else if self.pending.contains_key(&target) {
+            } else if target == identity.team_scope_id || self.pending.contains_key(&target) {
                 self.enqueue_agent_message(key, message.clone())?;
                 AgentMessageDeliveryStatus::Queued
             } else {
-                return Err(format!("Agent '{target}' is not available for a follow-up"));
+                return Err(format!(
+                    "Agent '{target}' is not currently able to receive messages"
+                ));
             }
         } else {
             self.enqueue_agent_message(key, message.clone())?;
@@ -674,6 +683,39 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             target_agent_id: target,
             status,
         })
+    }
+
+    /// Steering mail accepted while the recipient was still pending is
+    /// delivered to the live session as soon as its control exists,
+    /// preserving FIFO order among steering messages. Follow-up tasks (and
+    /// anything the control refuses) stay queued for `wait_agent`.
+    fn flush_mailbox_to_started_child(&mut self, key: &MailboxKey) {
+        let Some(mailbox) = self.mailboxes.remove(key) else {
+            return;
+        };
+        let Some(child) = self.active.get(&key.agent_id) else {
+            self.mailboxes.insert(key.clone(), mailbox);
+            return;
+        };
+        let mut retained = VecDeque::new();
+        let mut steering_live = true;
+        for message in mailbox {
+            if steering_live
+                && message.kind.steers_recipient()
+                && child.control.deliver_followup(&message)
+            {
+                continue;
+            }
+            if message.kind.steers_recipient() {
+                // The control refused a live delivery; keep later steering
+                // mail queued behind it so FIFO order survives a retry.
+                steering_live = false;
+            }
+            retained.push_back(message);
+        }
+        if !retained.is_empty() {
+            self.mailboxes.insert(key.clone(), retained);
+        }
     }
 
     fn enqueue_agent_message(
@@ -753,6 +795,10 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     let _ = respond_to.send(false);
                     return;
                 }
+                let mailbox_key = MailboxKey {
+                    team_scope_id: pending.request.parent_session_id.clone(),
+                    agent_id: subagent_id.clone(),
+                };
                 self.active.insert(
                     subagent_id,
                     ActiveChild {
@@ -774,6 +820,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                     },
                 );
                 let _ = respond_to.send(true);
+                self.flush_mailbox_to_started_child(&mailbox_key);
             }
             InternalEvent::ResumeSource {
                 source_id,

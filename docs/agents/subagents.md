@@ -241,10 +241,17 @@ the root). This is intentionally separate from task polling's
 `parent_session_id` binding.
 
 - `list_agents` returns the root plus pending, active, and retained completed children.
-- `send_message` appends to the recipient's bounded FIFO inbox without starting a turn.
-- `wait_agent` drains only the caller's inbox and supports a capped blocking wait.
-- `followup_task` delivers through a live `SessionHandle`: active turns consume
-  it at an interjection boundary; an idle root starts a synthetic agent-message turn.
+- `send_message` is the steering channel: it delivers through a live
+  `SessionHandle` — a running turn consumes it at an interjection boundary; an
+  idle recipient starts a synthetic agent-message turn. It queues only when the
+  recipient cannot receive yet (still pending, or the root session is
+  unreachable); a pending child's queued steering mail is flushed live, in FIFO
+  order, the moment the child starts.
+- `followup_task` is the passive queue: it appends to the recipient's bounded
+  FIFO inbox without interrupting its current work; the recipient drains it
+  with `wait_agent` at a stopping point.
+- `wait_agent` drains only the caller's inbox and supports a capped blocking
+  wait; a blocked waiter takes precedence over live delivery for both kinds.
 
 Finished children reject new mail and must be continued through `resume_from`,
 which creates a new child ID. Every accepted message emits a persisted
