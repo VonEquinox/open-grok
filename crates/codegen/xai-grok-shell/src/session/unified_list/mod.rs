@@ -954,31 +954,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_list_req_honors_client_kind_only_with_local_workspace_feature() {
+    fn parse_list_req_preserves_client_kind_when_process_chat_mode_is_disabled() {
         let raw = r#"{"_meta":{"x.ai/facetFilters":{"kind":["build"],"starred":[true]}}}"#;
         let _on =
             xai_grok_test_support::EnvGuard::set(crate::agent::chat_modes::GROK_CHAT_MODE_ENV, "1");
         let req = parse_list_req(raw).expect("parse");
         let parsed = ParsedMeta::parse(req.meta.as_ref());
-        let expected_build = if cfg!(feature = "local-workspace") {
-            Some(&vec![serde_json::json!("build")])
-        } else {
-            Some(&vec![serde_json::json!("chat")])
-        };
-        // When feature off, force_kind_chat rewrites to chat; when on, honors build.
-        if cfg!(feature = "local-workspace") {
-            assert_eq!(
-                parsed.facet_filters.get(KIND_FACET_KEY),
-                expected_build,
-                "client kind=build under process chat mode"
-            );
-        } else {
-            assert_eq!(
-                parsed.facet_filters.get(KIND_FACET_KEY),
-                Some(&vec![serde_json::json!("chat")]),
-                "without local-workspace, kind is forced to chat"
-            );
-        }
+        assert_eq!(
+            parsed.facet_filters.get(KIND_FACET_KEY),
+            Some(&vec![serde_json::json!("build")]),
+            "Open Grok hard-disables process chat mode, so client kind filters remain untouched"
+        );
         assert_eq!(
             parsed.facet_filters.get("starred"),
             Some(&vec![serde_json::json!(true)]),

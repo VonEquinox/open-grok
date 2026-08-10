@@ -5090,6 +5090,10 @@ impl ModelEntry {
     /// provider's trusted endpoint; explicit per-model BYOK remains valid for
     /// custom endpoints.
     pub fn has_usable_provider_credentials(&self) -> bool {
+        self.has_usable_provider_credentials_at(&crate::util::grok_home::grok_home())
+    }
+
+    fn has_usable_provider_credentials_at(&self, grok_home: &std::path::Path) -> bool {
         if self.has_own_credentials() {
             return true;
         }
@@ -5098,17 +5102,11 @@ impl ModelEntry {
         }
         if self.info.provider.is_kimi() {
             return crate::kimi_models::endpoint_for_base_url(&self.info.base_url)
-                .and_then(|endpoint| {
-                    crate::auth::read_kimi_api_key(&crate::util::grok_home::grok_home(), endpoint)
-                })
+                .and_then(|endpoint| crate::auth::read_kimi_api_key(grok_home, endpoint))
                 .is_some();
         }
         trusted_built_in_session_endpoint(self.info.provider, &self.info.base_url)
-            && crate::auth::read_provider_api_key(
-                &crate::util::grok_home::grok_home(),
-                self.info.provider,
-            )
-            .is_some()
+            && crate::auth::read_provider_api_key(grok_home, self.info.provider).is_some()
     }
 }
 impl std::ops::Deref for ModelEntry {
@@ -5563,6 +5561,14 @@ pub(crate) fn first_own_credential(
 /// Priority: model api_key/env_key > cached auth-provider token > session
 /// token > XAI_API_KEY.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
+    resolve_credentials_at_home(model, session_key, &crate::util::grok_home::grok_home())
+}
+
+fn resolve_credentials_at_home(
+    model: &ModelEntry,
+    session_key: Option<&str>,
+    grok_home: &std::path::Path,
+) -> ResolvedCredentials {
     let info = model.info();
     let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
         (
@@ -5586,20 +5592,11 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
         match info.provider.profile().session_auth {
             xai_grok_sampling_types::BuiltInSessionAuthKind::ApiKeyOnly => {
                 let stored = if info.provider.is_kimi() {
-                    crate::kimi_models::endpoint_for_base_url(&info.base_url).and_then(|endpoint| {
-                        crate::auth::read_kimi_api_key(
-                            &crate::util::grok_home::grok_home(),
-                            endpoint,
-                        )
-                    })
+                    crate::kimi_models::endpoint_for_base_url(&info.base_url)
+                        .and_then(|endpoint| crate::auth::read_kimi_api_key(grok_home, endpoint))
                 } else {
                     trusted_built_in_session_endpoint(info.provider, &info.base_url)
-                        .then(|| {
-                            crate::auth::read_provider_api_key(
-                                &crate::util::grok_home::grok_home(),
-                                info.provider,
-                            )
-                        })
+                        .then(|| crate::auth::read_provider_api_key(grok_home, info.provider))
                         .flatten()
                 };
                 if stored.is_none()
@@ -7521,7 +7518,6 @@ reasoning_effort = "low"
         use crate::auth::store_provider_api_key;
 
         let home = tempfile::tempdir().expect("temp OPENGROK_HOME");
-        let _env = EnvGuard::set("OPENGROK_HOME", home.path());
         store_provider_api_key(home.path(), ModelProvider::Meta, "meta-stored-secret")
             .expect("store Meta key");
         store_provider_api_key(home.path(), ModelProvider::Wafer, "wafer-stored-secret")
@@ -7537,14 +7533,18 @@ reasoning_effort = "low"
         meta.info.provider = ModelProvider::Meta;
         meta.info.api_backend = ApiBackend::Responses;
         meta.env_key = Some(EnvKeys::single(crate::meta_models::META_API_KEY_ENV));
-        let meta_creds = resolve_credentials(&meta, None);
+        let meta_creds = resolve_credentials_at_home(&meta, None, home.path());
         assert_eq!(meta_creds.api_key.as_deref(), Some("meta-stored-secret"));
-        assert!(meta.has_usable_provider_credentials());
+        assert!(meta.has_usable_provider_credentials_at(home.path()));
 
         let mut meta_proxy = meta.clone();
         meta_proxy.info.base_url = "https://proxy.example/v1".to_owned();
-        assert!(resolve_credentials(&meta_proxy, None).api_key.is_none());
-        assert!(!meta_proxy.has_usable_provider_credentials());
+        assert!(
+            resolve_credentials_at_home(&meta_proxy, None, home.path())
+                .api_key
+                .is_none()
+        );
+        assert!(!meta_proxy.has_usable_provider_credentials_at(home.path()));
 
         let mut wafer = test_model_entry(
             "wafer:example",
@@ -7555,14 +7555,18 @@ reasoning_effort = "low"
         );
         wafer.info.provider = ModelProvider::Wafer;
         wafer.env_key = Some(EnvKeys::single(crate::wafer_models::WAFER_API_KEY_ENV));
-        let wafer_creds = resolve_credentials(&wafer, None);
+        let wafer_creds = resolve_credentials_at_home(&wafer, None, home.path());
         assert_eq!(wafer_creds.api_key.as_deref(), Some("wafer-stored-secret"));
-        assert!(wafer.has_usable_provider_credentials());
+        assert!(wafer.has_usable_provider_credentials_at(home.path()));
 
         let mut wafer_proxy = wafer.clone();
         wafer_proxy.info.base_url = "https://proxy.example/v1".to_owned();
-        assert!(resolve_credentials(&wafer_proxy, None).api_key.is_none());
-        assert!(!wafer_proxy.has_usable_provider_credentials());
+        assert!(
+            resolve_credentials_at_home(&wafer_proxy, None, home.path())
+                .api_key
+                .is_none()
+        );
+        assert!(!wafer_proxy.has_usable_provider_credentials_at(home.path()));
     }
 
     #[test]
