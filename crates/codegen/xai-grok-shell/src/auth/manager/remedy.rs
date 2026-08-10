@@ -122,6 +122,27 @@ impl AuthManager {
             (true, false) => AuthRemedy::ManualLogin,
         }
     }
+
+    /// Remedy after a server 401 that recovery could not heal.
+    ///
+    /// Upstream's live-state [`Self::auth_remedy`] keeps wire-valid external
+    /// credentials on [`AuthRemedy::SelfHealing`] until a headless provider run
+    /// records a verdict — correct for startup silent-refresh and the
+    /// early-invalidation buffer. Open Grok's first-party session-token gate
+    /// can skip that remint on custom/loopback endpoints, so a terminal 401
+    /// would otherwise tell the user to wait. Once the server has rejected the
+    /// request, an interactive external provider is the way back; first-party
+    /// OIDC transient refresh stays on SelfHealing.
+    pub(crate) fn auth_remedy_after_server_rejection(&self) -> AuthRemedy {
+        match self.auth_remedy() {
+            AuthRemedy::SelfHealing if self.is_external_provider_refresh_authority() => {
+                AuthRemedy::ProviderLogin {
+                    label: self.grok_com_config().auth_provider_label.clone(),
+                }
+            }
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -197,6 +218,46 @@ mod tests {
             AuthRemedy::ProviderLogin {
                 label: Some("Acme SSO".to_owned())
             }
+        );
+    }
+
+    /// Terminal 401 classification must not inherit startup SelfHealing for a
+    /// still-wire-valid external credential — that is what told users to wait
+    /// when Open Grok's first-party gate skipped the headless remint.
+    #[test]
+    fn server_rejection_escalates_wire_valid_external_to_provider_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = provider_manager(
+            dir.path(),
+            external_credential(Utc::now() + Duration::hours(1)),
+        );
+        assert_eq!(manager.auth_remedy(), AuthRemedy::SelfHealing);
+        assert_eq!(
+            manager.auth_remedy_after_server_rejection(),
+            AuthRemedy::ProviderLogin {
+                label: Some("Acme SSO".to_owned())
+            }
+        );
+    }
+
+    /// First-party OIDC transient refresh must keep the retry copy after a 401.
+    #[test]
+    fn server_rejection_keeps_oidc_self_healing() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = provider_manager(
+            dir.path(),
+            GrokAuth {
+                key: "oidc".into(),
+                auth_mode: AuthMode::Oidc,
+                refresh_token: Some("rt-live".into()),
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+                ..GrokAuth::test_default()
+            },
+        );
+        assert_eq!(manager.auth_remedy(), AuthRemedy::SelfHealing);
+        assert_eq!(
+            manager.auth_remedy_after_server_rejection(),
+            AuthRemedy::SelfHealing
         );
     }
 

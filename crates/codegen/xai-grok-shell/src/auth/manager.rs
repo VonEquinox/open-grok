@@ -2225,7 +2225,9 @@ impl AuthManager {
         !(mem_refreshable || disk_refreshable)
     }
 
-    fn is_external_provider_refresh_authority(&self) -> bool {
+    /// `true` when the live credential is minted by the operator's
+    /// `auth_provider_command` binary (not an xAI OIDC session).
+    pub(crate) fn is_external_provider_refresh_authority(&self) -> bool {
         self.grok_com_config.auth_provider_command.is_some()
             && self.token_type() == TokenType::ExternalBinary
     }

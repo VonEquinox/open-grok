@@ -1308,7 +1308,9 @@ impl SessionActor {
         const STATUS: Option<u16> = Some(401);
         let (error_type, message) = match self.auth_manager.as_ref() {
             Some(auth_manager) => self.apply_auth_remedy(
-                &auth_manager.auth_remedy().after_retries_exhausted(),
+                &auth_manager
+                    .auth_remedy_after_server_rejection()
+                    .after_retries_exhausted(),
                 message,
                 STATUS,
             ),
@@ -1528,7 +1530,19 @@ impl SessionActor {
                         .map(|config| (config.model.as_str(), config.base_url.as_str()))
                         .unwrap_or_default();
                     let gate = self.auth_gate(model_id, base_url);
-                    let eligible = gate.active();
+                    // Open Grok requires a first-party host for xAI session
+                    // tokens (fork hardening vs upstream). Operator
+                    // `auth_provider_command` credentials are not those
+                    // tokens: skip only the endpoint arm so a rejected
+                    // external session can still remint on custom/loopback
+                    // deployments without reopening the OIDC leak path.
+                    let external_provider_remint = gate.is_session_based
+                        && gate.model_byok != crate::agent::auth_method::ModelByok::Byok
+                        && self
+                            .auth_manager
+                            .as_ref()
+                            .is_some_and(|am| am.is_external_provider_refresh_authority());
+                    let eligible = gate.active() || external_provider_remint;
                     self.log_auth_gate_unknown("handle_sampling_failure", gate, base_url);
                     if !eligible && auth_provider.is_none() {
                         tracing::warn!(
@@ -1803,7 +1817,7 @@ impl SessionActor {
         };
         let (error_type, detailed_message) = match self.auth_manager.as_ref() {
             Some(auth_manager) if error_type == "auth" => self.apply_auth_remedy(
-                &auth_manager.auth_remedy(),
+                &auth_manager.auth_remedy_after_server_rejection(),
                 detailed_message,
                 error.status_code,
             ),
