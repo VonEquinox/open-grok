@@ -1460,14 +1460,15 @@ async fn maybe_inject_interrupt_reminder_injects_once() {
 /// `PromptOrigin::User` call site in `handle_prompt` and the relative ordering.
 /// Synchronizes on the persist-ack (fires after both items are pushed, before
 /// the model call), then aborts the turn so the dead-URL model call can't hang.
-#[tokio::test(flavor = "current_thread")]
-async fn handle_prompt_injects_interrupt_reminder_before_user_message() {
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
+#[test]
+fn handle_prompt_injects_interrupt_reminder_before_user_message() {
+    run_on_session_sized_stack(|| {
+        Box::pin(async {
             let actor = actor_with_persistence_drain().await;
             actor.events.set_pending_interrupt_reminder();
-            let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new("follow-up after interrupt".to_string()))];
+            let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(
+                "follow-up after interrupt".to_string(),
+            ))];
             let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
             let actor_for_prompt = actor.clone();
             let prompt_task = tokio::task::spawn_local(async move {
@@ -1492,7 +1493,8 @@ async fn handle_prompt_injects_interrupt_reminder_before_user_message() {
             let user_idx = conv
                 .iter()
                 .position(|item| {
-                    matches!(item, ConversationItem::User(u) if u.synthetic_reason.is_none()) && item.text_content().contains("follow-up after interrupt")
+                    matches!(item, ConversationItem::User(u) if u.synthetic_reason.is_none())
+                        && item.text_content().contains("follow-up after interrupt")
                 })
                 .expect("the user message must be in the conversation");
             assert!(
@@ -1514,7 +1516,7 @@ async fn handle_prompt_injects_interrupt_reminder_before_user_message() {
             assert!(!actor.events.take_pending_interrupt_reminder());
             prompt_task.abort();
         })
-        .await;
+    });
 }
 /// Integration: a synthetic-origin turn (here `scheduler-fired-*`) driven
 /// between the abort and the user's resend must NOT consume the one-shot or
