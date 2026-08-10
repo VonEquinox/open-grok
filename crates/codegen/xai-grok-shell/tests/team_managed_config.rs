@@ -2,6 +2,10 @@
 //! deployment-config endpoint. Proxy-side resolution is unit-tested in
 //! the cli-chat-proxy deployment-config route.
 //!
+//! Dark (unsigned) path only: [`test_home`] forces an empty embedded-key
+//! override so prod's compiled-in `v1` pubkey does not reject unsigned mocks.
+//! Keyed verify-active coverage is in `signed_managed_config`.
+//!
 //! Every test here MUST be `#[serial]`: they share one process-global
 //! `OPENGROK_HOME` (the `grok_home` `OnceLock` allows a single value per process)
 //! and mutate that directory + process env, so concurrent tests would race.
@@ -23,10 +27,28 @@ fn team_identity(id: &str) -> ServingIdentity {
 /// Shared temp dir used as OPENGROK_HOME for the whole test binary (the grok_home
 /// `OnceLock` only allows one value per process). Also scrubs/installs the env
 /// this suite depends on, before any test thread reads it.
+///
+/// This binary covers the *dark* (unsigned) managed-config path. The keyed /
+/// verify-active path lives in `signed_managed_config`. Prod embeds the `v1`
+/// pubkey, so without forcing an empty key set here every unsigned mock body
+/// would hit `ApplyOutcome::SignatureRejected` and write nothing (`Ok(false)`).
 fn test_home() -> &'static PathBuf {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
-        let path = tempfile::TempDir::new().unwrap().keep();
+        // Honor a harness-provided isolated home: `grok_home()` may already
+        // have cached it before this test binary's first test runs.
+        let path = std::env::var_os("OPENGROK_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| tempfile::TempDir::new().unwrap().keep());
+        std::fs::create_dir_all(&path).unwrap();
+        // Darken verification for this process: empty override beats the
+        // compiled-in prod key. Restoring compiled-in keys is intentional only
+        // in the signed suite (`install_test_key`).
+        xai_grok_config::signed_policy::test_seam::set_embedded_keys(&[]);
+        debug_assert!(
+            !xai_grok_config::signed_policy::verification_active(),
+            "team_managed_config must run with verification dark"
+        );
         // SAFETY: set once at init before other threads read the vars.
         unsafe {
             std::env::set_var("OPENGROK_HOME", &path);
