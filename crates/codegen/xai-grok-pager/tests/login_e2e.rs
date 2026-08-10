@@ -75,7 +75,8 @@ fn login_provider_completion_filters_by_provider_aliases() {
             "query {query:?} should match at least one provider"
         );
         assert_eq!(
-            snapshot.matches[0].insert_text, expected,
+            snapshot.matches[0].insert_text,
+            expected,
             "query {query:?} should rank {expected:?} first, got {:?}",
             snapshot
                 .matches
