@@ -7,6 +7,12 @@
 # rustflags are not additive. we have differing flags per arch,
 # so we must repeat flags in each target section
 
+[build]
+# Use Cargo's machine-aware default (one job per logical CPU) even if a
+# developer has a lower global Cargo job cap. This keeps checks short without
+# hard-coding this Mac's core count into the shared repository.
+jobs = "default"
+
 [target.x86_64-apple-darwin]
 rustflags = [
     "-C",

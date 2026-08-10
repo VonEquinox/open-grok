@@ -180,7 +180,10 @@ After any non-xAI profile that denies xAI services, the session export boundary 
 ### 5.3 After coding
 
 ```sh
-# Focused checks (prefer package-scoped)
+# Default compile validation: package-scoped and non-linking
+cargo check --locked -p <crate>
+
+# Focused lint/tests when the change requires them
 cargo fmt --all -- --check
 cargo clippy --locked -p <crate> --all-targets
 cargo test --locked -p <crate> -- <filter>
@@ -192,6 +195,8 @@ cargo test --locked -p <crate> -- <filter>
 See [`docs/agents/development.md`](docs/agents/development.md) for full build/test/release commands.
 
 Interpret failures before broadening the patch: the Rust workspace has long compile/link phases and some suites share global state. Re-run a failing test alone to distinguish a deterministic regression from suite interference, but do not hide repeatable failures. Run `bash -n` on changed shell scripts. Use an isolated `OPENGROK_HOME` for tests and installer smokes.
+
+Routine editor and agent validation must default to package-scoped `cargo check`, not `cargo build`, `cargo test`, or workspace-wide checks. Cargo is configured to use its machine-aware logical-CPU default; do not add a fixed `-j` cap unless diagnosing resource contention. Run explicit builds/tests only when their linked artifacts or behavior are needed.
 
 ### 5.4 History-backed completion contracts
 

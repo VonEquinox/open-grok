@@ -1,0 +1,10 @@
+{
+  "rust-analyzer.checkOnSave": true,
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.check.extraArgs": [
+    "--locked"
+  ],
+  "rust-analyzer.check.workspace": false,
+  "rust-analyzer.check.allTargets": false,
+  "rust-analyzer.cargo.allTargets": false
+}
