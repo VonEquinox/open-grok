@@ -124,11 +124,21 @@ impl Drop for BootstrappingGuard {
 
 static CLAIM_LOG: HealAwareLogCounter = HealAwareLogCounter::new(4);
 
+/// Test-only pause after the gate snaps `marker_at_start` and before the first
+/// claim attempt, so a peer can finish and release in between. Keyed by root
+/// so parallel tests do not steal each other's hook.
+#[cfg(test)]
+static TEST_PAUSE_AFTER_MARKER_SNAPSHOT: std::sync::Mutex<
+    Option<(PathBuf, tokio::sync::oneshot::Receiver<()>)>,
+> = std::sync::Mutex::new(None);
+
 /// Run [`reindex_all`] at most once at a time across concurrent grok
-/// processes. A launch's first claim always reindexes, even when a completed
-/// marker exists; waiters adopt any completed marker, stale ones included
-/// (the claimant refreshes the index either way), and give up after the
-/// bounded wait.
+/// processes. A launch's first claim reindexes when the completed marker is
+/// unchanged since gate entry (including a pre-existing stale marker the
+/// launch owes a refresh for); if a peer wrote or replaced the marker while
+/// this gate was delayed before claiming, the launch adopts it. Waiters
+/// adopt any completed marker, stale ones included (the claimant refreshes
+/// the index either way), and give up after the bounded wait.
 pub(super) async fn bootstrap_with_lease(
     root_dir: &Path,
     storage: &dyn StorageAdapter,
@@ -176,6 +186,26 @@ async fn bootstrap_with_lease_inner(
     let db_path = search_db_path(root_dir);
     let token = ClaimToken::new();
     let started = Instant::now();
+    // Snapshot for the launch first-claim path: a peer may finish and release
+    // before this process's first `spawn_blocking` claim runs, so `peer_seen`
+    // never latches. A marker that appears or changes after this snapshot is
+    // that peer's completion, not the stale marker a launch owes a refresh.
+    let marker_at_start = read_bootstrap_marker(root_dir).await.unwrap_or(None);
+    #[cfg(test)]
+    {
+        let rx = {
+            let mut slot = TEST_PAUSE_AFTER_MARKER_SNAPSHOT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match slot.as_ref() {
+                Some((path, _)) if path == root_dir => slot.take().map(|(_, rx)| rx),
+                _ => None,
+            }
+        };
+        if let Some(rx) = rx {
+            let _ = rx.await;
+        }
+    }
     let peer_wait = match role {
         BootstrapRole::Launch => timing.peer_wait,
         BootstrapRole::Recheck => Duration::ZERO,
@@ -183,7 +213,8 @@ async fn bootstrap_with_lease_inner(
     let deadline = started + peer_wait;
     let mut peer_seen = false;
     loop {
-        // Skipped on the first iteration so a launch always reindexes.
+        // Skipped on the first iteration so a launch can refresh a marker
+        // that was already complete when this gate entered.
         if peer_seen && has_completed_bootstrap_marker(root_dir).await == Some(true) {
             tracing::info!(
                 waited_ms = started.elapsed().as_millis() as u64,
@@ -193,9 +224,10 @@ async fn bootstrap_with_lease_inner(
         }
 
         if claim_bootstrap_lease(&db_path, &token, timing.lease).await? {
-            // Only a launch's first claim ignores an existing marker (the
-            // launch owes pruning and skipped retries); everyone else
-            // adopts any completed marker.
+            // A launch's first claim refreshes an unchanged pre-existing
+            // marker (pruning / skipped retries). Everyone else adopts any
+            // completed marker. If the marker appeared or changed since gate
+            // entry, a peer already finished the refresh we raced for.
             let first_launch_claim = role != BootstrapRole::Recheck && !peer_seen;
             if !first_launch_claim && has_completed_bootstrap_marker(root_dir).await == Some(true) {
                 release_bootstrap_claim(&db_path, &token).await;
@@ -204,6 +236,18 @@ async fn bootstrap_with_lease_inner(
                     "adopted a peer's completed session search bootstrap"
                 );
                 return Ok(BootstrapOutcome::Done);
+            }
+            if first_launch_claim {
+                if let Some(Some(current)) = read_bootstrap_marker(root_dir).await {
+                    if Some(&current) != marker_at_start.as_ref() {
+                        release_bootstrap_claim(&db_path, &token).await;
+                        tracing::info!(
+                            waited_ms = started.elapsed().as_millis() as u64,
+                            "adopted a peer's completed session search bootstrap"
+                        );
+                        return Ok(BootstrapOutcome::Done);
+                    }
+                }
             }
             tracing::info!(
                 token = %token,
@@ -348,14 +392,18 @@ async fn release_bootstrap_claim(db_path: &Path, token: &ClaimToken) {
 /// needed), `None` transient read failure, which must not be mistaken for
 /// absence.
 pub(super) async fn has_completed_bootstrap_marker(root_dir: &Path) -> Option<bool> {
+    read_bootstrap_marker(root_dir)
+        .await
+        .map(|marker| marker.is_some())
+}
+
+/// `Some(None)` absent, `Some(Some(value))` present, `None` transient read
+/// failure.
+async fn read_bootstrap_marker(root_dir: &Path) -> Option<Option<String>> {
     let db_path = search_db_path(root_dir);
-    with_search_index_blocking(&db_path, |index| {
-        index
-            .get_meta(META_KEY_LAST_BOOTSTRAP)
-            .map(|marker| marker.is_some())
-    })
-    .await
-    .ok()
+    with_search_index_blocking(&db_path, |index| index.get_meta(META_KEY_LAST_BOOTSTRAP))
+        .await
+        .ok()
 }
 
 /// Preserves read failures so "absent" and "could not read" stay distinct.

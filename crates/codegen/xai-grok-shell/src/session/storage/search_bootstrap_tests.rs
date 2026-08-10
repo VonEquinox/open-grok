@@ -314,3 +314,85 @@ async fn test_concurrent_gates_single_flight() {
         progress_b.total.load(Ordering::Relaxed),
     );
 }
+
+/// Peer finished and released after this launch snapped an empty marker but
+/// before its first claim ran (`spawn_blocking` delay). Without adopting the
+/// new marker, the late first claim would reindex again as a "fresh" launch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_launch_adopts_marker_written_before_first_claim() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let storage = JsonlStorageAdapter::with_root(root.clone());
+    let info = Info {
+        id: acp::SessionId::new("s1"),
+        cwd: "/ws".to_string(),
+    };
+    storage
+        .init_session(&info, acp::ModelId::new("test"))
+        .await
+        .unwrap();
+    with_search_index(&search_db_path(&root), |_| Ok(())).unwrap();
+
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    *super::TEST_PAUSE_AFTER_MARKER_SNAPSHOT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some((root.clone(), release_rx));
+
+    let progress = Arc::new(BootstrapProgress::default());
+    let late_root = root.clone();
+    let late_storage = storage.clone();
+    let late_progress = Arc::clone(&progress);
+    let late = tokio::spawn(async move {
+        bootstrap_with_lease_inner(
+            &late_root,
+            &late_storage,
+            &late_progress,
+            &TEST_TIMING,
+            BootstrapRole::Launch,
+        )
+        .await
+    });
+
+    // Wait until the late gate has snapped the empty marker and parked.
+    for _ in 0..100 {
+        if super::TEST_PAUSE_AFTER_MARKER_SNAPSHOT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        super::TEST_PAUSE_AFTER_MARKER_SNAPSHOT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none(),
+        "late gate never reached the post-snapshot pause"
+    );
+
+    bootstrap_with_lease_inner(
+        &root,
+        &storage,
+        &Arc::new(BootstrapProgress::default()),
+        &TEST_TIMING,
+        BootstrapRole::Launch,
+    )
+    .await
+    .unwrap();
+    assert!(
+        has_completed_bootstrap_marker(&root).await == Some(true),
+        "peer must leave a completion marker before the late claim"
+    );
+
+    release_tx.send(()).expect("late gate still waiting");
+    let late = late.await.expect("late task panicked");
+    assert!(late.is_ok(), "late gate: {late:?}");
+    assert_eq!(
+        progress.total.load(Ordering::Relaxed),
+        0,
+        "late first claim must adopt the peer marker, not reindex"
+    );
+    assert!(!has_bootstrap_claim(&search_db_path(&root)).unwrap());
+}
