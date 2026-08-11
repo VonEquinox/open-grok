@@ -57,6 +57,9 @@ pub struct SwarmBlock {
     pub description: String,
     pub expected_members: u32,
     pub members: Vec<SwarmMember>,
+    /// Parent `agent_swarm` tool returned early after a mid-run steer; members
+    /// may still be running and can be rejoined via `swarm_wait`.
+    pub detached: bool,
 }
 
 impl SwarmBlock {
@@ -86,7 +89,12 @@ impl SwarmBlock {
             description: description.into(),
             expected_members,
             members,
+            detached: false,
         }
+    }
+
+    pub fn mark_detached(&mut self) {
+        self.detached = true;
     }
 
     fn member_mut(&mut self, index: u32) -> &mut SwarmMember {
@@ -255,6 +263,7 @@ impl BlockContent for SwarmBlock {
         let identity = swarm_identity_style(&theme, ctx.is_selected);
         let muted = theme.muted();
         let (completed, failed, cancelled, running, waiting, queued) = self.counts();
+        let detached_prefix = if self.detached { "detached · " } else { "" };
         let header = Line::from(vec![
             Span::styled("Swarm", identity),
             Span::styled(
@@ -263,8 +272,8 @@ impl BlockContent for SwarmBlock {
             ),
             Span::styled(
                 format!(
-                    "{} — {completed} done · {failed} failed · {cancelled} cancelled · {running} running · {waiting} waiting · {queued} queued",
-                    truncate_str(&self.description, ctx.width.saturating_sub(72) as usize)
+                    "{detached_prefix}{} — {completed} done · {failed} failed · {cancelled} cancelled · {running} running · {waiting} waiting · {queued} queued",
+                    truncate_str(&self.description, ctx.width.saturating_sub(80) as usize)
                 ),
                 muted,
             ),
@@ -437,5 +446,42 @@ mod tests {
             "Retrying after rate limit · attempt 1".into(),
         );
         assert_eq!(swarm.members[0].status, SwarmMemberStatus::Running);
+    }
+
+    #[test]
+    fn mark_detached_sets_flag() {
+        let mut swarm = SwarmBlock::new("s", "review", Some(1));
+        assert!(!swarm.detached);
+        swarm.mark_detached();
+        assert!(swarm.detached);
+    }
+
+    #[test]
+    fn detached_header_prefix_appears_in_collapsed_output() {
+        let mut swarm = SwarmBlock::new("s", "review", Some(1));
+        swarm.mark_detached();
+        let output = swarm.output(&BlockContext {
+            mode: DisplayMode::Collapsed,
+            is_running: false,
+            width: 120,
+            raw: false,
+            max_lines: None,
+            appearance: AppearanceConfig::default(),
+            is_selected: false,
+            cwd: None,
+        });
+        let header = output
+            .lines
+            .first()
+            .expect("header line")
+            .content
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(
+            header.contains("detached · "),
+            "expected detached marker in header, got {header:?}"
+        );
     }
 }

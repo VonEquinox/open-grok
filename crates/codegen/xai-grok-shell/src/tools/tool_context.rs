@@ -242,6 +242,11 @@ pub struct ToolContext {
     /// [`BlockingWaitGuard`]). `queue_input` reads it: a prompt arriving while
     /// non-zero takes the send-now path.
     pub blocking_wait_depth: Arc<BlockingWaitState>,
+    /// Fired when a user message arrives during an orchestration wait so
+    /// `agent_swarm` / `swarm_wait` can detach without cancelling members.
+    pub orchestration_steer: xai_grok_tools::implementations::grok_build::task::types::OrchestrationSteerSignal,
+    /// Detached `agent_swarm` cohorts and their finished notices.
+    pub swarm_registry: xai_grok_tools::implementations::grok_build::SwarmRegistry,
     pub task_output_token_budget: Option<TaskOutputTokenBudget>,
     pub(crate) sampler_retry_only_before_output: bool,
     /// This session's child-process reaper, set at session spawn; `None` for
@@ -329,6 +334,8 @@ impl ToolContext {
             auto_wake_enabled: true,
             goal_loop_active_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             blocking_wait_depth: Arc::new(BlockingWaitState::new()),
+            orchestration_steer: xai_grok_tools::implementations::grok_build::task::types::OrchestrationSteerSignal::new(),
+            swarm_registry: xai_grok_tools::implementations::grok_build::SwarmRegistry::new(),
             task_output_token_budget: None,
             sampler_retry_only_before_output: false,
             process_scope: None,
@@ -419,6 +426,8 @@ mod tests {
                 auto_wake_enabled: true,
                 goal_loop_active_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 blocking_wait_depth: Arc::new(BlockingWaitState::new()),
+                orchestration_steer: xai_grok_tools::implementations::grok_build::task::types::OrchestrationSteerSignal::new(),
+                swarm_registry: xai_grok_tools::implementations::grok_build::SwarmRegistry::new(),
                 task_output_token_budget: None,
                 sampler_retry_only_before_output: false,
                 process_scope: None,

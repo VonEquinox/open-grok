@@ -1279,6 +1279,67 @@ register_resource!(
     SubagentForegroundWait
 );
 
+/// Host signal that a user message arrived while an orchestration wait is held.
+///
+/// `agent_swarm` (and `swarm_wait`) select on this to detach the cohort and
+/// return control to the model without cancelling live members.
+#[derive(Clone, Default)]
+pub struct OrchestrationSteerSignal {
+    inner: Arc<OrchestrationSteerInner>,
+}
+
+#[derive(Default)]
+struct OrchestrationSteerInner {
+    notify: tokio::sync::Notify,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl OrchestrationSteerSignal {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Generation observed before waiting; a later [`Self::fire`] advances it.
+    pub fn generation(&self) -> u64 {
+        self.inner
+            .generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Wake every parked orchestration wait so the cohort can detach.
+    pub fn fire(&self) {
+        self.inner
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.notify.notify_waiters();
+    }
+
+    /// Resolve once [`Self::fire`] advances the generation past `seen`.
+    pub async fn wait_after(&self, seen: u64) {
+        loop {
+            let notified = self.inner.notify.notified();
+            if self.generation() > seen {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl std::fmt::Debug for OrchestrationSteerSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrchestrationSteerSignal")
+            .field("generation", &self.generation())
+            .finish()
+    }
+}
+
+register_resource!(
+    "grok_build",
+    "OrchestrationSteerSignal",
+    OrchestrationSteerSignal
+);
+
 /// Carries the current parent prompt/turn ID for TaskTool subagent scoping.
 ///
 /// Set by xai-grok-shell immediately before a prompt turn begins executing so

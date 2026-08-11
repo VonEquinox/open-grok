@@ -408,6 +408,7 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
 
                         let had_activity_before = agent.session.tracker.activity().is_some();
                         let update = notif.request.update;
+                        maybe_mark_swarm_detached(agent, &update);
                         let user_echo = matches!(update, acp::SessionUpdate::UserMessageChunk(_));
                         agent
                             .session
@@ -796,6 +797,54 @@ fn handle_interjection(notif: &acp::ExtNotification, app: &mut AppView) -> bool 
         .scrollback
         .push_block(RenderBlock::interjection_prompt(text));
     is_active
+}
+
+/// When `agent_swarm` returns a detached result, mark the matching SwarmBlock
+/// so the header shows the cohort is still running in the background.
+fn maybe_mark_swarm_detached(agent: &mut AgentView, update: &acp::SessionUpdate) {
+    let acp::SessionUpdate::ToolCallUpdate(tcu) = update else {
+        return;
+    };
+    if !matches!(
+        tcu.fields.status,
+        Some(acp::ToolCallStatus::Completed) | Some(acp::ToolCallStatus::Failed)
+    ) {
+        return;
+    }
+    let content_is_detached = tcu.fields.content.as_ref().is_some_and(|blocks| {
+        blocks.iter().any(|block| match block {
+            acp::ToolCallContent::Content(acp::Content {
+                content: acp::ContentBlock::Text(text),
+                ..
+            }) => text.text.contains("state=\"detached\""),
+            _ => false,
+        })
+    });
+    let raw_is_detached = tcu.fields.raw_output.as_ref().is_some_and(|raw| {
+        raw.as_str()
+            .is_some_and(|text| text.contains("state=\"detached\""))
+            || raw
+                .get("text")
+                .and_then(|v| v.as_str())
+                .is_some_and(|text| text.contains("state=\"detached\""))
+            || raw
+                .get("output_for_prompt")
+                .and_then(|v| v.as_str())
+                .is_some_and(|text| text.contains("state=\"detached\""))
+    });
+    if !content_is_detached && !raw_is_detached {
+        return;
+    }
+    let swarm_id = tcu.tool_call_id.0.as_ref();
+    let Some(entry_id) = agent.swarm_blocks.get(swarm_id).copied() else {
+        return;
+    };
+    if let Some(entry) = agent.scrollback.get_by_id_mut(entry_id)
+        && let RenderBlock::Swarm(block) = &mut entry.block
+    {
+        block.mark_detached();
+        entry.invalidate_cache();
+    }
 }
 
 /// Handle an ACP `ext_method` request (blocking request that expects a response).

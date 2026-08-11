@@ -1,4 +1,14 @@
 //! Foreground, ramped parallel subagent orchestration.
+//!
+//! A user message during the orchestration wait detaches the cohort: the
+//! scheduler keeps running in the background, the tool returns a partial
+//! `<agent_swarm_result state="detached">`, and [`SwarmWaitTool`] rejoins it.
+
+mod registry;
+mod wait;
+
+pub use registry::{SwarmFinishedNotice, SwarmRegistry};
+pub use wait::{SwarmWaitTool, SwarmWaitToolInput};
 
 use std::{
     collections::{HashSet, VecDeque},
@@ -18,10 +28,11 @@ use crate::{
         backend::{SubagentBackend, SubagentBackendResource},
         types::{
             CurrentPromptIdResource, ForegroundWaitKind, ModelOverrideProvenance,
-            SWARM_RATE_LIMIT_RETRY_BASE_MS, SessionIdResource, SubagentDepthCounter,
-            SubagentForegroundWait, SubagentRateLimitDecision, SubagentRequest, SubagentResult,
-            SubagentRuntimeOverrides, SubagentStatusEvent, SubagentValidateTypeOutcome,
-            SwarmMemberMeta, TaskModelValidator, swarm_rate_limit_backoff,
+            OrchestrationSteerSignal, SWARM_RATE_LIMIT_RETRY_BASE_MS, SessionIdResource,
+            SubagentDepthCounter, SubagentForegroundWait, SubagentRateLimitDecision,
+            SubagentRequest, SubagentResult, SubagentRuntimeOverrides, SubagentStatusEvent,
+            SubagentValidateTypeOutcome, SwarmMemberMeta, TaskModelValidator,
+            swarm_rate_limit_backoff,
         },
     },
     types::{
@@ -30,6 +41,8 @@ use crate::{
         tool::{ToolKind, ToolNamespace},
     },
 };
+
+use registry::{DetachedSwarm, SharedMemberSlots};
 
 const MAX_MEMBERS: usize = 128;
 const INITIAL_LAUNCHES: usize = 5;
@@ -42,7 +55,7 @@ const RATE_LIMIT_RECOVERY_QUIET_PERIOD: Duration = Duration::from_secs(3 * 60);
 pub struct AgentSwarmTool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MemberMode {
+pub(crate) enum MemberMode {
     New,
     Resume,
 }
@@ -57,14 +70,14 @@ struct PlannedMember {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MemberOutcome {
+pub(crate) enum MemberOutcome {
     Completed,
     Failed,
     Aborted,
 }
 
 impl MemberOutcome {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -74,13 +87,13 @@ impl MemberOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MemberResult {
-    index: u32,
-    item: Option<String>,
-    agent_id: String,
-    outcome: MemberOutcome,
-    mode: MemberMode,
-    body: String,
+pub(crate) struct MemberResult {
+    pub(crate) index: u32,
+    pub(crate) item: Option<String>,
+    pub(crate) agent_id: String,
+    pub(crate) outcome: MemberOutcome,
+    pub(crate) mode: MemberMode,
+    pub(crate) body: String,
 }
 
 #[derive(Debug, Clone)]
@@ -228,9 +241,11 @@ impl crate::types::tool_metadata::ToolMetadata for AgentSwarmTool {
             "of re-running the swarm on a different model. Pass reasoning_effort to select one ",
             "canonical effort for every new or resumed member. ",
             "Results return together in input slot order as agent_swarm_result XML with resume ",
-            "hints for unfinished members. agent_swarm must be the only tool call in the model ",
-            "response. Keep the tree flat: swarm members cannot launch further task or ",
-            "agent_swarm tools."
+            "hints for unfinished members. A user message during the swarm detaches the cohort: ",
+            "members keep running, this tool returns a partial agent_swarm_result with ",
+            "state=\"detached\", and you may call swarm_wait later to collect the full result. ",
+            "agent_swarm must be the only tool call in the model response. Keep the tree flat: ",
+            "swarm members cannot launch further task or agent_swarm tools."
         )
     }
 
@@ -286,7 +301,16 @@ impl xai_tool_runtime::Tool for AgentSwarmTool {
         let timeout =
             subagent_timeout_from_env().map_err(xai_tool_runtime::ToolError::invalid_arguments)?;
         let resources = crate::types::tool_metadata::shared_resources(&ctx)?;
-        let (depth, backend, model_validator, parent_session_id, parent_prompt_id, foreground_wait) = {
+        let (
+            depth,
+            backend,
+            model_validator,
+            parent_session_id,
+            parent_prompt_id,
+            foreground_wait,
+            steer,
+            registry,
+        ) = {
             let res = resources.lock().await;
             (
                 res.get::<SubagentDepthCounter>().map(|d| d.0).unwrap_or(0),
@@ -306,6 +330,8 @@ impl xai_tool_runtime::Tool for AgentSwarmTool {
                     .map(|p| p.0.clone())
                     .filter(|id| !id.is_empty()),
                 res.get::<SubagentForegroundWait>().cloned(),
+                res.get::<OrchestrationSteerSignal>().cloned(),
+                res.get::<SwarmRegistry>().cloned().unwrap_or_default(),
             )
         };
         if depth >= MAX_SUBAGENT_DEPTH {
@@ -374,40 +400,155 @@ impl xai_tool_runtime::Tool for AgentSwarmTool {
             }
         }
 
-        // Orchestration, not interruptible: a prompt arriving mid-swarm must not
-        // abort this turn, because every member is cancelled with it.
+        // Orchestration wait: a prompt arriving mid-swarm must not abort the
+        // turn (that would cancel every member). Instead the host fires
+        // OrchestrationSteerSignal and we detach the cohort below.
         let _foreground_wait =
             foreground_wait.map(|wait| wait.enter_kind(ForegroundWaitKind::Orchestration));
         let swarm_cancellation = CancellationToken::new();
-        let cancellation_forwarder = tool_cancellation.map(|tool_cancellation| {
+        let cancellation_forwarder = tool_cancellation.as_ref().map(|tool_cancellation| {
             let swarm_cancellation = swarm_cancellation.clone();
+            let tool_cancellation = tool_cancellation.clone();
             tokio::spawn(async move {
                 tool_cancellation.cancelled().await;
                 swarm_cancellation.cancel();
             })
         });
-        let results = run_scheduler(
-            backend.0.clone(),
-            members,
-            SwarmRequestContext {
-                swarm_id: ctx.call_id.to_string(),
-                description: input.description,
-                subagent_type: input.subagent_type,
-                parent_session_id,
-                parent_prompt_id,
-                model: member_model,
-                reasoning_effort,
-                cancellation: swarm_cancellation,
-            },
-            concurrency_cap,
-            timeout,
-        )
-        .await;
+        let swarm_id = ctx.call_id.to_string();
+        let description = input.description.clone();
+        let expected_members = members.len() as u32;
+        let slots = SharedMemberSlots::new(members.len());
+        let context = SwarmRequestContext {
+            swarm_id: swarm_id.clone(),
+            description: description.clone(),
+            subagent_type: input.subagent_type,
+            parent_session_id: parent_session_id.clone(),
+            parent_prompt_id,
+            model: member_model,
+            reasoning_effort,
+            cancellation: swarm_cancellation.clone(),
+        };
+        let scheduler_slots = Arc::clone(&slots);
+        let mut scheduler = tokio::spawn(async move {
+            run_scheduler(
+                backend.0.clone(),
+                members,
+                context,
+                concurrency_cap,
+                timeout,
+                scheduler_slots,
+            )
+            .await
+        });
+        let steer_seen = steer.as_ref().map(|signal| signal.generation()).unwrap_or(0);
+        let outcome = tokio::select! {
+            biased;
+            results = &mut scheduler => {
+                match results {
+                    Ok(results) => SwarmToolOutcome::Completed(results),
+                    Err(join_error) => {
+                        if let Some(forwarder) = cancellation_forwarder {
+                            forwarder.abort();
+                        }
+                        return Err(xai_tool_runtime::ToolError::custom(
+                            "scheduler_panic",
+                            format!("agent_swarm scheduler task failed: {join_error}"),
+                        ));
+                    }
+                }
+            }
+            _ = async {
+                if let Some(signal) = steer.as_ref() {
+                    signal.wait_after(steer_seen).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                SwarmToolOutcome::Detached
+            }
+            _ = async {
+                if let Some(token) = tool_cancellation.as_ref() {
+                    token.cancelled().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                swarm_cancellation.cancel();
+                let _ = scheduler.await;
+                if let Some(forwarder) = cancellation_forwarder {
+                    forwarder.abort();
+                }
+                return Err(xai_tool_runtime::ToolError::custom(
+                    "cancelled",
+                    "agent_swarm was cancelled",
+                ));
+            }
+        };
         if let Some(forwarder) = cancellation_forwarder {
             forwarder.abort();
         }
-        Ok(ToolOutput::Text(render_xml(&results).into()))
+        match outcome {
+            SwarmToolOutcome::Completed(results) => {
+                Ok(ToolOutput::Text(render_xml(&results).into()))
+            }
+            SwarmToolOutcome::Detached => {
+                let done = Arc::new(tokio::sync::Notify::new());
+                let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let detached = registry.insert(DetachedSwarm {
+                    swarm_id: swarm_id.clone(),
+                    description: description.clone(),
+                    parent_session_id: parent_session_id.clone(),
+                    expected_members,
+                    slots: Arc::clone(&slots),
+                    done: Arc::clone(&done),
+                    finished: Arc::clone(&finished),
+                    cancellation: swarm_cancellation,
+                });
+                let registry_for_finish = registry.clone();
+                tokio::spawn(async move {
+                    let results = match scheduler.await {
+                        Ok(results) => results,
+                        Err(error) => {
+                            tracing::warn!(
+                                swarm_id = %detached.swarm_id,
+                                error = %error,
+                                "detached agent_swarm scheduler task failed"
+                            );
+                            detached.mark_finished();
+                            return;
+                        }
+                    };
+                    // Ensure every slot is populated even if a race lost a write.
+                    for result in results {
+                        detached.slots.store(result);
+                    }
+                    let snapshot = detached.slots.snapshot();
+                    let (completed, failed, aborted) = count_outcomes(&snapshot);
+                    registry_for_finish.push_notice(registry::SwarmFinishedNotice {
+                        swarm_id: detached.swarm_id.clone(),
+                        description: detached.description.clone(),
+                        parent_session_id: detached.parent_session_id.clone(),
+                        completed,
+                        failed,
+                        aborted,
+                    });
+                    detached.mark_finished();
+                });
+                let xml = render_detached_xml(
+                    &swarm_id,
+                    &description,
+                    expected_members,
+                    &slots.snapshot(),
+                );
+                Ok(ToolOutput::Text(xml.into()))
+            }
+        }
     }
+}
+
+enum SwarmToolOutcome {
+    Completed(Vec<MemberResult>),
+    Detached,
 }
 
 #[derive(Clone)]
@@ -551,9 +692,9 @@ async fn run_scheduler(
     context: SwarmRequestContext,
     concurrency_cap: Option<usize>,
     timeout: Option<Duration>,
+    shared_slots: Arc<SharedMemberSlots>,
 ) -> Vec<MemberResult> {
     let expected = members.len() as u32;
-    let mut slots = vec![None; members.len()];
     let mut next = 0usize;
     let mut active = FuturesUnordered::new();
     let mut waiting = HashSet::new();
@@ -610,7 +751,11 @@ async fn run_scheduler(
                         attempt,
                         decision_tx,
                     } => {
-                        let unfinished = slots.iter().filter(|slot| slot.is_none()).count();
+                        let unfinished = shared_slots
+                            .snapshot()
+                            .iter()
+                            .filter(|slot| slot.is_none())
+                            .count();
                         if unfinished <= 1 {
                             let _ = decision_tx.send(SubagentRateLimitDecision::Fail);
                             continue;
@@ -633,7 +778,7 @@ async fn run_scheduler(
             Some((scheduled_agent_id, result)) = active.next(), if !active.is_empty() => {
                 waiting.remove(&scheduled_agent_id);
                 pending_retries.retain(|retry| retry.subagent_id != scheduled_agent_id);
-                store_result(&mut slots, result);
+                shared_slots.store(result);
             }
             _ = tokio::time::sleep_until(recovery_sleep_until), if recovery_deadline.is_some() => {
                 capacity.recover_if_due(tokio::time::Instant::now());
@@ -679,15 +824,9 @@ async fn run_scheduler(
             }
         }
     }
-    slots
-        .into_iter()
-        .map(|slot| slot.expect("every scheduled swarm member has a result"))
-        .collect()
-}
-
-fn store_result(slots: &mut [Option<MemberResult>], result: MemberResult) {
-    let index = result.index as usize;
-    slots[index] = Some(result);
+    shared_slots
+        .take_complete()
+        .expect("every scheduled swarm member has a result")
 }
 
 fn initial_launch_count(total: usize, concurrency_cap: Option<usize>) -> usize {
@@ -853,7 +992,22 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn render_xml(results: &[MemberResult]) -> String {
+fn count_outcomes(slots: &[Option<MemberResult>]) -> (usize, usize, usize) {
+    let mut completed = 0;
+    let mut failed = 0;
+    let mut aborted = 0;
+    for slot in slots {
+        match slot.as_ref().map(|result| result.outcome) {
+            Some(MemberOutcome::Completed) => completed += 1,
+            Some(MemberOutcome::Failed) => failed += 1,
+            Some(MemberOutcome::Aborted) => aborted += 1,
+            None => {}
+        }
+    }
+    (completed, failed, aborted)
+}
+
+pub(crate) fn render_xml(results: &[MemberResult]) -> String {
     let completed = results
         .iter()
         .filter(|result| result.outcome == MemberOutcome::Completed)
@@ -878,27 +1032,59 @@ fn render_xml(results: &[MemberResult]) -> String {
         );
     }
     for result in results {
-        xml.push_str("<subagent");
-        xml.push_str(&format!(" agent_id=\"{}\"", xml_escape(&result.agent_id)));
-        if let Some(item) = result.item.as_deref() {
-            xml.push_str(&format!(" item=\"{}\"", xml_escape(item)));
-        }
-        // Only members submitted to the backend can produce a rendered
-        // result. Cancellation before scheduling drops the whole tool future,
-        // so the stable output state for every result is `started`.
-        xml.push_str(&format!(
-            " outcome=\"{}\" state=\"started\"",
-            result.outcome.as_str(),
-        ));
-        if result.mode == MemberMode::Resume {
-            xml.push_str(" mode=\"resume\"");
-        }
-        xml.push('>');
-        xml.push_str(&xml_escape(&result.body));
-        xml.push_str("</subagent>");
+        append_member_xml(&mut xml, result, "started");
     }
     xml.push_str("</agent_swarm_result>");
     xml
+}
+
+/// Partial XML returned when the cohort was detached by a mid-swarm steer.
+pub(crate) fn render_detached_xml(
+    swarm_id: &str,
+    description: &str,
+    expected_members: u32,
+    slots: &[Option<MemberResult>],
+) -> String {
+    let (completed, failed, aborted) = count_outcomes(slots);
+    let running = slots.iter().filter(|slot| slot.is_none()).count();
+    let mut xml = format!(
+        "<agent_swarm_result state=\"detached\" swarm_id=\"{}\" description=\"{}\">\
+         <summary>completed={completed} failed={failed} aborted={aborted} running={running} expected={expected_members}</summary>\
+         <detach_hint>Members keep running. Call swarm_wait with swarm_id=\"{}\" to collect the full result, or keep working and wait later.</detach_hint>",
+        xml_escape(swarm_id),
+        xml_escape(description),
+        xml_escape(swarm_id),
+    );
+    for (index, slot) in slots.iter().enumerate() {
+        match slot {
+            Some(result) => append_member_xml(&mut xml, result, "started"),
+            None => {
+                xml.push_str(&format!(
+                    "<subagent index=\"{index}\" outcome=\"running\" state=\"running\"></subagent>"
+                ));
+            }
+        }
+    }
+    xml.push_str("</agent_swarm_result>");
+    xml
+}
+
+fn append_member_xml(xml: &mut String, result: &MemberResult, state: &str) {
+    xml.push_str("<subagent");
+    xml.push_str(&format!(" agent_id=\"{}\"", xml_escape(&result.agent_id)));
+    if let Some(item) = result.item.as_deref() {
+        xml.push_str(&format!(" item=\"{}\"", xml_escape(item)));
+    }
+    xml.push_str(&format!(
+        " outcome=\"{}\" state=\"{state}\"",
+        result.outcome.as_str(),
+    ));
+    if result.mode == MemberMode::Resume {
+        xml.push_str(" mode=\"resume\"");
+    }
+    xml.push('>');
+    xml.push_str(&xml_escape(&result.body));
+    xml.push_str("</subagent>");
 }
 
 #[cfg(test)]
@@ -909,9 +1095,10 @@ mod tests {
 
     use super::*;
     use crate::implementations::grok_build::task::types::{
-        SubagentCancelOutcome, SubagentDescribeOutcome, SubagentOwner, SubagentSnapshot,
+        OrchestrationSteerSignal, SubagentCancelOutcome, SubagentDescribeOutcome, SubagentOwner,
+        SubagentSnapshot,
     };
-    use crate::types::{resources::Resources, tool_metadata::test_ctx};
+    use crate::types::{output::ToolOutput, resources::Resources, tool_metadata::test_ctx};
 
     fn input(
         items: Option<Vec<&str>>,
@@ -1354,6 +1541,68 @@ mod tests {
         }
     }
 
+    /// Like [`HoldingBackend`], but keeps the oneshot senders so tests can
+    /// complete members after a detach handoff.
+    #[derive(Default)]
+    struct ControllableBackend {
+        requests: Mutex<Vec<SubagentRequest>>,
+        senders: Mutex<Vec<oneshot::Sender<SubagentResult>>>,
+    }
+
+    impl ControllableBackend {
+        fn release_all(&self) {
+            let senders = std::mem::take(&mut *self.senders.lock().unwrap());
+            for (index, sender) in senders.into_iter().enumerate() {
+                let id = self
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .get(index)
+                    .map(|request| request.id.clone())
+                    .unwrap_or_else(|| format!("member-{index}"));
+                let _ = sender.send(SubagentResult {
+                    success: true,
+                    subagent_id: id.clone(),
+                    child_session_id: id,
+                    output: Arc::from("ok"),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SubagentBackend for ControllableBackend {
+        async fn spawn(
+            &self,
+            request: SubagentRequest,
+        ) -> Result<SubagentResult, xai_tool_runtime::ToolError> {
+            let (sender, receiver) = oneshot::channel();
+            self.requests.lock().unwrap().push(request);
+            self.senders.lock().unwrap().push(sender);
+            receiver
+                .await
+                .map_err(|_| xai_tool_runtime::ToolError::custom("cancelled", "member cancelled"))
+        }
+        async fn query(&self, _: &str, _: bool, _: Option<u64>) -> Option<SubagentSnapshot> {
+            None
+        }
+        async fn cancel(&self, _: &str) -> SubagentCancelOutcome {
+            SubagentCancelOutcome::NotFound
+        }
+        async fn validate_type(&self, _: &str, _: &str) -> SubagentValidateTypeOutcome {
+            SubagentValidateTypeOutcome::Ok
+        }
+        async fn describe_subagent_type(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+        ) -> SubagentDescribeOutcome {
+            SubagentDescribeOutcome::Unavailable
+        }
+    }
+
     struct RateLimitBackend {
         rate_limited_indices: HashSet<u32>,
         requests: Mutex<Vec<(u32, String)>>,
@@ -1461,6 +1710,10 @@ mod tests {
             .collect()
     }
 
+    fn slots_for(count: usize) -> Arc<SharedMemberSlots> {
+        SharedMemberSlots::new(count)
+    }
+
     #[tokio::test(start_paused = true)]
     async fn scheduler_initial_burst_and_sixth_launch_are_ramped() {
         let backend = Arc::new(ImmediateBackend::default());
@@ -1470,6 +1723,7 @@ mod tests {
             context(),
             None,
             None,
+            slots_for(6),
         ));
         tokio::task::yield_now().await;
         assert_eq!(backend.requests.lock().unwrap().len(), 5);
@@ -1491,6 +1745,7 @@ mod tests {
             context(),
             Some(2),
             None,
+            slots_for(7),
         ));
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(10)).await;
@@ -1508,6 +1763,7 @@ mod tests {
             context(),
             None,
             None,
+            slots_for(6),
         ));
         tokio::task::yield_now().await;
         assert_eq!(backend.requests.lock().unwrap().len(), 5);
@@ -1549,6 +1805,7 @@ mod tests {
             context(),
             None,
             None,
+            slots_for(6),
         ));
         tokio::task::yield_now().await;
 
@@ -1570,7 +1827,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn scheduler_fails_the_only_unfinished_rate_limited_member() {
         let backend = Arc::new(RateLimitBackend::new([0]));
-        let results = run_scheduler(backend.clone(), item_members(1), context(), None, None).await;
+        let results = run_scheduler(
+            backend.clone(),
+            item_members(1),
+            context(),
+            None,
+            None,
+            slots_for(1),
+        )
+        .await;
         let request_id = backend.requests.lock().unwrap()[0].1.clone();
         assert_eq!(
             backend.decisions.lock().unwrap().as_slice(),
@@ -1589,6 +1854,7 @@ mod tests {
             context(),
             None,
             None,
+            slots_for(6),
         ));
         tokio::task::yield_now().await;
         tokio::time::advance(RAMP_INTERVAL).await;
@@ -1596,5 +1862,115 @@ mod tests {
         let results = task.await.unwrap();
         assert_eq!(backend.requests.lock().unwrap().len(), 6);
         assert_eq!(results.len(), 6);
+    }
+
+    #[test]
+    fn detached_xml_marks_running_slots_and_names_swarm_wait() {
+        let xml = render_detached_xml(
+            "call-1",
+            "review",
+            2,
+            &[
+                Some(MemberResult {
+                    index: 0,
+                    item: Some("a".into()),
+                    agent_id: "done".into(),
+                    outcome: MemberOutcome::Completed,
+                    mode: MemberMode::New,
+                    body: "ok".into(),
+                }),
+                None,
+            ],
+        );
+        assert!(xml.contains("state=\"detached\""));
+        assert!(xml.contains("swarm_id=\"call-1\""));
+        assert!(xml.contains("running=1"));
+        assert!(xml.contains("swarm_wait"));
+        assert!(xml.contains("outcome=\"running\" state=\"running\""));
+        assert!(xml.contains("agent_id=\"done\""));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn detach_leaves_holding_members_alive_and_swarm_wait_collects() {
+        let backend = Arc::new(ControllableBackend::default());
+        let mut resources = Resources::new();
+        let registry = SwarmRegistry::new();
+        let steer = OrchestrationSteerSignal::new();
+        resources.insert(SubagentBackendResource(backend.clone()));
+        resources.insert(SessionIdResource("parent".to_string()));
+        resources.insert(registry.clone());
+        resources.insert(steer.clone());
+        resources.insert(TaskModelValidator::new(|_| None));
+
+        let run = tokio::spawn(async move {
+            xai_tool_runtime::Tool::run(
+                &AgentSwarmTool,
+                test_ctx(resources.into_shared()),
+                input(Some(vec!["a", "b"]), None, Some("do {{item}}")),
+            )
+            .await
+        });
+
+        // Wait until both members are held in-flight, then steer to detach.
+        for _ in 0..40 {
+            if backend.requests.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+            tokio::time::advance(RAMP_INTERVAL).await;
+        }
+        assert_eq!(
+            backend.requests.lock().unwrap().len(),
+            2,
+            "both swarm members must be running before detach"
+        );
+
+        // Re-fire until the tool call returns: a single fire can race ahead of
+        // the tool's steer_seen snapshot and leave wait_after parked forever.
+        let mut output = None;
+        for _ in 0..40 {
+            steer.fire();
+            tokio::task::yield_now().await;
+            if run.is_finished() {
+                output = Some(run.await.unwrap().expect("detach must succeed"));
+                break;
+            }
+        }
+        let output = output.expect("agent_swarm should detach after steer");
+        let ToolOutput::Text(text) = output else {
+            panic!("expected text output");
+        };
+        assert!(
+            text.text.contains("state=\"detached\""),
+            "detached XML missing: {}",
+            text.text
+        );
+        assert!(text.text.contains("swarm_wait"));
+        assert!(
+            text.text.contains("outcome=\"running\""),
+            "detached XML should mark unfinished members running: {}",
+            text.text
+        );
+
+        let swarm = registry
+            .resolve(None, "parent")
+            .expect("detached swarm remains registered until collected");
+        assert!(
+            !swarm.is_finished(),
+            "members are still held; scheduler must not finish on detach alone"
+        );
+
+        // Release held members; the detached scheduler should finish and fill slots.
+        backend.release_all();
+        for _ in 0..40 {
+            if swarm.is_finished() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(swarm.is_finished(), "scheduler should finish after members complete");
+        let results = swarm.slots.take_complete().expect("complete slots");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.outcome == MemberOutcome::Completed));
     }
 }

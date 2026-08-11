@@ -1566,6 +1566,38 @@ impl SessionActor {
             "injected mid-turn monitor events as hidden synthetic user message"
         );
     }
+
+    /// Surface finished detached swarms as a compact mid-turn system reminder.
+    pub(crate) async fn drain_detached_swarm_completions(&self) {
+        let notices = self
+            .tool_context
+            .swarm_registry
+            .drain_notices(self.session_info.id.0.as_ref());
+        if notices.is_empty() {
+            return;
+        }
+        let mut body = String::from(
+            "Detached agent_swarm cohort(s) finished. Call swarm_wait to collect full results:\n",
+        );
+        for notice in &notices {
+            body.push_str(&format!(
+                "- swarm_id={} description=\"{}\" completed={} failed={} aborted={}\n",
+                notice.swarm_id,
+                notice.description,
+                notice.completed,
+                notice.failed,
+                notice.aborted,
+            ));
+        }
+        let wrapped = xai_grok_tools::reminders::wrap_reminder(&body);
+        self.chat_state_handle
+            .push_user_message(ConversationItem::system_reminder(wrapped));
+        tracing::info!(
+            session_id = %self.session_info.id.0,
+            count = notices.len(),
+            "injected detached swarm completion reminder"
+        );
+    }
     /// Per-turn hook called from the event-loop completion handler
     /// after every turn finishes. Two terminal branches when the
     /// goal is `Active` (`goal_active_now == true`):
@@ -2424,6 +2456,7 @@ impl SessionActor {
             self.drain_pending_interjections().await;
             self.flush_pending_skill_reminders().await;
             self.inject_pending_monitor_events().await;
+            self.drain_detached_swarm_completions().await;
             let memory_reminder = self.first_turn_memory_reminder().await;
             if memory_reminder.is_some() {
                 self.memory

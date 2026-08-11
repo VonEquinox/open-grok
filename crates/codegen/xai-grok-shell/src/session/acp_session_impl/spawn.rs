@@ -1267,6 +1267,8 @@ pub(crate) async fn spawn_session_actor(
             .clone()
             .unwrap_or_else(|| session_info.id.0.to_string()),
         blocking_wait_depth: tool_context.blocking_wait_depth.clone(),
+        orchestration_steer: tool_context.orchestration_steer.clone(),
+        swarm_registry: tool_context.swarm_registry.clone(),
         respect_gitignore,
         path_not_found_hints,
         scheduler_background_loops,

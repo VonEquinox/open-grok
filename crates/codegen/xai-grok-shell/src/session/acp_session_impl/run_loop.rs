@@ -1985,6 +1985,14 @@ pub(super) async fn run_session(
                                     text,
                                     attachments: images,
                                 });
+                                if session
+                                    .tool_context
+                                    .blocking_wait_depth
+                                    .orchestration_depth()
+                                    > 0
+                                {
+                                    session.tool_context.orchestration_steer.fire();
+                                }
                                 tracing::info!("Queued mid-turn interjection");
                             } else {
                                 session

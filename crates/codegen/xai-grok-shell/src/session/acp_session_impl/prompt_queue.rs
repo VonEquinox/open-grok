@@ -266,9 +266,8 @@ impl SessionActor {
             == Some(crate::session::goal_tracker::GoalStatus::Active);
         let blocked_in_wait = self.tool_context.blocking_wait_depth.depth() > 0;
         // An `agent_swarm` cohort is parked here. Aborting the turn cancels
-        // every live member, so the prompt is promoted to run next but the turn
-        // is left alone — the same promote-without-cancel shape goal turns use.
-        // Mid-run feedback to the orchestrator goes through `x.ai/interject`.
+        // every live member, so a user message merges as a mid-turn
+        // interjection and steers the orchestrator to detach instead.
         let orchestrating = self.tool_context.blocking_wait_depth.orchestration_depth() > 0;
         let held_user_queue = state.pending_inputs.iter().any(|queued| {
             !queued.origin.is_synthetic()
@@ -279,16 +278,23 @@ impl SessionActor {
         let front_awaiting_commit_now = Self::front_awaiting_commit(&state);
         let cancel_running_turn =
             send_now && Self::send_now_cancels_running_turn(&state, goal_active, orchestrating);
-        let merge_into_goal = send_now
-            && turn_running
-            && goal_active
-            && Self::extract_bash_command(&item.prompt_blocks).is_none();
-        if merge_into_goal {
-            self.enqueue_prompt_as_planner_steering(&item);
+        let merge_as_interjection = turn_running
+            && !item.origin.is_synthetic()
+            && (orchestrating
+                || (send_now
+                    && goal_active
+                    && Self::extract_bash_command(&item.prompt_blocks).is_none()));
+        if merge_as_interjection {
+            if goal_active {
+                self.enqueue_prompt_as_planner_steering(&item);
+            }
             self.enqueue_prompt_as_interjection(
                 item,
                 crate::session::events::InterjectionSource::Direct,
             );
+            if orchestrating {
+                self.tool_context.orchestration_steer.fire();
+            }
         } else if send_now {
             item.send_now = true;
             let insert_at = Self::send_now_insert_index(&state, running_front_id.as_deref());
@@ -324,8 +330,9 @@ impl SessionActor {
                     "cancels_turn": cancel_running_turn,
                     "blocked_in_wait": blocked_in_wait,
                     "goal_active": goal_active,
-                    "merged_as_interjection": merge_into_goal,
+                    "merged_as_interjection": merge_as_interjection,
                     "front_awaiting_commit": front_awaiting_commit_now,
+                    "orchestrating": orchestrating,
                 })),
             );
         }
@@ -608,7 +615,7 @@ impl SessionActor {
                 redirect_kind: crate::session::events::RedirectKind::Interjection,
             });
         Self::respond_removed_prompt(respond_to);
-        tracing::info!("goal turn: queued send-now prompt as a mid-turn interjection");
+        tracing::info!("queued user prompt as a mid-turn interjection");
     }
 
     /// Resolve a removed prompt's pending RPC with `Ok(RemovedFromQueue)` before dropping it. A
@@ -723,18 +730,25 @@ impl SessionActor {
             if let Some(new_text) = new_text.filter(|t| !t.trim().is_empty()) {
                 Self::apply_queued_prompt_edit(&mut item, new_text.to_string(), owner);
             }
-            let merge_into_goal = turn_running
-                && goal_active
-                && Self::extract_bash_command(&item.prompt_blocks).is_none();
-            if merge_into_goal {
-                self.enqueue_prompt_as_planner_steering(&item);
+            let merge_as_interjection = turn_running
+                && (orchestrating
+                    || (goal_active
+                        && Self::extract_bash_command(&item.prompt_blocks).is_none()));
+            if merge_as_interjection {
+                if goal_active {
+                    self.enqueue_prompt_as_planner_steering(&item);
+                }
                 self.enqueue_prompt_as_interjection(
                     item,
                     crate::session::events::InterjectionSource::Queue,
                 );
+                if orchestrating {
+                    self.tool_context.orchestration_steer.fire();
+                }
                 tracing::info!(
                     queued_id = %id,
-                    "send-now: queued row will steer the active goal turn"
+                    orchestrating,
+                    "send-now: queued row steers the running turn as an interjection"
                 );
             } else {
                 item.send_now = true;
@@ -751,8 +765,9 @@ impl SessionActor {
                     "from_queue_row": true,
                     "cancels_turn": cancel_running_turn,
                     "goal_active": goal_active,
-                    "merged_as_interjection": merge_into_goal,
+                    "merged_as_interjection": merge_as_interjection,
                     "front_awaiting_commit": front_awaiting_commit_now,
+                    "orchestrating": orchestrating,
                 })),
             );
         } else if let Some(new_text) = new_text

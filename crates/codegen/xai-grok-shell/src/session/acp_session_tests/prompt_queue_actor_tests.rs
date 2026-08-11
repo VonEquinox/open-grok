@@ -1439,9 +1439,8 @@ async fn queue_input_auto_send_now_during_foreground_subagent_await_window() {
 }
 
 /// An `agent_swarm` cohort parks the turn in an orchestration wait. A follow-up
-/// arriving during it must reach the orchestrator without cancelling the turn,
-/// because cancelling would kill every live member. Explicit `send_now` is
-/// promoted to run next but still must not cancel.
+/// arriving during it must merge as a mid-turn interjection and fire the steer
+/// signal without cancelling the turn (cancelling would kill every live member).
 #[tokio::test]
 async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
     let local = tokio::task::LocalSet::new();
@@ -1474,6 +1473,7 @@ async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
                 "a swarm await must not register as an interruptible wait"
             );
 
+            let steer_before = actor.tool_context.orchestration_steer.generation();
             for (prompt_id, send_now) in [("plain-followup", false), ("explicit-send-now", true)] {
                 let (respond_to, _keep) = oneshot::channel();
                 let cancel = actor
@@ -1491,6 +1491,15 @@ async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
                     "a follow-up during a swarm must not cancel the turn (prompt {prompt_id})"
                 );
             }
+            assert!(
+                actor.tool_context.orchestration_steer.generation() > steer_before,
+                "steering during a swarm must fire the orchestration steer signal"
+            );
+            assert_eq!(
+                actor.pending_interjections.drain_all().len(),
+                2,
+                "both follow-ups must merge as mid-turn interjections"
+            );
 
             drop(swarm_guard);
             assert_eq!(
@@ -1507,8 +1516,8 @@ async fn queue_input_during_agent_swarm_orchestration_wait_does_not_cancel() {
                 .collect();
             assert_eq!(
                 order,
-                vec!["running", "explicit-send-now", "plain-followup"],
-                "the swarm turn keeps the wheel; explicit send-now still runs first after it"
+                vec!["running"],
+                "steered follow-ups leave the swarm turn alone and do not queue behind it"
             );
         })
         .await;

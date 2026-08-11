@@ -18,6 +18,7 @@ use crate::implementations::codex::read_file::tool::CodexReadFileInput;
 use crate::implementations::grok_build::agent_collaboration::{
     ListAgentsInput, SendAgentMessageInput, WaitAgentInput,
 };
+use crate::implementations::grok_build::agent_swarm::SwarmWaitToolInput;
 use crate::implementations::grok_build::ask_user_question::AskUserQuestionInput;
 use crate::implementations::grok_build::enter_plan_mode::EnterPlanModeInput;
 use crate::implementations::grok_build::exit_plan_mode::ExitPlanModeInput;
@@ -78,6 +79,7 @@ pub enum ToolInput {
     KillTask(KillTaskToolInput),
     Task(TaskToolInput),
     AgentSwarm(AgentSwarmToolInput),
+    SwarmWait(SwarmWaitToolInput),
     ListAgents(ListAgentsInput),
     /// Shared by `send_message` and `followup_task`; the wire tool name
     /// distinguishes the two, and the wake semantics live in the message kind.

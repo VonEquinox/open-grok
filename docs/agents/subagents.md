@@ -96,8 +96,8 @@ Scheduling and output:
 - Rate-limit capacity starts from the number of normal members that reached their first provider request, minus one, with a minimum of one. Later 429s shrink capacity by one at most every two seconds. While rate-limited, a scheduling pass starts at most one retry/resume/new member and requires both the global launch gate and the selected member's eligibility deadline to have elapsed.
 - A provider-ready attempt resets the global retry interval to three seconds. If work remains queued and no 429 occurs for three minutes, capacity recovers by one once for that quiet window; another 429 starts a new window.
 - Each member has a two-hour default timeout (`OPENGROK_SUBAGENT_TIMEOUT_MS`; `0` disables it).
-- Members carry `SubagentOwner::Swarm` and `await_to_completion`: the swarm scheduler owns foreground timeout/aggregation, so the ordinary task foreground budget cannot silently background a member. Dropping the orchestration future cancels its live member spawns.
-- In Code Mode, `agent_swarm` remains a direct top-level tool and is excluded from `tools.*`. Its foreground call holds the model turn until aggregation finishes, so the 30-second `exec` yield cannot trigger repeated `wait` polling while members are still running.
+- Members carry `SubagentOwner::Swarm` and `await_to_completion`: the swarm scheduler owns foreground timeout/aggregation, so the ordinary task foreground budget cannot silently background a member. Cancelling the tool (or dropping its spawn receivers without a detach handoff) cancels live member spawns; a mid-run steer instead moves the scheduler into `SwarmRegistry` so members survive.
+- In Code Mode, `agent_swarm` and `swarm_wait` remain direct top-level tools and are excluded from `tools.*`. A foreground call holds the model turn until aggregation finishes or a steer detaches the cohort, so the 30-second `exec` yield cannot trigger repeated `wait` polling while members are still running.
 - Results are collected into fixed input-order slots and returned under `<agent_swarm_result>`, including resumable agent IDs for unfinished work.
 - Swarm metadata rides on ordinary `SubagentSpawned` / progress / finish notifications, so coordinator lifecycle, usage fold-back, permissions, resume identity, and worktree handling remain the normal subagent paths.
 
@@ -110,16 +110,17 @@ host counts the two kinds separately in `BlockingWaitState`:
 
 - A foreground `task` holds an **interruptible** wait. A prompt arriving during
   it takes the send-now path and cancels the turn, so the new prompt runs next.
-- `agent_swarm` holds an **orchestration** wait. `queue_input` promotes an
-  explicit send-now to run next but never returns `cancel_running_turn`, because
-  aborting the turn drops the swarm future and `CancelResultReceiverOnDrop`
-  cancels every live member.
+- `agent_swarm` (and `swarm_wait`) hold an **orchestration** wait. A user
+  message during that wait merges as a mid-turn interjection and fires
+  `OrchestrationSteerSignal`. The tool detaches: members keep running under
+  `SwarmRegistry`, the tool returns a partial `<agent_swarm_result
+  state="detached">`, and the model can keep working on the same turn. Call
+  `swarm_wait` later to rejoin and collect the full XML. Aborting the turn is
+  still refused, because that would cancel every live member via
+  `CancelResultReceiverOnDrop`.
 
-So a follow-up typed during a swarm queues behind the running turn instead of
-discarding in-flight member work. To reach the orchestrator *during* the run,
-use the interjection path (`x.ai/interject`): it is consumed at the next model
-boundary and never cancels. `workflow` needs no special case — its tool call
-returns immediately and holds no wait.
+So steering during a swarm does not discard in-flight member work. `workflow`
+needs no special case — its tool call returns immediately and holds no wait.
 
 ## SubagentCoordinator lifecycle
 
