@@ -363,6 +363,8 @@ pub struct PagerLocalSnapshot {
     pub fireworks_api_key_status: SecretStatus,
     /// Status-only mirror for the direct DeepSeek API-key source.
     pub deepseek_api_key_status: SecretStatus,
+    /// Status-only mirror for the Meta Model API-key source.
+    pub meta_api_key_status: SecretStatus,
     pub opencode_go_api_key_status: SecretStatus,
     /// Status-only mirror for the Wafer AI API-key source.
     pub wafer_api_key_status: SecretStatus,
@@ -443,6 +445,7 @@ impl Default for PagerLocalSnapshot {
             kimi_code_api_key_status: SecretStatus::Missing,
             fireworks_api_key_status: SecretStatus::Missing,
             deepseek_api_key_status: SecretStatus::Missing,
+            meta_api_key_status: SecretStatus::Missing,
             opencode_go_api_key_status: SecretStatus::Missing,
             wafer_api_key_status: SecretStatus::Missing,
             opencode_go_models: Vec::new(),
@@ -699,6 +702,7 @@ pub fn current_value_for(
         "combine_queued_prompts" => Some(SettingValue::Bool(
             crate::appearance::cache::load_combine_queued_prompts(),
         )),
+        "confirm_before_rewind" => Some(SettingValue::Bool(ui.confirm_before_rewind_enabled())),
         "enter_steers" => Some(SettingValue::Bool(
             crate::appearance::cache::load_enter_steers(),
         )),
@@ -846,6 +850,11 @@ pub fn current_value_for(
         "code_mode" => Some(SettingValue::Enum(
             ui.code_mode.unwrap_or_default().as_canonical(),
         )),
+        "image_generation_provider" => Some(SettingValue::Enum(
+            ui.image_generation_provider
+                .unwrap_or_default()
+                .as_canonical(),
+        )),
         // ask_user_question timeout: reflects the effective TOML merge; the
         // toggle writes the user layer, and env/remote settings tiers feed the
         // final gate at agent build. None → the resolver-shared default (ON).
@@ -886,6 +895,7 @@ pub fn current_value_for(
         "kimi_code_api_key" => Some(SettingValue::SecretStatus(pager.kimi_code_api_key_status)),
         "fireworks_api_key" => Some(SettingValue::SecretStatus(pager.fireworks_api_key_status)),
         "deepseek_api_key" => Some(SettingValue::SecretStatus(pager.deepseek_api_key_status)),
+        "meta_api_key" => Some(SettingValue::SecretStatus(pager.meta_api_key_status)),
         "opencode_go_api_key" => Some(SettingValue::SecretStatus(pager.opencode_go_api_key_status)),
         "wafer_api_key" => Some(SettingValue::SecretStatus(pager.wafer_api_key_status)),
         "toolset.perplexity_web_search.enabled" => {
@@ -932,13 +942,21 @@ pub fn current_value_for(
         // CLI batch: snapshot mirrors; `None` → effective default `true`.
         "show_tips" => Some(SettingValue::Bool(pager.show_tips.unwrap_or(true))),
         "auto_update" => Some(SettingValue::Bool(pager.auto_update.unwrap_or(true))),
-        // fork_secondary_model: baseline value folds to empty string.
+        // fork_secondary_model: baseline value folds to empty string. The
+        // mirror persists the ModelId slug but the DynamicEnum canonicals
+        // are catalog display names, so resolve via the snapshot; a stale
+        // id passes through raw.
         "fork_secondary_model" => Some(SettingValue::String({
             let baseline = xai_grok_shell::models::default_model();
             if ui.fork_secondary_model == baseline {
                 String::new()
             } else {
-                ui.fork_secondary_model.clone()
+                pager
+                    .available_models
+                    .iter()
+                    .find(|(_, id)| id.0.as_ref() == ui.fork_secondary_model.as_str())
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| ui.fork_secondary_model.clone())
             }
         })),
 
@@ -1118,6 +1136,13 @@ mod tests {
                         "page_flip_on_send default drifts from UiConfig::default()"
                     );
                 }
+                ("confirm_before_rewind", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.confirm_before_rewind_enabled(),
+                        "confirm_before_rewind default drifts from UiConfig::default()"
+                    );
+                }
                 ("combine_queued_prompts", SettingKind::Bool { default }) => {
                     assert_eq!(
                         *default,
@@ -1227,6 +1252,7 @@ mod tests {
                     | "kimi_code_api_key"
                     | "fireworks_api_key"
                     | "deepseek_api_key"
+                    | "meta_api_key"
                     | "opencode_go_api_key"
                     | "wafer_api_key"
                     | "perplexity_api_key",
@@ -1313,6 +1339,28 @@ mod tests {
                             .map(|choice| choice.canonical)
                             .collect::<Vec<_>>(),
                         vec!["direct", "code_mode", "code_mode_only"],
+                    );
+                }
+                (
+                    "image_generation_provider",
+                    SettingKind::Enum {
+                        default, choices, ..
+                    },
+                ) => {
+                    assert_eq!(
+                        *default,
+                        ui.image_generation_provider
+                            .unwrap_or_default()
+                            .as_canonical(),
+                        "image_generation_provider default drifts from UiConfig::default()",
+                    );
+                    assert_eq!(*default, "grok");
+                    assert_eq!(
+                        choices
+                            .iter()
+                            .map(|choice| choice.canonical)
+                            .collect::<Vec<_>>(),
+                        vec!["grok", "openai"],
                     );
                 }
                 // ask_user_question timeout: no UiConfig mirror (lives under
@@ -1865,6 +1913,51 @@ mod tests {
         let pager = PagerLocalSnapshot::default();
         let value = current_value_for("auto_dark_theme", &ui, &pager).expect("must resolve");
         assert_eq!(value, SettingValue::Enum("groknight"));
+    }
+
+    /// The persisted `fork_secondary_model` slug resolves to the catalog
+    /// display name (matching the `default_model` row and the DynamicEnum
+    /// picker canonicals); the baseline still folds to the empty sentinel
+    /// and a slug missing from the catalog passes through raw.
+    #[test]
+    fn fork_secondary_model_current_value_resolves_display_name() {
+        let slug = "grok-4.5-fast";
+        assert_ne!(
+            slug,
+            xai_grok_shell::models::default_model(),
+            "test slug must differ from the baseline or the empty-fold arm masks the lookup",
+        );
+        let pager = PagerLocalSnapshot {
+            available_models: vec![(
+                "Grok 4.5 Fast".to_string(),
+                acp::ModelId::new(std::sync::Arc::from(slug)),
+            )],
+            ..Default::default()
+        };
+        let ui = UiConfig {
+            fork_secondary_model: slug.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            current_value_for("fork_secondary_model", &ui, &pager),
+            Some(SettingValue::String("Grok 4.5 Fast".to_string())),
+        );
+
+        // Baseline folds to the empty "no override" sentinel.
+        assert_eq!(
+            current_value_for("fork_secondary_model", &UiConfig::default(), &pager),
+            Some(SettingValue::String(String::new())),
+        );
+
+        // Stale slug (not in the catalog) passes through unresolved.
+        let stale_ui = UiConfig {
+            fork_secondary_model: "retired-model".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            current_value_for("fork_secondary_model", &stale_ui, &pager),
+            Some(SettingValue::String("retired-model".to_string())),
+        );
     }
 
     /// Keywords must be lowercase and non-empty.

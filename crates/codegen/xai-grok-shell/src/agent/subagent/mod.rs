@@ -34,12 +34,12 @@ use tokio_util::sync::CancellationToken;
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use xai_file_utils::events::types::CancellationCategory;
 use xai_grok_agent::config::{McpInheritance, ModelOverride, PermissionMode};
+use xai_grok_sampling_types::ReasoningEffort;
 use xai_grok_sampling_types::conversation::ConversationItem;
 use xai_grok_subagent_resolution::ResumeSourceData;
 use xai_grok_tools::implementations::grok_build::monitor::types::MonitorEventBuffer;
 use xai_grok_tools::implementations::grok_build::task::coordinator::{
-    ChildCompletion, ChildControl, ChildReporter, ChildRunOutput, LocalBoxFuture, StartedChild,
-    SubagentProgress,
+    ChildCompletion, ChildControl, ChildRunOutput, LocalBoxFuture, StartedChild, SubagentProgress,
 };
 use xai_grok_tools::implementations::grok_build::task::types::*;
 use xai_grok_tools::types::tool::ToolKind;
@@ -82,7 +82,7 @@ impl AutoCompactThresholdTiers {
     /// Slice the parent's `Config` into the four tier inputs we'll resolve
     /// against later. Only fields relevant to the auto-compact threshold
     /// are captured; the parent's `Config` is not held by reference.
-    pub fn capture(cfg: &crate::agent::config::Config) -> Self {
+    pub(crate) fn capture(cfg: &crate::agent::config::Config) -> Self {
         let user_per_model = cfg
             .config_models
             .iter()
@@ -132,6 +132,7 @@ pub(crate) struct SubagentSpawnContext {
     pub subagent_event_tx: mpsc::UnboundedSender<SubagentEvent>,
     pub parent_depth: u32,
     pub subagents_max_depth: u32,
+    pub workflow_max_concurrent_agents: usize,
     /// Inference idle timeout (secs), resolved from the parent's model config at spawn-context creation time.
     pub inference_idle_timeout_secs: u64,
     /// Tier inputs for resolving `auto_compact_threshold_percent` at
@@ -195,6 +196,10 @@ pub(crate) struct SubagentSpawnContext {
     /// Whether the `ask_user_question` tool is exposed to this subagent,
     /// inherited from the parent session (see `build_subagent_spawn_context`).
     pub ask_user_question_enabled: bool,
+    /// Whether the parent session is non-interactive (headless `-p` / SDK),
+    /// copied onto the child's `StartupHints` so its ask_user_question also
+    /// returns no-operator text instead of pretending a user declined.
+    pub parent_non_interactive: bool,
     /// Parent session command channel. Carries lifecycle notifications the
     /// parent persists (`SubagentSpawned` / `SubagentFinished`) and — when
     /// goal mode is on — transient `SubagentProgress` ticks the parent
@@ -456,13 +461,17 @@ impl ChildControl for ShellChildRuntime {
         })
     }
     fn cancel(&self) {
-        let _ = self.child_handle.cmd_tx.send(SessionCommand::Cancel {
-            cancel_subagents: true,
-            kill_background_tasks: true,
-            rewind_if_pristine: false,
-            trigger: None,
-        });
-        let _ = self.child_handle.cmd_tx.send(SessionCommand::Shutdown);
+        let _ =
+            self.child_handle
+                .cmd_tx
+                .send(SessionCommand::Cancel(crate::session::CancelOptions {
+                    cancel_subagents: true,
+                    kill_background_tasks: true,
+                    ..Default::default()
+                }));
+        let _ = self.child_handle.cmd_tx.send(SessionCommand::Shutdown(
+            crate::session::ShutdownKind::Graceful,
+        ));
     }
     fn deliver_followup(
         &self,
@@ -1075,6 +1084,28 @@ fn resolve_resume_model_route(
         .flatten()
 }
 
+fn reconcile_refreshed_reasoning_effort(
+    model_id: &str,
+    preserved: Option<ReasoningEffort>,
+    launch_default: Option<ReasoningEffort>,
+    refreshed_default: Option<ReasoningEffort>,
+    accepts: impl Fn(ReasoningEffort) -> bool,
+) -> Result<Option<ReasoningEffort>, String> {
+    let refreshed_default = refreshed_default.filter(|effort| accepts(*effort));
+    let Some(preserved) = preserved else {
+        return Ok(refreshed_default);
+    };
+    if accepts(preserved) {
+        return Ok(Some(preserved));
+    }
+    if launch_default == Some(preserved) {
+        return Ok(refreshed_default);
+    }
+    Err(format!(
+        "Model '{model_id}' does not accept reasoning_effort '{preserved}'"
+    ))
+}
+
 /// Re-resolve an API-key provider child's service and credential immediately
 /// before its sampling client is built. Covers Kimi (endpoint + key) and
 /// Fireworks AI (key).
@@ -1142,9 +1173,19 @@ fn refresh_kimi_sampling_config_for_spawn(
             _ => format!("A {provider_name} API key is required before starting this subagent"),
         });
     }
-    if config.reasoning_effort.is_some() {
-        refreshed.reasoning_effort = config.reasoning_effort;
-    }
+    let launch_default =
+        crate::agent::config::find_model_by_id(&ctx.available_models, model_id.0.as_ref())
+            .and_then(|entry| entry.info().reasoning_effort);
+    refreshed.reasoning_effort = reconcile_refreshed_reasoning_effort(
+        model_id.0.as_ref(),
+        config.reasoning_effort,
+        launch_default,
+        refreshed.reasoning_effort,
+        |effort| {
+            ctx.models_manager
+                .model_accepts_reasoning_effort(model_id.0.as_ref(), effort)
+        },
+    )?;
     *config = refreshed;
     Ok(())
 }
@@ -1187,7 +1228,7 @@ fn resume_initial_context(
 fn forked_initial_context(
     mut items: Vec<xai_grok_sampling_types::conversation::ConversationItem>,
 ) -> InitialContext {
-    crate::session::storage::jsonl::fork_filter_chat(&mut items);
+    crate::sampling::fork_filter_chat(&mut items);
     if items.is_empty() {
         return InitialContext {
             source: InitialContextSource::New,
@@ -1278,7 +1319,7 @@ fn verbatim_or_normalize_fork(
         };
     }
     let mut filtered = items;
-    crate::session::storage::jsonl::fork_filter_chat(&mut filtered);
+    crate::sampling::fork_filter_chat(&mut filtered);
     if !filtered
         .iter()
         .any(|i| !matches!(i, ConversationItem::System(_)))
@@ -1388,11 +1429,11 @@ async fn bootstrap_initial_context(
             fork_filter: false,
             ..Default::default()
         };
-        return match storage.copy_session_data_sync(
-            &source_session_info,
-            child_session_info,
-            copy_options,
-        ) {
+        use crate::session::storage::StorageAdapter as _;
+        return match storage
+            .copy_session_data(&source_session_info, child_session_info, copy_options)
+            .await
+        {
             Ok(result) => {
                 let conversation = match storage.load_chat_history_from_dir(child_session_dir) {
                     Ok(items) if !items.is_empty() => items,
@@ -1499,7 +1540,11 @@ async fn bootstrap_initial_context(
             fork_filter: true,
             ..Default::default()
         };
-        return match storage.copy_session_data_sync(parent_info, child_session_info, copy_options) {
+        use crate::session::storage::StorageAdapter as _;
+        return match storage
+            .copy_session_data(parent_info, child_session_info, copy_options)
+            .await
+        {
             Ok(result) => {
                 tracing::info!(
                     subagent_id = %request.id,
@@ -2382,6 +2427,17 @@ fn inject_subagent_completed_prompt(
         });
     }
 }
+fn telemetry_owner_kind(
+    request: &SubagentRequest,
+) -> xai_grok_telemetry::events::SubagentOwnerKind {
+    if request.owner.is_workflow() {
+        xai_grok_telemetry::events::SubagentOwnerKind::Workflow
+    } else if request.from_scheduler_loop() {
+        xai_grok_telemetry::events::SubagentOwnerKind::SchedulerLoop
+    } else {
+        xai_grok_telemetry::events::SubagentOwnerKind::Task
+    }
+}
 fn failure_result(request: &SubagentRequest, error: &str) -> SubagentResult {
     SubagentResult {
         success: false,
@@ -2443,7 +2499,9 @@ async fn cancel_pending_shell_child(
     duration_ms: u64,
     gcs_ctx: &GcsUploadContext,
 ) -> SubagentResult {
-    let _ = child_cmd_tx.send(SessionCommand::Shutdown);
+    let _ = child_cmd_tx.send(SessionCommand::Shutdown(
+        crate::session::ShutdownKind::Graceful,
+    ));
     if worktree_freshly_created
         && let Some(wt_path) = worktree_path
         && let Err(e) = crate::session::worktree::remove_subagent_worktree(wt_path).await
@@ -2819,7 +2877,7 @@ pub(crate) struct SubagentSessionMetadata {
 }
 impl SubagentSessionMetadata {
     /// Current schema version.
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub(crate) const SCHEMA_VERSION: u32 = 1;
     /// Build from a `SubagentMeta` + additional runtime context.
     pub(crate) fn from_meta(
         meta: &SubagentMeta,
@@ -3213,6 +3271,55 @@ pub(crate) async fn reconcile_orphaned_subagents_with_backend(
                 );
             }
         }
+    }
+}
+#[cfg(test)]
+mod refresh_reasoning_effort_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_supported_explicit_effort_after_refresh() {
+        let effort = reconcile_refreshed_reasoning_effort(
+            "model",
+            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::Low),
+            Some(ReasoningEffort::Medium),
+            |effort| matches!(effort, ReasoningEffort::Medium | ReasoningEffort::High),
+        )
+        .unwrap();
+
+        assert_eq!(effort, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn clears_stale_inherited_default_for_unsupported_model() {
+        let effort = reconcile_refreshed_reasoning_effort(
+            "model",
+            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::High),
+            |_| false,
+        )
+        .unwrap();
+
+        assert_eq!(effort, None);
+    }
+
+    #[test]
+    fn rejects_explicit_effort_removed_by_refresh() {
+        let error = reconcile_refreshed_reasoning_effort(
+            "model",
+            Some(ReasoningEffort::Ultra),
+            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::High),
+            |effort| effort == ReasoningEffort::High,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Model 'model' does not accept reasoning_effort 'ultra'"
+        );
     }
 }
 #[cfg(test)]

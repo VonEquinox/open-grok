@@ -372,6 +372,7 @@ pub(super) fn handle_billing_fetched(
     silent: bool,
     subscription_tier: Option<String>,
     autotopup: crate::views::credit_bar::AutoTopupFetch,
+    nonce: u64,
 ) -> Vec<Effect> {
     // A background xAI request may finish after its agent has switched to a
     // Codex model. Provider-owned billing state must not leak across that
@@ -401,11 +402,22 @@ pub(super) fn handle_billing_fetched(
     }
     // Render the `/usage` summary from the now-current cached rule.
     let summary_topup = app.auto_topup.clone();
+    let tier_now = app.subscription_tier.clone();
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         // Gateway/chat-kind: do not attach Build coding credits.
         let mut topup = agent.auto_topup.clone();
         apply_auto_topup(&mut topup, &autotopup);
         agent.apply_credit_balance(balance.clone(), topup);
+        // The open usage modal renders from the mirrors updated above; only
+        // its own fetch generation may settle the loading/error flags
+        // (background refreshes carry nonce 0).
+        if let Some(state) = super::status::usage_modal_state_mut(agent)
+            && state.fetch_nonce == nonce
+        {
+            state.billing_loading = false;
+            state.billing_error = None;
+            state.ctx.subscription_tier = tier_now;
+        }
         if !silent && !agent.chat_kind {
             let msg = match &balance {
                 Some(bal) => {
@@ -424,12 +436,26 @@ pub(super) fn handle_billing_fetched(
 /// Apply the xAI half of a manual `/usage` result with the exact same cache,
 /// polling, subscription, and agent propagation behavior as background
 /// billing, then render both independently fetched providers in one block.
+///
+/// When the usage modal is open (full TUI), the result fills the modal instead
+/// of scrollback. Codex-only fetches (`include_xai: false`, used when xAI
+/// billing is hidden) never call into xAI billing state updates.
 pub(super) fn handle_usage_fetched(
     app: &mut AppView,
     agent_id: AgentId,
     xai: Result<crate::app::actions::XaiUsageSnapshot, String>,
     codex: Result<xai_grok_shell::codex_auth::CodexUsageSnapshot, String>,
 ) -> Vec<Effect> {
+    let modal_open = app.agents.get(&agent_id).is_some_and(|agent| {
+        matches!(
+            agent.active_modal,
+            Some(crate::views::modal::ActiveModal::UsageInfo { .. })
+        )
+    });
+    // Codex-only modal fetches must not repopulate xAI access/billing UI
+    // state from a synthetic "usage unavailable" xAI Err half.
+    let apply_xai_billing = app.usage_visible && app.uses_xai_access_controls();
+
     let xai_summary = match xai {
         Ok(crate::app::actions::XaiUsageSnapshot {
             balance,
@@ -440,8 +466,16 @@ pub(super) fn handle_usage_fetched(
             // Manual combined usage always renders the xAI half. When Codex
             // owns the active session, format from a local snapshot so this
             // one-off request cannot repopulate xAI access/billing UI state.
-            let summary_topup = if app.uses_xai_access_controls() {
-                handle_billing_fetched(app, agent_id, balance, true, subscription_tier, autotopup);
+            let summary_topup = if apply_xai_billing {
+                handle_billing_fetched(
+                    app,
+                    agent_id,
+                    balance,
+                    true,
+                    subscription_tier,
+                    autotopup,
+                    0,
+                );
                 app.auto_topup.clone()
             } else {
                 let mut topup = app.auto_topup.clone();
@@ -474,6 +508,23 @@ pub(super) fn handle_usage_fetched(
             }
         }
     };
+
+    if modal_open {
+        if let Some(agent) = app.agents.get_mut(&agent_id)
+            && let Some(state) = super::status::usage_modal_state_mut(agent)
+        {
+            state.billing_loading = false;
+            state.billing_error = None;
+            // Hidden xAI billing: show Codex alone so the synthetic xAI Err
+            // from `include_xai: false` does not leak into the modal.
+            state.provider_usage_text = Some(if app.usage_visible {
+                crate::views::usage::format_combined_usage_summary(&xai_summary, &codex_summary)
+            } else {
+                format!("OpenAI Codex\n{codex_summary}")
+            });
+        }
+        return vec![];
+    }
 
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         let mut text =
@@ -648,6 +699,7 @@ pub(super) fn handle_credit_limit_recheck_complete(
     drain.effects.push(Effect::FetchBilling {
         agent_id,
         silent: true,
+        nonce: 0,
     });
     note_peek_page_flip(app, agent_id, drain.page_flip_entry);
     drain.effects

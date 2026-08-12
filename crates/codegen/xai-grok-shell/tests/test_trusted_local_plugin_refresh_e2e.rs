@@ -257,7 +257,7 @@ async fn headless_session_refreshes_trusted_local_plugin_and_writes_session_json
     sandbox
         .set_env("HOME", &home)
         .set_env("USERPROFILE", &home)
-        .set_env("GROK_HOME", &grok_home);
+        .set_env("OPENGROK_HOME", &grok_home);
 
     let result = run_headless_in_sandbox(cmd, sandbox).await;
     assert_headless_success(

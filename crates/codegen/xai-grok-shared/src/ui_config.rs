@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use xai_grok_config_types::DisplayRefreshSettings;
 
+pub use xai_grok_tools::types::ImageGenerationProvider;
+
 /// User-selected tool presentation for Responses-backed sessions.
 ///
 /// The custom deserializer preserves compatibility with the original boolean
@@ -114,6 +116,10 @@ pub struct UiConfig {
     /// Written by the pager's settings modal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_flip_on_send: Option<bool>,
+    /// Ask before rewinding conversation history. `None` = on (default).
+    /// Written by the pager's settings modal / rewind "Yes, and don't ask again".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm_before_rewind: Option<bool>,
     /// Theme to use when the OS is in dark mode. Written by the pager's theme persist module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_dark_theme: Option<String>,
@@ -189,6 +195,11 @@ pub struct UiConfig {
     /// `true` = mixed Code Mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_mode: Option<ToolModePreference>,
+    /// Image generation service for new sessions. Grok uses xAI Imagine with
+    /// xAI credentials. OpenAI uses the Codex Images API with isolated Codex
+    /// OAuth credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_generation_provider: Option<ImageGenerationProvider>,
     /// In-app drag selection highlight: `flash` | `hold` (legacy bool accepted).
     #[serde(
         default,
@@ -339,6 +350,7 @@ impl Default for UiConfig {
             show_timestamps: None,
             show_timeline: None,
             page_flip_on_send: None,
+            confirm_before_rewind: None,
             auto_dark_theme: None,
             auto_light_theme: None,
             scroll_speed: None,
@@ -354,6 +366,7 @@ impl Default for UiConfig {
             mouse_reporting_toggle: None,
             remember_tool_approvals: None,
             code_mode: None,
+            image_generation_provider: None,
             cancel_subagents_on_turn_cancel: None,
             keep_text_selection: None,
             selection_highlight_duration_ms: None,
@@ -397,6 +410,14 @@ impl UiConfig {
     pub fn page_flip_on_send_enabled(&self) -> bool {
         self.page_flip_on_send
             .unwrap_or(Self::PAGE_FLIP_ON_SEND_DEFAULT)
+    }
+
+    /// Default for [`Self::confirm_before_rewind`] when unset.
+    pub const CONFIRM_BEFORE_REWIND_DEFAULT: bool = true;
+
+    pub fn confirm_before_rewind_enabled(&self) -> bool {
+        self.confirm_before_rewind
+            .unwrap_or(Self::CONFIRM_BEFORE_REWIND_DEFAULT)
     }
 
     /// Default for [`Self::enter_steers`] when unset (Enter queues; Ctrl+Enter
@@ -467,6 +488,25 @@ mod tests {
     }
 
     #[test]
+    fn image_generation_provider_defaults_to_grok_and_round_trips() {
+        assert_eq!(UiConfig::default().image_generation_provider, None);
+
+        let openai: UiConfig =
+            serde_json::from_str(r#"{"image_generation_provider":"openai"}"#).unwrap();
+        assert_eq!(
+            openai.image_generation_provider,
+            Some(ImageGenerationProvider::OpenAi)
+        );
+        assert_eq!(
+            serde_json::to_value(openai)
+                .unwrap()
+                .get("image_generation_provider")
+                .and_then(serde_json::Value::as_str),
+            Some("openai")
+        );
+    }
+
+    #[test]
     fn page_flip_on_send_defaults_on() {
         assert!(UiConfig::default().page_flip_on_send_enabled());
         let off = UiConfig {
@@ -474,6 +514,16 @@ mod tests {
             ..Default::default()
         };
         assert!(!off.page_flip_on_send_enabled());
+    }
+
+    #[test]
+    fn confirm_before_rewind_defaults_on() {
+        assert!(UiConfig::default().confirm_before_rewind_enabled());
+        let off = UiConfig {
+            confirm_before_rewind: Some(false),
+            ..Default::default()
+        };
+        assert!(!off.confirm_before_rewind_enabled());
     }
 
     #[test]

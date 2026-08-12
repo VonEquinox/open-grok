@@ -21,6 +21,7 @@ use reqwest::header::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[cfg(test)]
 use xai_grok_sampling_types::ReasoningEffort;
@@ -33,7 +34,6 @@ use xai_grok_sampling_types::{
     SentCredential, build_messages_request, is_check_event, messages, rs,
 };
 
-use crate::attribution::bearer_tail_fragment;
 use crate::config::{AuthScheme, OriginClientInfo, SamplerConfig};
 use crate::events::SamplingErrorInfo;
 #[cfg(test)]
@@ -46,6 +46,7 @@ use crate::provider::{
     X_CODEX_TURN_STATE_HEADER, provider_adapter,
 };
 use crate::retry::RetryDecision;
+use xai_grok_auth::bearer_suffix;
 
 // Re-export ApiBackend from the shared types crate for downstream callers.
 pub use xai_grok_sampling_types::ApiBackend;
@@ -55,6 +56,31 @@ const AGENT_PRODUCT: &str = "grok-shell";
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 128_000;
 const X_CODEX_BETA_FEATURES_HEADER: &str = "x-codex-beta-features";
 const REMOTE_COMPACTION_V2_FEATURE: &str = "remote_compaction_v2";
+const FIREWORKS_MAX_CONCURRENT_REQUESTS: usize = 2;
+
+static FIREWORKS_REQUEST_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn fireworks_request_gate() -> Arc<Semaphore> {
+    Arc::clone(
+        FIREWORKS_REQUEST_GATE
+            .get_or_init(|| Arc::new(Semaphore::new(FIREWORKS_MAX_CONCURRENT_REQUESTS))),
+    )
+}
+
+async fn acquire_provider_request_permit_from(
+    provider: ModelProvider,
+    fireworks_gate: Arc<Semaphore>,
+) -> Option<OwnedSemaphorePermit> {
+    if provider != ModelProvider::Fireworks {
+        return None;
+    }
+    Some(
+        fireworks_gate
+            .acquire_owned()
+            .await
+            .expect("Fireworks request gate is never closed"),
+    )
+}
 
 /// Parse the `Retry-After` response header as delta-seconds.
 /// Our inference backends only emit integer seconds (never HTTP-date),
@@ -331,6 +357,8 @@ fn normalize_response_compat(value: &mut serde_json::Value, default_status: &str
     };
 
     insert_json_default(response, "created_at", serde_json::json!(0));
+    normalize_integral_u64(response, "created_at");
+    normalize_integral_u64(response, "completed_at");
     insert_json_default(response, "id", serde_json::json!(""));
     insert_json_default(response, "model", serde_json::json!(""));
     insert_json_default(response, "object", serde_json::json!("response"));
@@ -396,6 +424,21 @@ fn normalize_response_compat(value: &mut serde_json::Value, default_status: &str
         {
             insert_json_default(details, "reasoning_tokens", serde_json::json!(0));
         }
+    }
+}
+
+fn normalize_integral_u64(object: &mut serde_json::Map<String, serde_json::Value>, field: &str) {
+    let Some(value) = object.get_mut(field) else {
+        return;
+    };
+    if value.as_u64().is_some() {
+        return;
+    }
+    let Some(number) = value.as_f64() else {
+        return;
+    };
+    if number.is_finite() && number >= 0.0 && number <= u64::MAX as f64 && number.fract() == 0.0 {
+        *value = serde_json::Value::Number((number as u64).into());
     }
 }
 
@@ -1644,7 +1687,7 @@ impl SamplingClient {
 
     /// Tail fragment of the credential in `headers` — `x-api-key`
     /// (Messages-API scheme) or `Authorization` — per
-    /// [`crate::attribution::SENT_BEARER_PREFIX_LEN`].
+    /// [`crate::attribution::BEARER_SUFFIX_LEN`].
     fn sent_fragment_from_headers(headers: &HeaderMap, scheme: &AuthScheme) -> Option<String> {
         let raw = match scheme {
             AuthScheme::XApiKey => headers
@@ -1655,18 +1698,18 @@ impl SamplingClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.strip_prefix("Bearer ")),
         };
-        raw.map(|s| bearer_tail_fragment(s).to_string())
+        raw.map(|s| bearer_suffix(s).to_string())
     }
 
     /// Best-effort *build-time* view of what the next request would carry
     /// (resolver-authoritative). For request-start diagnostics
     /// ([`Self::auth_info`]) only — 401 attribution must use the fragment
     /// captured by [`Self::post`] instead, which cannot race a recovery.
-    fn current_sent_bearer_prefix(&self) -> Option<String> {
+    fn current_sent_bearer_suffix(&self) -> Option<String> {
         match self.bearer_resolver.as_ref() {
             Some(resolver) => resolver
                 .current_bearer()
-                .map(|s| bearer_tail_fragment(&s).to_string())
+                .map(|s| bearer_suffix(&s).to_string())
                 .or_else(|| {
                     (!resolver.fail_closed_on_missing())
                         .then(|| {
@@ -1689,21 +1732,21 @@ impl SamplingClient {
     /// at the lowest layer that saw the status, so higher layers that react
     /// to a 401 must not emit a duplicate event.
     ///
-    /// `sent_prefix` is the fragment [`Self::post`] captured for the
+    /// `sent_suffix` is the fragment [`Self::post`] captured for the
     /// rejected request (already tail-truncated; the full bearer never
     /// crosses this boundary).
     fn record_401_attribution(
         &self,
         consumer: crate::attribution::SamplingConsumer,
-        sent_prefix: Option<&str>,
+        sent_suffix: Option<&str>,
     ) {
         if let Some(cb) = self.attribution_callback.as_ref() {
-            cb.record_401(consumer, sent_prefix);
+            cb.record_401(consumer, sent_suffix);
         }
     }
 
     pub fn auth_info(&self) -> crate::sampling_log::AuthInfo {
-        let auth_prefix = self.current_sent_bearer_prefix();
+        let auth_prefix = self.current_sent_bearer_suffix();
         let auth_type = match (&self.defaults.auth_scheme, &auth_prefix) {
             (AuthScheme::XApiKey, Some(_)) => "x-api-key",
             (AuthScheme::Bearer, Some(_)) => "bearer",
@@ -1750,6 +1793,10 @@ impl SamplingClient {
 
     fn endpoint(&self, path: &str) -> String {
         self.endpoint.url_for_path(path)
+    }
+
+    async fn acquire_provider_request_permit(&self) -> Option<OwnedSemaphorePermit> {
+        acquire_provider_request_permit_from(self.defaults.provider, fireworks_request_gate()).await
     }
 
     /// Execute the provider-local Codex-compatible standalone search endpoint.
@@ -1848,7 +1895,18 @@ impl SamplingClient {
             request.top_p = self.defaults.top_p;
         }
 
+        if request.service_tier.is_none() {
+            request.service_tier = self.defaults.service_tier.clone();
+        }
+
+        let fireworks_reasoning_effort = (self.defaults.provider == ModelProvider::Fireworks)
+            .then_some(self.defaults.reasoning_effort)
+            .flatten()
+            .map(|default| request.reasoning_effort.unwrap_or(default));
         self.provider_adapter.sanitize_chat_request(&mut request);
+        if let Some(reasoning_effort) = fireworks_reasoning_effort {
+            request.reasoning_effort = Some(reasoning_effort);
+        }
 
         Ok(request)
     }
@@ -1909,6 +1967,7 @@ impl SamplingClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let payload = self.apply_defaults(request)?;
+        let _provider_request_permit = self.acquire_provider_request_permit().await;
         let x_grok_conv_id = &payload.x_grok_conv_id.clone().unwrap_or_default();
         let x_grok_req_id = &payload.x_grok_req_id.clone().unwrap_or_default();
         let model_id = payload.model.clone().unwrap_or_default();
@@ -1967,6 +2026,7 @@ impl SamplingClient {
         Option<ResponseModelMetadata>,
     )> {
         let payload = self.apply_defaults(request)?;
+        let provider_request_permit = self.acquire_provider_request_permit().await;
         let x_grok_conv_id = &payload.x_grok_conv_id.clone().unwrap_or_default();
         let x_grok_req_id = &payload.x_grok_req_id.clone().unwrap_or_default();
         let model_id = payload.model.clone().unwrap_or_default();
@@ -2125,6 +2185,10 @@ impl SamplingClient {
                     }
                 };
                 std::future::ready(item)
+            })
+            .map(move |item| {
+                let _keep_permit_until_stream_drop = &provider_request_permit;
+                item
             })
             .boxed();
 
@@ -4152,6 +4216,7 @@ mod tests {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            service_tier: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,
@@ -4272,6 +4337,74 @@ mod tests {
     fn new_with_minimal_config_succeeds() {
         let client = SamplingClient::new(minimal_config()).expect("client should construct");
         assert_eq!(client.api_backend(), ApiBackend::ChatCompletions);
+    }
+
+    #[tokio::test]
+    async fn fireworks_request_gate_is_provider_local_and_bounded() {
+        let gate = Arc::new(Semaphore::new(FIREWORKS_MAX_CONCURRENT_REQUESTS));
+
+        assert!(
+            acquire_provider_request_permit_from(ModelProvider::Xai, Arc::clone(&gate))
+                .await
+                .is_none()
+        );
+        assert_eq!(gate.available_permits(), FIREWORKS_MAX_CONCURRENT_REQUESTS);
+
+        let first =
+            acquire_provider_request_permit_from(ModelProvider::Fireworks, Arc::clone(&gate))
+                .await
+                .expect("first Fireworks permit");
+        let second =
+            acquire_provider_request_permit_from(ModelProvider::Fireworks, Arc::clone(&gate))
+                .await
+                .expect("second Fireworks permit");
+        assert_eq!(gate.available_permits(), 0);
+
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            acquire_provider_request_permit_from(ModelProvider::Fireworks, Arc::clone(&gate)),
+        )
+        .await;
+        assert!(blocked.is_err(), "a third Fireworks request must wait");
+
+        drop(first);
+        let third = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            acquire_provider_request_permit_from(ModelProvider::Fireworks, Arc::clone(&gate)),
+        )
+        .await
+        .expect("released permit should wake the waiter")
+        .expect("third Fireworks permit");
+        drop((second, third));
+    }
+
+    #[test]
+    fn fireworks_reasoning_requires_explicit_model_support() {
+        let mut supported_config = minimal_config();
+        supported_config.provider = ModelProvider::Fireworks;
+        supported_config.model = "accounts/fireworks/routers/kimi-k3-fast".to_owned();
+        supported_config.reasoning_effort = Some(ReasoningEffort::High);
+        supported_config.service_tier = Some("priority".to_owned());
+        let supported = SamplingClient::new(supported_config).expect("Fireworks client");
+        let mut supported_input =
+            ChatCompletionRequest::new("accounts/fireworks/routers/kimi-k3-fast", Vec::new());
+        supported_input.reasoning_effort = Some(ReasoningEffort::Low);
+        let supported_request = supported
+            .apply_defaults(supported_input)
+            .expect("supported Fireworks defaults");
+        let supported_wire = serde_json::to_value(supported_request).unwrap();
+        assert_eq!(supported_wire["reasoning_effort"], "low");
+        assert_eq!(supported_wire["service_tier"], "priority");
+
+        let mut unsupported_config = minimal_config();
+        unsupported_config.provider = ModelProvider::Fireworks;
+        let unsupported = SamplingClient::new(unsupported_config).expect("Fireworks client");
+        let mut unsupported_input = ChatCompletionRequest::new("test-model", Vec::new());
+        unsupported_input.reasoning_effort = Some(ReasoningEffort::High);
+        let unsupported_request = unsupported
+            .apply_defaults(unsupported_input)
+            .expect("unsupported Fireworks defaults");
+        assert_eq!(unsupported_request.reasoning_effort, None);
     }
 
     #[test]
@@ -4860,7 +4993,7 @@ mod tests {
     }
 
     /// `post()` strips the `"Bearer "` scheme prefix off `Authorization`
-    /// and captures the tail fragment (see `SENT_BEARER_PREFIX_LEN`).
+    /// and captures the tail fragment (see `BEARER_SUFFIX_LEN`).
     #[test]
     fn post_captures_bearer_tail_for_openai_compat() {
         let cfg = SamplerConfig {
@@ -4876,7 +5009,7 @@ mod tests {
         assert_eq!(bearer.as_deref(), Some("r-1234567890"));
         assert_eq!(
             bearer.as_deref().map(str::len),
-            Some(crate::attribution::SENT_BEARER_PREFIX_LEN),
+            Some(crate::attribution::BEARER_SUFFIX_LEN),
         );
     }
 
@@ -4898,7 +5031,7 @@ mod tests {
         assert_eq!(bearer.as_deref(), Some("c-key-abc123"));
         assert_eq!(
             bearer.as_deref().map(str::len),
-            Some(crate::attribution::SENT_BEARER_PREFIX_LEN),
+            Some(crate::attribution::BEARER_SUFFIX_LEN),
         );
     }
 
@@ -4964,7 +5097,7 @@ mod tests {
         // A record-time re-read (the pre-fix behavior) would report the
         // rotated token instead:
         assert_eq!(
-            client.current_sent_bearer_prefix().as_deref(),
+            client.current_sent_bearer_suffix().as_deref(),
             Some("en-newtail99"),
             "sanity: the build-time capture and a live re-read now differ"
         );
@@ -5075,7 +5208,65 @@ mod tests {
         assert_eq!(calls[0].1.as_deref(), Some("0-extra-tail"));
         assert_eq!(
             calls[0].1.as_deref().map(str::len),
-            Some(crate::attribution::SENT_BEARER_PREFIX_LEN),
+            Some(crate::attribution::BEARER_SUFFIX_LEN),
+        );
+    }
+
+    /// When a bearer_resolver is wired but returns `None`, attribution must
+    /// report no sent bearer (not the construction-time default header seed).
+    #[test]
+    fn bearer_resolver_none_attribution_ignores_default_headers() {
+        #[derive(Debug)]
+        struct EmptyResolver;
+        impl crate::config::BearerResolver for EmptyResolver {
+            fn current_bearer(&self) -> Option<String> {
+                None
+            }
+        }
+
+        let cfg = SamplerConfig {
+            api_key: Some("stale-seed-token".to_string()),
+            api_backend: ApiBackend::Responses,
+            bearer_resolver: Some(std::sync::Arc::new(EmptyResolver)),
+            ..minimal_config()
+        };
+        let client = SamplingClient::new(cfg).expect("client should build");
+        assert_eq!(
+            client.current_sent_bearer_suffix(),
+            None,
+            "resolver None must not attribute a stripped default seed"
+        );
+    }
+
+    /// When a bearer_resolver is wired but returns `None` (hard-expired
+    /// session with no live AT), default Authorization / x-api-key must be
+    /// stripped so a stale seed key cannot ride the wire.
+    #[test]
+    fn bearer_resolver_none_strips_default_authorization() {
+        #[derive(Debug)]
+        struct EmptyResolver;
+        impl crate::config::BearerResolver for EmptyResolver {
+            fn current_bearer(&self) -> Option<String> {
+                None
+            }
+        }
+
+        let cfg = SamplerConfig {
+            api_key: Some("stale-token".to_string()),
+            api_backend: ApiBackend::Responses,
+            bearer_resolver: Some(std::sync::Arc::new(EmptyResolver)),
+            ..minimal_config()
+        };
+        let client = SamplingClient::new(cfg).expect("client should build");
+        let SentRequest {
+            builder,
+            sent_bearer: sent,
+        } = client.post("https://example.test/v1/responses");
+        let request = builder.body("").build().expect("request should build");
+        assert_eq!(sent, None, "capture must agree: nothing was sent");
+        assert!(
+            request.headers().get(AUTHORIZATION).is_none(),
+            "stale default Authorization must not be sent when resolver is empty"
         );
     }
 
@@ -5655,6 +5846,8 @@ mod tests {
             "response": {
                 "id": "resp_x_search",
                 "object": "response",
+                "created_at": 1785971246.0,
+                "completed_at": 1785971249.0,
                 "model": "grok-4.5",
                 "status": "completed",
                 "output": [{
@@ -5673,7 +5866,8 @@ mod tests {
             panic!("expected normalized ResponseCompleted");
         };
         assert_eq!(event.sequence_number, 0);
-        assert_eq!(event.response.created_at, 0);
+        assert_eq!(event.response.created_at, 1_785_971_246);
+        assert_eq!(event.response.completed_at, Some(1_785_971_249));
         let usage = event
             .response
             .usage
@@ -5691,6 +5885,30 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&call.input).unwrap(),
             serde_json::json!({"type": "search", "query": "OpenAI Codex"}),
         );
+    }
+
+    #[test]
+    fn deserialize_response_created_normalizes_integral_float_timestamp() {
+        let sse = serde_json::json!({
+            "type": "response.created",
+            "response": {
+                "id": "resp_meta",
+                "object": "response",
+                "created_at": 1785971125.0,
+                "model": "muse-spark-1.2",
+                "status": "in_progress",
+                "output": []
+            }
+        })
+        .to_string();
+
+        let event =
+            deserialize_response_event_for_adapter(&sse, provider_adapter(ModelProvider::Meta))
+                .expect("Meta response.created should accept an integral float timestamp");
+        let rs::ResponseStreamEvent::ResponseCreated(event) = event else {
+            panic!("expected ResponseCreated");
+        };
+        assert_eq!(event.response.created_at, 1_785_971_125);
     }
 
     #[test]

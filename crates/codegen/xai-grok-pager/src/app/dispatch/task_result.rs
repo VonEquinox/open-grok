@@ -22,9 +22,9 @@ use super::prompt::{
     defer_to_open_reload_window, handle_compact_complete, handle_prompt_response,
     handle_suggestion_debounce_expired,
 };
+use super::queue::push_and_page_flip;
 use super::rewind::{
     dispatch_rewind_success, handle_rewind_execute_failed, handle_rewind_points_loaded,
-    handle_rewind_preview_complete, handle_rewind_preview_failed,
 };
 use super::router::{dispatch, dispatch_action_result};
 use super::session::foreign::{
@@ -45,8 +45,9 @@ use super::session::load::{
 use super::session::modal::remove_agent_and_cleanup;
 use super::settings::ui::{apply_setting_rollback, refresh_open_settings_modals};
 use super::status::{
-    commit_session_usage_block, handle_coding_data_sharing_failed,
-    handle_coding_data_sharing_updated, handle_context_info_complete, scrub_error_for_toast,
+    handle_coding_data_sharing_failed, handle_coding_data_sharing_updated,
+    handle_context_info_complete, handle_session_usage_result, scrub_error_for_toast,
+    usage_modal_state_mut,
 };
 use super::transcript::{
     handle_hooks_list_loaded, handle_marketplace_list_loaded, handle_marketplace_updates_available,
@@ -1084,6 +1085,219 @@ fn handle_deepseek_model_rebind_complete(
     effects
 }
 
+fn capture_meta_sessions_created_during_update(app: &mut AppView) {
+    let mut targets = Vec::new();
+    for (&agent_id, agent) in &mut app.agents {
+        if PrimaryProvider::for_current_model(&agent.session.models) == Some(PrimaryProvider::Meta)
+        {
+            agent.session.provider_rebind_pending = true;
+            targets.push(agent_id);
+        }
+    }
+    app.pending_meta_rebind_agents.extend(targets);
+}
+
+fn pending_meta_model(models: &crate::acp::model_state::ModelState) -> Option<acp::ModelId> {
+    let is_meta = |model_id: &acp::ModelId| {
+        PrimaryProvider::for_model(models, model_id) == Some(PrimaryProvider::Meta)
+    };
+    models
+        .current
+        .clone()
+        .filter(|id| is_meta(id))
+        .or_else(|| models.available.keys().find(|id| is_meta(id)).cloned())
+}
+
+fn rebind_pending_meta_sessions(app: &mut AppView, generation: u64) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    let targets = app
+        .pending_meta_rebind_agents
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let mut completed = Vec::new();
+    for agent_id in targets {
+        let Some(agent) = app.agents.get_mut(&agent_id) else {
+            completed.push(agent_id);
+            continue;
+        };
+        if !agent.session.provider_rebind_pending {
+            completed.push(agent_id);
+            continue;
+        }
+        if agent.session.model_switch_pending {
+            continue;
+        }
+        let Some(session_id) = agent.session.session_id.clone() else {
+            continue;
+        };
+        let Some(model_id) = pending_meta_model(&agent.session.models) else {
+            tracing::warn!(?agent_id, "Meta sampler rebind has no matching model");
+            agent.scrollback.push_block(RenderBlock::system(
+                "No Meta model is available for this session; queued prompts are paused. Adjust the model allowlist or switch this tab to another provider.".to_owned(),
+            ));
+            continue;
+        };
+        let effort = (agent.session.models.current.as_ref() == Some(&model_id))
+            .then_some(agent.session.models.reasoning_effort)
+            .flatten();
+        agent.session.model_switch_pending = true;
+        effects.push(Effect::RebindMetaModel {
+            agent_id,
+            session_id,
+            model_id,
+            effort,
+            generation,
+        });
+    }
+    for agent_id in completed {
+        app.pending_meta_rebind_agents.remove(&agent_id);
+    }
+    effects
+}
+
+fn after_meta_session_ready(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    mut effects: Vec<Effect>,
+) -> Vec<Effect> {
+    if app.meta_runtime_update_pending {
+        if let Some(agent) = app.agents.get_mut(&agent_id)
+            && PrimaryProvider::for_current_model(&agent.session.models)
+                == Some(PrimaryProvider::Meta)
+        {
+            agent.session.provider_rebind_pending = true;
+            app.pending_meta_rebind_agents.insert(agent_id);
+        }
+        return effects;
+    }
+    if app.pending_meta_rebind_agents.contains(&agent_id)
+        && app.agents.get(&agent_id).is_some_and(|agent| {
+            agent.session.provider_rebind_pending && !agent.session.model_switch_pending
+        })
+    {
+        effects.extend(rebind_pending_meta_sessions(
+            app,
+            app.meta_operation_generation,
+        ));
+    }
+    effects
+}
+
+fn mark_runtime_pending_meta_session(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    incoming_models: Option<&acp::SessionModelState>,
+) {
+    if !app.meta_runtime_update_pending && app.meta_operation_generation == 0 {
+        return;
+    }
+    let incoming = incoming_models
+        .cloned()
+        .map(|models| crate::acp::model_state::ModelState::from(Some(models)));
+    let is_meta = incoming.as_ref().map_or_else(
+        || {
+            app.agents.get(&agent_id).is_some_and(|agent| {
+                PrimaryProvider::for_current_model(&agent.session.models)
+                    == Some(PrimaryProvider::Meta)
+            })
+        },
+        |models| PrimaryProvider::for_current_model(models) == Some(PrimaryProvider::Meta),
+    );
+    if incoming.is_some() && !is_meta {
+        app.cancel_pending_meta_rebind(agent_id);
+        return;
+    }
+    if is_meta && let Some(agent) = app.agents.get_mut(&agent_id) {
+        agent.session.provider_rebind_pending = true;
+        app.pending_meta_rebind_agents.insert(agent_id);
+    }
+}
+
+fn finish_meta_rebind(app: &mut AppView, agent_id: crate::app::agent::AgentId) {
+    app.pending_meta_rebind_agents.remove(&agent_id);
+    if let Some(agent) = app.agents.get_mut(&agent_id) {
+        agent.session.provider_rebind_pending = false;
+    }
+}
+
+fn handle_meta_model_rebind_complete(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    session_id: acp::SessionId,
+    model_id: acp::ModelId,
+    effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+    generation: u64,
+    result: Result<(), crate::app::actions::SwitchModelError>,
+) -> Vec<Effect> {
+    let still_owned = app.pending_meta_rebind_agents.contains(&agent_id);
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        app.pending_meta_rebind_agents.remove(&agent_id);
+        return vec![];
+    };
+    if agent.session.session_id.as_ref() != Some(&session_id) {
+        if !agent.session.provider_rebind_pending {
+            app.pending_meta_rebind_agents.remove(&agent_id);
+            return vec![];
+        }
+        if agent.session.model_switch_pending {
+            return vec![];
+        }
+        return rebind_pending_meta_sessions(app, app.meta_operation_generation);
+    }
+    if !still_owned || !agent.session.provider_rebind_pending {
+        agent.session.model_switch_pending = false;
+        let Some(target_model) = agent.session.models.current.clone() else {
+            return crate::app::dispatch::maybe_drain_queue(agent).effects;
+        };
+        if target_model == model_id {
+            return crate::app::dispatch::maybe_drain_queue(agent).effects;
+        }
+        let Some(current_session_id) = agent.session.session_id.clone() else {
+            agent.session.provider_rebind_pending = true;
+            return vec![];
+        };
+        let target_effort = agent.session.models.reasoning_effort;
+        agent.session.provider_rebind_pending = true;
+        agent.session.model_switch_pending = true;
+        return vec![Effect::SwitchModel {
+            agent_id,
+            session_id: current_session_id,
+            model_id: target_model,
+            effort: target_effort,
+            service_tier: None,
+            prev_model_id: None,
+        }];
+    }
+    agent.session.model_switch_pending = false;
+    if generation != app.meta_operation_generation {
+        return rebind_pending_meta_sessions(app, app.meta_operation_generation);
+    }
+    match result {
+        Ok(()) => agent.session.models.set_current(model_id, effort),
+        Err(error) => {
+            agent.scrollback.push_block(RenderBlock::system(format!(
+                "Couldn't refresh the Meta session after its credential changed; queued prompts are paused. Update the Meta key or switch this tab to another provider. ({})",
+                match error {
+                    crate::app::actions::SwitchModelError::Other(message) => {
+                        scrub_error_for_toast(&message)
+                    }
+                    crate::app::actions::SwitchModelError::IncompatibleAgent { .. } => {
+                        "the current agent is incompatible with the selected Meta model".to_owned()
+                    }
+                },
+            )));
+            return vec![];
+        }
+    }
+    finish_meta_rebind(app, agent_id);
+    let mut effects = crate::app::dispatch::maybe_drain_queue_and_note_peek(app, agent_id);
+    if matches!(app.active_view, ActiveView::Agent(active) if active == agent_id) {
+        effects.extend(app.sync_primary_provider_from_active_agent());
+    }
+    effects
+}
+
 fn capture_wafer_sessions_created_during_update(app: &mut AppView) {
     let mut targets = Vec::new();
     for (&agent_id, agent) in &mut app.agents {
@@ -1540,6 +1754,14 @@ fn deepseek_credential_configured() -> bool {
         )
 }
 
+fn meta_credential_configured() -> bool {
+    xai_grok_shell::meta_models::environment_api_key_is_configured()
+        || xai_grok_shell::auth::provider_api_key_is_configured(
+            &xai_grok_tools::util::grok_home::grok_home(),
+            xai_grok_shell::sampling::types::ModelProvider::Meta,
+        )
+}
+
 fn wafer_credential_configured() -> bool {
     xai_grok_shell::wafer_models::environment_api_key_is_configured()
         || xai_grok_shell::auth::provider_api_key_is_configured(
@@ -1662,6 +1884,9 @@ pub(crate) fn deliver_doctor_message(app: &mut AppView, preferred: AgentId, mess
 }
 /// Handle a completed async task result.
 pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec<Effect> {
+    if result.ends_startup() {
+        app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Ok);
+    }
     match result {
         TaskResult::PerplexityWebSearchUpdated {
             enabled,
@@ -1894,6 +2119,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             mark_runtime_pending_kimi_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_fireworks_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_deepseek_session(app, agent_id, new_models.as_ref());
+            mark_runtime_pending_meta_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_opencode_go_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_wafer_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_perplexity_session(app, agent_id, new_models.as_ref());
@@ -1907,6 +2133,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             let effects = after_kimi_session_ready(app, agent_id, effects);
             let effects = after_fireworks_session_ready(app, agent_id, effects);
             let effects = after_deepseek_session_ready(app, agent_id, effects);
+            let effects = after_meta_session_ready(app, agent_id, effects);
             let effects = after_opencode_go_session_ready(app, agent_id, effects);
             after_wafer_session_ready(app, agent_id, effects)
         }
@@ -1924,6 +2151,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             mark_runtime_pending_kimi_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_fireworks_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_deepseek_session(app, agent_id, new_models.as_ref());
+            mark_runtime_pending_meta_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_opencode_go_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_wafer_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_perplexity_session(app, agent_id, new_models.as_ref());
@@ -1939,6 +2167,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             let effects = after_kimi_session_ready(app, agent_id, effects);
             let effects = after_fireworks_session_ready(app, agent_id, effects);
             let effects = after_deepseek_session_ready(app, agent_id, effects);
+            let effects = after_meta_session_ready(app, agent_id, effects);
             let effects = after_opencode_go_session_ready(app, agent_id, effects);
             after_wafer_session_ready(app, agent_id, effects)
         }
@@ -1950,6 +2179,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             code_restored,
             restore_summary,
             restore_degree,
+            resume_session_id,
         } => handle_worktree_forked(
             app,
             agent_id,
@@ -1959,6 +2189,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             code_restored,
             restore_summary,
             restore_degree,
+            resume_session_id,
         ),
         TaskResult::WorktreeSessionFailed { agent_id, error } => {
             handle_worktree_session_failed(app, agent_id, error)
@@ -1967,7 +2198,8 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             new_session_id,
             cwd,
-        } => handle_fork_session_ready(app, agent_id, new_session_id, cwd),
+            parent_session_id,
+        } => handle_fork_session_ready(app, agent_id, new_session_id, cwd, parent_session_id),
         TaskResult::ForkSessionFailed { agent_id, error } => {
             handle_fork_session_failed(app, agent_id, error)
         }
@@ -1977,7 +2209,16 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             silent,
             subscription_tier,
             autotopup,
-        } => handle_billing_fetched(app, agent_id, balance, silent, subscription_tier, autotopup),
+            nonce,
+        } => handle_billing_fetched(
+            app,
+            agent_id,
+            balance,
+            silent,
+            subscription_tier,
+            autotopup,
+            nonce,
+        ),
         TaskResult::UsageFetched {
             agent_id,
             xai,
@@ -1987,16 +2228,23 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             error,
             silent,
+            nonce,
         } => {
-            if app.uses_xai_access_controls()
-                && !silent
-                && let Some(agent) = app.agents.get_mut(&agent_id)
-            {
-                agent.scrollback.push_block(RenderBlock::System(
-                    crate::scrollback::blocks::SystemMessageBlock::new(format!(
-                        "Billing error: {error}"
-                    )),
-                ));
+            let show_error = app.uses_xai_access_controls() && !silent;
+            if let Some(agent) = app.agents.get_mut(&agent_id) {
+                if let Some(state) = usage_modal_state_mut(agent)
+                    && state.fetch_nonce == nonce
+                {
+                    state.billing_loading = false;
+                    state.billing_error = Some(error.clone());
+                }
+                if show_error {
+                    agent.scrollback.push_block(RenderBlock::System(
+                        crate::scrollback::blocks::SystemMessageBlock::new(format!(
+                            "Billing error: {error}"
+                        )),
+                    ));
+                }
             }
             vec![]
         }
@@ -2021,6 +2269,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             mark_runtime_pending_kimi_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_fireworks_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_deepseek_session(app, agent_id, new_models.as_ref());
+            mark_runtime_pending_meta_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_opencode_go_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_wafer_session(app, agent_id, new_models.as_ref());
             mark_runtime_pending_perplexity_session(app, agent_id, new_models.as_ref());
@@ -2038,17 +2287,28 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             let effects = after_kimi_session_ready(app, agent_id, effects);
             let effects = after_fireworks_session_ready(app, agent_id, effects);
             let effects = after_deepseek_session_ready(app, agent_id, effects);
+            let effects = after_meta_session_ready(app, agent_id, effects);
             let effects = after_opencode_go_session_ready(app, agent_id, effects);
             after_wafer_session_ready(app, agent_id, effects)
         }
-        TaskResult::SessionTitleFromDisk { agent_id, title } => {
-            if let Some(agent) = app.agents.get_mut(&agent_id)
-                && let Some((t, is_manual)) = title.filter(|(s, _)| !s.trim().is_empty())
-            {
-                if is_manual && agent.display_name.is_none() {
-                    agent.display_name = Some(t.clone());
+        TaskResult::SessionMetaFromDisk {
+            agent_id,
+            title,
+            last_turn_summary,
+            last_turn_summary_gen,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id) {
+                if let Some((t, is_manual)) = title.filter(|(s, _)| !s.trim().is_empty()) {
+                    if is_manual && agent.display_name.is_none() {
+                        agent.display_name = Some(t.clone());
+                    }
+                    agent.generated_session_title = Some(t);
                 }
-                agent.generated_session_title = Some(t);
+                if agent.last_turn_summary_gen == last_turn_summary_gen
+                    && agent.last_turn_summary.is_none()
+                {
+                    agent.last_turn_summary = last_turn_summary;
+                }
             }
             vec![]
         }
@@ -2132,12 +2392,14 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             mark_runtime_pending_kimi_session(app, agent_id, None);
             mark_runtime_pending_fireworks_session(app, agent_id, None);
             mark_runtime_pending_deepseek_session(app, agent_id, None);
+            mark_runtime_pending_meta_session(app, agent_id, None);
             mark_runtime_pending_opencode_go_session(app, agent_id, None);
             mark_runtime_pending_wafer_session(app, agent_id, None);
             let effects = handle_session_restored(app, agent_id, local_session_id);
             let effects = after_kimi_session_ready(app, agent_id, effects);
             let effects = after_fireworks_session_ready(app, agent_id, effects);
             let effects = after_deepseek_session_ready(app, agent_id, effects);
+            let effects = after_meta_session_ready(app, agent_id, effects);
             let effects = after_opencode_go_session_ready(app, agent_id, effects);
             after_wafer_session_ready(app, agent_id, effects)
         }
@@ -2271,11 +2533,13 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             // Kimi.
             let held_by_fireworks = app.pending_fireworks_rebind_agents.contains(&agent_id);
             let held_by_deepseek = app.pending_deepseek_rebind_agents.contains(&agent_id);
+            let held_by_meta = app.pending_meta_rebind_agents.contains(&agent_id);
             let held_by_opencode_go = app.pending_opencode_go_rebind_agents.contains(&agent_id);
             let held_by_wafer = app.pending_wafer_rebind_agents.contains(&agent_id);
             let left_kimi = switch_succeeded
                 && !held_by_fireworks
                 && !held_by_deepseek
+                && !held_by_meta
                 && !held_by_opencode_go
                 && !held_by_wafer
                 && target_provider != Some(PrimaryProvider::Kimi);
@@ -2293,6 +2557,11 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 && target_provider != Some(PrimaryProvider::DeepSeek);
             if left_deepseek {
                 app.cancel_pending_deepseek_rebind(agent_id);
+            }
+            let left_meta =
+                switch_succeeded && held_by_meta && target_provider != Some(PrimaryProvider::Meta);
+            if left_meta {
+                app.cancel_pending_meta_rebind(agent_id);
             }
             let left_opencode_go = switch_succeeded
                 && held_by_opencode_go
@@ -2349,6 +2618,16 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 effects.extend(rebind_pending_deepseek_sessions(
                     app,
                     app.deepseek_operation_generation,
+                ));
+            }
+            if app.pending_meta_rebind_agents.contains(&agent_id)
+                && app.agents.get(&agent_id).is_some_and(|agent| {
+                    agent.session.provider_rebind_pending && !agent.session.model_switch_pending
+                })
+            {
+                effects.extend(rebind_pending_meta_sessions(
+                    app,
+                    app.meta_operation_generation,
                 ));
             }
             if app.pending_opencode_go_rebind_agents.contains(&agent_id)
@@ -2552,6 +2831,84 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             generation,
             result,
         } => handle_deepseek_model_rebind_complete(
+            app, agent_id, session_id, model_id, effort, generation, result,
+        ),
+        TaskResult::MetaApiKeyUpdated {
+            configured,
+            generation,
+            stale,
+            warning,
+            error,
+            models,
+        } => {
+            if stale || generation != app.meta_operation_generation {
+                return vec![];
+            }
+            capture_meta_sessions_created_during_update(app);
+            let storage_succeeded = error.is_none();
+            super::settings::ui::refresh_open_settings_modals(app);
+            let credential_status = super::settings::ui::meta_api_key_status();
+            let runtime_apply_unconfirmed = warning.is_some() && models.is_none();
+            if let Some(error) = error {
+                app.show_toast(&format!(
+                    "✗ Could not {} Meta API key: {}; queued Meta prompts remain paused",
+                    if configured { "save" } else { "remove" },
+                    scrub_error_for_toast(&error),
+                ));
+            } else {
+                let message = if configured {
+                    if credential_status == crate::settings::SecretStatus::EnvironmentOverride {
+                        "✓ Meta API key saved to UI storage; environment key remains active"
+                            .to_owned()
+                    } else if warning.is_some() {
+                        "✓ Meta API key saved".to_owned()
+                    } else {
+                        "✓ Meta API key saved; models refreshed".to_owned()
+                    }
+                } else if credential_status == crate::settings::SecretStatus::EnvironmentOverride {
+                    "✓ UI-stored Meta API key cleared; environment key remains active".to_owned()
+                } else {
+                    "✓ UI-stored Meta API key cleared".to_owned()
+                };
+                if let Some(warning) = warning {
+                    app.show_toast(&format!(
+                        "{message}; model query warning: {}{}",
+                        scrub_error_for_toast(&warning),
+                        if runtime_apply_unconfirmed {
+                            "; queued Meta prompts remain paused"
+                        } else {
+                            ""
+                        },
+                    ));
+                } else {
+                    app.show_toast(&message);
+                }
+            }
+            if !storage_succeeded || runtime_apply_unconfirmed {
+                return vec![];
+            }
+            app.meta_runtime_update_pending = false;
+            if let Some(models) = models {
+                apply_kimi_catalog(app, models);
+                super::settings::ui::refresh_open_settings_modals(app);
+            }
+            if !meta_credential_configured() {
+                app.show_toast(&format!(
+                    "✓ Meta API key {}; API key required and queued Meta prompts remain paused",
+                    if configured { "saved" } else { "cleared" },
+                ));
+                return vec![];
+            }
+            rebind_pending_meta_sessions(app, generation)
+        }
+        TaskResult::MetaModelRebindComplete {
+            agent_id,
+            session_id,
+            model_id,
+            effort,
+            generation,
+            result,
+        } => handle_meta_model_rebind_complete(
             app, agent_id, session_id, model_id, effort, generation, result,
         ),
         TaskResult::WaferApiKeyUpdated {
@@ -3003,7 +3360,10 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 && let Some(ref mut modal) = agent.extensions_modal
             {
                 modal.skills_data = match result {
-                    Ok(skills) => TabDataState::Loaded(skills),
+                    Ok(skills) => {
+                        modal.seed_skills_groups_once(&skills);
+                        TabDataState::Loaded(skills)
+                    }
                     Err(e) => TabDataState::Error(e),
                 };
                 modal.pending_action = None;
@@ -3021,6 +3381,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 && agent.session.session_id.as_ref() == Some(&session_id)
                 && let Some(ref mut modal) = agent.extensions_modal
             {
+                modal.seed_workflows_group_once();
                 modal.workflows_data = match result {
                     Ok(workflows) => TabDataState::Loaded(workflows),
                     Err(e) => TabDataState::Error(e),
@@ -3068,28 +3429,61 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::SessionInfoComplete {
             agent_id,
+            session_id,
             info,
             text,
+            nonce,
         } => {
+            let minimal = app.screen_mode.is_minimal();
             if let Some(agent) = app.agents.get_mut(&agent_id) {
+                if agent.session.session_id.as_ref() != Some(&session_id) {
+                    return vec![];
+                }
+                if let Some(state) = usage_modal_state_mut(agent)
+                    && state.fetch_nonce != nonce
+                {
+                    return vec![];
+                }
                 agent.session_agent_name = info.data.agent_name.clone();
                 if let Some(modal) = agent.agents_modal.as_mut() {
                     modal.active_agent = info.data.agent_name.clone();
                 }
                 agent.apply_full_context_info(info.data.context);
-                agent
-                    .scrollback
-                    .push_block(crate::scrollback::block::RenderBlock::system(text));
+                if let Some(state) = usage_modal_state_mut(agent) {
+                    state.session_text = Some(text);
+                    state.session_error = None;
+                } else if minimal {
+                    push_and_page_flip(
+                        &mut agent.scrollback,
+                        crate::scrollback::block::RenderBlock::system(text),
+                    );
+                }
             }
             vec![]
         }
-        TaskResult::SessionInfoFailed { agent_id, error } => {
+        TaskResult::SessionInfoFailed {
+            agent_id,
+            session_id,
+            error,
+            nonce,
+        } => {
+            let minimal = app.screen_mode.is_minimal();
             if let Some(agent) = app.agents.get_mut(&agent_id) {
-                agent
-                    .scrollback
-                    .push_block(crate::scrollback::block::RenderBlock::system(format!(
-                        "Couldn't load session info: {error}"
-                    )));
+                if agent.session.session_id.as_ref() != Some(&session_id) {
+                    return vec![];
+                }
+                if let Some(state) = usage_modal_state_mut(agent) {
+                    if state.fetch_nonce == nonce {
+                        state.session_error = Some(error);
+                    }
+                } else if minimal {
+                    push_and_page_flip(
+                        &mut agent.scrollback,
+                        crate::scrollback::block::RenderBlock::system(format!(
+                            "Couldn't load session info: {error}"
+                        )),
+                    );
+                }
             }
             vec![]
         }
@@ -3175,6 +3569,11 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 .retain(|entry| entry.session_id != session_id);
             app.leader_roster
                 .retain(|entry| entry.session_id != session_id);
+            let attached_was_removed = app
+                .dashboard
+                .as_ref()
+                .and_then(|d| d.attached_agent)
+                .is_some_and(|id| to_remove.contains(&id));
             for id in to_remove {
                 remove_agent_and_cleanup(app, id);
             }
@@ -3182,6 +3581,9 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             if after == AfterSessionDelete::Dashboard {
                 if let Some(d) = app.dashboard.as_mut() {
                     d.delete_confirm = None;
+                    if attached_was_removed {
+                        d.close_popup();
+                    }
                     let selected_closed = d
                         .selected
                         .as_ref()
@@ -3211,16 +3613,36 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.show_toast(&format!("Couldn't delete session: {error}"));
             vec![]
         }
-        TaskResult::ContextInfoComplete { agent_id, info } => {
-            handle_context_info_complete(app, agent_id, info)
-        }
-        TaskResult::ContextInfoFailed { agent_id, error } => {
-            if let Some(agent) = app.agents.get_mut(&agent_id) {
-                agent
-                    .scrollback
-                    .push_block(crate::scrollback::block::RenderBlock::system(format!(
+        TaskResult::ContextInfoComplete {
+            agent_id,
+            session_id,
+            info,
+            nonce,
+        } => handle_context_info_complete(app, agent_id, &session_id, info, nonce),
+        TaskResult::ContextInfoFailed {
+            agent_id,
+            session_id,
+            error,
+            nonce,
+        } => {
+            let minimal = app.screen_mode.is_minimal();
+            let Some(agent) = app.agents.get_mut(&agent_id) else {
+                return vec![];
+            };
+            if agent.session.session_id.as_ref() != Some(&session_id) {
+                return vec![];
+            }
+            if let Some(state) = usage_modal_state_mut(agent) {
+                if state.fetch_nonce == nonce {
+                    state.context_error = Some(error);
+                }
+            } else if minimal {
+                push_and_page_flip(
+                    &mut agent.scrollback,
+                    crate::scrollback::block::RenderBlock::system(format!(
                         "Couldn't load context info: {error}"
-                    )));
+                    )),
+                );
             }
             vec![]
         }
@@ -3228,21 +3650,25 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             session_id,
             usage,
-        } => commit_session_usage_block(
+            nonce,
+        } => handle_session_usage_result(
             app,
             agent_id,
             &session_id,
             crate::app::status_blocks::session_usage_block_text(&usage),
+            nonce,
         ),
         TaskResult::SessionUsageFailed {
             agent_id,
             session_id,
             error,
-        } => commit_session_usage_block(
+            nonce,
+        } => handle_session_usage_result(
             app,
             agent_id,
             &session_id,
             format!("Couldn't load session usage: {error}"),
+            nonce,
         ),
         TaskResult::FeedbackComplete { .. } => vec![],
         TaskResult::FeedbackFailed { agent_id, error } => {
@@ -3693,15 +4119,6 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent.rewind_state = None;
             app.show_toast(&format!("Undo failed: {error}"));
             vec![]
-        }
-        TaskResult::RewindPreviewComplete {
-            agent_id,
-            response,
-            target_prompt_index,
-            mode,
-        } => handle_rewind_preview_complete(app, agent_id, response, target_prompt_index, mode),
-        TaskResult::RewindPreviewFailed { agent_id, error } => {
-            handle_rewind_preview_failed(app, agent_id, error)
         }
         TaskResult::RewindExecuteComplete { agent_id, response } => {
             dispatch_rewind_success(app, agent_id, response)

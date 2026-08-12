@@ -586,9 +586,12 @@ pub struct FeedbackContext {
 
 // ── Startup hints ───────────────────────────────────────────────────────
 
+// `pub` (not `pub(crate)`): carried by the public `SessionCommand` enum
+// (`UpdateAttachPolicy`), whose fields are reachable at `pub` — a
+// `pub(crate)` field type there trips the `private_interfaces` lint.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct StartupHints {
+pub struct StartupHints {
     /// Runtime-only previous-turn compaction metadata restored from summary.
     /// Never accepted from ACP client metadata.
     #[serde(skip)]
@@ -620,6 +623,15 @@ pub(crate) struct StartupHints {
     /// holds the parent's System and overwriting it would bust the cache prefix.
     #[serde(default)]
     pub preserve_inherited_system: bool,
+    /// Tool names (as the model sees them, e.g. `server__tool`) through which
+    /// this session delivers user-visible output. Declared by headless
+    /// surfaces whose users never see the model's plain-text responses —
+    /// output only reaches them via these tools. Opt-in: when empty (the
+    /// default), no behavior changes. Currently steers the MCP
+    /// connecting-reminder wording (`format_mcp_connecting_reminder`);
+    /// intended to also drive a turn-end delivery gate later.
+    #[serde(default)]
+    pub delivery_tools: Vec<String>,
     /// Runtime-only status sink used by AgentSwarm children to report
     /// provider rate-limit backoff without exposing nested swarm tools.
     #[serde(skip)]
@@ -633,6 +645,21 @@ pub(crate) struct StartupHints {
     /// re-enable delegation instructions after spawn.
     #[serde(skip)]
     pub multi_agent_policy_enabled: Option<bool>,
+}
+
+impl StartupHints {
+    /// Resolve the MCP init strategy for an attachment carrying these hints:
+    /// `MCP_INIT_STRATEGY` env override, else `Blocking` for non-interactive
+    /// sessions, else `Progressive`. Shared by the spawn path and the
+    /// resident re-attach path so both resolve identically.
+    pub(crate) fn resolve_mcp_strategy(&self) -> xai_grok_telemetry::enums::McpInitStrategy {
+        use xai_grok_telemetry::enums::McpInitStrategy;
+        match std::env::var("MCP_INIT_STRATEGY") {
+            Ok(v) if !v.trim().is_empty() => McpInitStrategy::from(v),
+            _ if self.non_interactive => McpInitStrategy::Blocking,
+            _ => McpInitStrategy::Progressive,
+        }
+    }
 }
 
 #[cfg(test)]

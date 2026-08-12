@@ -78,7 +78,7 @@ pub enum Action {
     ExitSession,
     /// Exit session without double-press confirmation (e.g., from command palette).
     ExitSessionConfirmed,
-    /// `/delete`: confirm, then delete history and return home.
+    /// `/delete`: confirm, then delete history; return to welcome, or dashboard when attached.
     DeleteCurrentSession,
     DeleteCurrentSessionAnswered {
         confirmed: bool,
@@ -501,6 +501,9 @@ pub enum Action {
     /// Select direct, mixed Code Mode, or Code Mode Only after Open Grok is
     /// restarted. SHELL-owned; persisted to `[ui].code_mode`.
     SetCodeMode(xai_grok_shell::agent::config::ToolModePreference),
+    /// Select Grok Imagine or OpenAI Images for new sessions after Open Grok
+    /// restarts. SHELL-owned; persisted to `[ui].image_generation_provider`.
+    SetImageGenerationProvider(xai_grok_shell::agent::config::ImageGenerationProvider),
     /// Toggle the ask_user_question timeout. SHELL-owned; persisted to
     /// `[toolset.ask_user_question].timeout_enabled`. Applies to new sessions.
     SetAskUserQuestionTimeoutEnabled(bool),
@@ -570,6 +573,8 @@ pub enum Action {
     SetTimeline(bool),
     /// Set `[ui].page_flip_on_send` (default ON). Persists via `Effect::PersistSetting`.
     SetPageFlipOnSend(bool),
+    /// Set `[ui].confirm_before_rewind` (default ON). Persists via `Effect::PersistSetting`.
+    SetConfirmBeforeRewind(bool),
     /// Set whether the drain call site merges the run of leading queued
     /// `Prompt` entries into one turn instead of sending them one by one.
     /// SHARED-owned: updates the process-wide cache mirror (read by the
@@ -643,6 +648,12 @@ pub enum Action {
     },
     /// Remove the UI-stored DeepSeek credential.
     ClearDeepSeekApiKey,
+    /// Save the Meta Model API key from the dedicated masked editor.
+    SetMetaApiKey {
+        key: crate::settings::SecretInput,
+    },
+    /// Remove the UI-stored Meta credential.
+    ClearMetaApiKey,
     SetOpenCodeGoApiKey {
         key: crate::settings::SecretInput,
     },
@@ -767,6 +778,8 @@ pub enum Action {
     OpenFireworksApiKeyEditor,
     /// Open Settings directly in the secure DeepSeek API-key editor.
     OpenDeepSeekApiKeyEditor,
+    /// Open Settings directly in the secure Meta API-key editor.
+    OpenMetaApiKeyEditor,
     OpenOpenCodeGoApiKeyEditor,
     /// Open Settings directly in the secure Wafer AI API-key editor.
     OpenWaferApiKeyEditor,
@@ -843,9 +856,9 @@ pub enum Action {
     },
     /// Enable swarm mode for exactly this prompt, then submit it normally.
     StartSwarmTask(String),
-    /// Enter feedback mode (visual prompt change, not a send).
-    EnterFeedbackMode,
-    /// Send feedback text collected in feedback mode.
+    /// Open the freeform feedback bottom pane (bare `/feedback`).
+    OpenFeedbackPane,
+    /// Submit feedback text (inline `/feedback <text>` or pane submit).
     SendFeedback(String),
     /// Enter remember mode (visual prompt change, not a send).
     EnterRememberMode,
@@ -1127,12 +1140,11 @@ pub enum Action {
     Rewind,
     RewindShowPicker,
     RewindPickerSelect(usize),
-    RewindSelectMode(crate::views::rewind::RewindMode, usize),
-    RewindConfirm(usize, crate::views::rewind::RewindMode),
-    RewindConversationOnlyConfirm(usize),
+    RewindConfirm(usize),
+    /// Confirm rewind and turn off `confirm_before_rewind` for future rewinds.
+    RewindConfirmNeverAsk(usize),
     RewindCancelOffer,
     RewindDismiss,
-    RewindBackToModeSelect,
     RewindDismissError,
     /// Submit an inline edit: conversation-only rewind to that prompt, then
     /// resubmit the edited text (state lives on `AgentView::inline_edit`).
@@ -1284,16 +1296,9 @@ impl PlanModeKind {
         if b { Self::On } else { Self::Off }
     }
 }
-/// Async side effect produced by [`super::dispatch::dispatch`].
-///
-/// The event loop spawns these into a `JoinSet`. When they complete,
-/// the result is wrapped in [`TaskResult`] and fed back through
-/// `Action::TaskComplete`.
-/// What user gesture triggered a turn cancel. Recorded on `session/cancel`'s
-/// `_meta.cancelTrigger` so the agent's `mid_turn_abort` telemetry can tell
-/// ESC from Ctrl+C (and a mouse click on the cancel button) apart. Free-form
-/// on the wire (the agent stores it in `cancellation_context`), so adding a
-/// variant needs no agent/schema change.
+/// What user gesture triggered a turn cancel; sent as `session/cancel`'s
+/// `_meta.cancelTrigger`. The shell's deny-list treats every gesture value
+/// as a stop, so new variants need no shell change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelTrigger {
     /// Wire value `"esc"` (bare Esc mid-turn cancel in minimal / non-vim
@@ -1303,6 +1308,9 @@ pub enum CancelTrigger {
     CtrlC,
     /// The on-screen cancel button was clicked.
     Mouse,
+    /// The dashboard's stop key (Ctrl+X), from the overlay or a busy row,
+    /// downgraded to a turn cancel.
+    DashboardStop,
 }
 impl CancelTrigger {
     /// Snake_case wire string sent as `_meta.cancelTrigger`.
@@ -1311,6 +1319,7 @@ impl CancelTrigger {
             Self::Esc => "esc",
             Self::CtrlC => "ctrl_c",
             Self::Mouse => "mouse",
+            Self::DashboardStop => "dashboard_stop",
         }
     }
 }
@@ -1530,11 +1539,14 @@ pub struct DoctorFixTarget {
 pub enum AfterSessionDelete {
     /// Picker delete — stay put.
     Stay,
-    /// `/delete` — return to welcome.
+    /// `/delete` from a standalone agent — return to welcome.
     Welcome,
-    /// Stay on the dashboard.
+    /// `/delete` from a dashboard-attached agent, or dashboard row delete.
     Dashboard,
 }
+/// Async side effect produced by [`super::dispatch::dispatch`]. The event
+/// loop spawns these into a `JoinSet`; completions come back through
+/// [`TaskResult`] as `Action::TaskComplete`.
 #[derive(Debug)]
 pub enum Effect {
     /// Create a new ACP session.
@@ -1583,6 +1595,11 @@ pub enum Effect {
         generation: u64,
         key: Option<crate::settings::SecretInput>,
     },
+    /// Update the Meta credential, then refresh (or clear) its Muse catalog.
+    UpdateMetaApiKey {
+        generation: u64,
+        key: Option<crate::settings::SecretInput>,
+    },
     UpdateOpenCodeGoApiKey {
         generation: u64,
         key: Option<crate::settings::SecretInput>,
@@ -1627,6 +1644,15 @@ pub enum Effect {
     /// Rebind one loaded DeepSeek session to the live credential without
     /// changing the user's preferred model setting.
     RebindDeepSeekModel {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        model_id: acp::ModelId,
+        effort: Option<ReasoningEffort>,
+        generation: u64,
+    },
+    /// Rebind one loaded Meta session to the live credential without changing
+    /// the user's preferred model setting.
+    RebindMetaModel {
         agent_id: AgentId,
         session_id: acp::SessionId,
         model_id: acp::ModelId,
@@ -1789,13 +1815,13 @@ pub enum Effect {
         /// programmatic cancels (login/reauth flows).
         trigger: Option<CancelTrigger>,
         /// Ask the shell to trim the in-flight prompt from session history when
-        /// the turn is still pristine (no server activity), sent as
-        /// `_meta.rewindIfPristine`. Set true ONLY when the pager has locally
+        /// the turn has produced no output yet, sent as
+        /// `_meta.rewindIfNoOutput`. Set true ONLY when the pager has locally
         /// rewound the prompt back into the composer, so the shell's history
         /// matches the UI. Without it the shell keeps the prompt plus an
         /// interruption marker, and a later resend pairs the kept copy with the
         /// resend — the send+Ctrl+C double-prompt bug.
-        rewind_if_pristine: bool,
+        rewind_if_no_output: bool,
     },
     /// Run a manual `/compact` command.
     Compact {
@@ -2182,11 +2208,15 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
         show_resolved_model: bool,
+        /// Usage-modal fetch generation; echoed back on the task result.
+        nonce: u64,
     },
     /// Fetch and display detailed context usage via x.ai/session/info.
     ShowContextInfo {
         agent_id: AgentId,
         session_id: acp::SessionId,
+        /// Usage-modal fetch generation; echoed back on the task result.
+        nonce: u64,
     },
     /// Fetch current bundle cache status via `x.ai/bundle/status`.
     FetchBundleStatus,
@@ -2366,28 +2396,25 @@ pub enum Effect {
         /// with `--fork-session`).
         new_session_id: Option<String>,
     },
-    /// Read the display title (and its `/rename` manual-ness) from local
-    /// `summary.json` (post-resume UI label + prompt-border title).
-    HydrateSessionTitleFromDisk {
+    /// Read session display fields from local `summary.json` after load/resume:
+    /// title (and `/rename` manual-ness) plus last-turn summary for the
+    /// dashboard secondary line.
+    HydrateSessionMetaFromDisk {
         agent_id: AgentId,
         session_id: acp::SessionId,
         cwd: std::path::PathBuf,
+        /// [`crate::app::agent_view::AgentView::last_turn_summary_gen`] at enqueue;
+        /// the disk result applies only when this still matches on completion.
+        last_turn_summary_gen: u64,
     },
     FetchRewindPoints {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
-    RewindPreview {
-        agent_id: AgentId,
-        session_id: acp::SessionId,
-        target_prompt_index: usize,
-        mode: crate::views::rewind::RewindMode,
-    },
     RewindExecute {
         agent_id: AgentId,
         session_id: acp::SessionId,
         target_prompt_index: usize,
-        mode: crate::views::rewind::RewindMode,
     },
     /// Fetch billing/credit usage from the agent's `x.ai/billing` extension.
     /// When `silent` is true the result updates `credit_balance` without
@@ -2396,6 +2423,9 @@ pub enum Effect {
     FetchBilling {
         agent_id: AgentId,
         silent: bool,
+        /// Usage-modal fetch generation (`0` = background refresh; those
+        /// never touch the modal's loading/error flags).
+        nonce: u64,
     },
     /// Fetch xAI billing and OpenAI Codex quota usage concurrently for the
     /// manual `/usage` summary. Each provider reports success independently.
@@ -2415,6 +2445,8 @@ pub enum Effect {
     FetchSessionUsage {
         agent_id: AgentId,
         session_id: acp::SessionId,
+        /// Usage-modal fetch generation; echoed back on the task result.
+        nonce: u64,
     },
     /// Re-fetch remote settings to check subscription gate.
     RefreshGate,
@@ -2513,6 +2545,20 @@ pub enum DoctorPlanningOutcome {
 /// Result from a completed async [`Effect`].
 ///
 /// Wrapped in `Action::TaskComplete` and dispatched synchronously.
+impl TaskResult {
+    /// True for results that deliver the first usable session. A quit
+    /// before dispatch abandons instead of recording; accepted so the
+    /// token stays single-owner.
+    pub fn ends_startup(&self) -> bool {
+        matches!(
+            self,
+            TaskResult::SessionCreated { .. }
+                | TaskResult::SessionLoaded { .. }
+                | TaskResult::WorktreeSessionCreated { .. }
+                | TaskResult::WorktreeForked { .. }
+        )
+    }
+}
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum TaskResult {
@@ -2580,6 +2626,15 @@ pub enum TaskResult {
         error: Option<String>,
         models: Option<acp::SessionModelState>,
     },
+    /// Completion of a Meta credential update and Muse catalog refresh.
+    MetaApiKeyUpdated {
+        configured: bool,
+        generation: u64,
+        stale: bool,
+        warning: Option<String>,
+        error: Option<String>,
+        models: Option<acp::SessionModelState>,
+    },
     OpenCodeGoModelsUpdated {
         configured: Option<bool>,
         mutation: bool,
@@ -2611,6 +2666,15 @@ pub enum TaskResult {
     },
     /// Completion of an automatic DeepSeek sampler/model rebind.
     DeepSeekModelRebindComplete {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        model_id: acp::ModelId,
+        effort: Option<ReasoningEffort>,
+        generation: u64,
+        result: Result<(), SwitchModelError>,
+    },
+    /// Completion of an automatic Meta sampler/model rebind.
+    MetaModelRebindComplete {
         agent_id: AgentId,
         session_id: acp::SessionId,
         model_id: acp::ModelId,
@@ -2674,6 +2738,9 @@ pub enum TaskResult {
         code_restored: bool,
         restore_summary: Option<String>,
         restore_degree: Option<xai_grok_workspace::session::git::RestoreDegree>,
+        /// Resume/parent id this worktree was created from (`load_session_id`).
+        /// Used to retarget one-shot restore-code suppress onto the child.
+        resume_session_id: Option<String>,
     },
     /// Worktree session creation failed.
     WorktreeSessionFailed {
@@ -2712,13 +2779,18 @@ pub enum TaskResult {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
-    /// Local `summary.json` title read for [`Effect::HydrateSessionTitleFromDisk`].
-    SessionTitleFromDisk {
+    /// Local `summary.json` display fields for [`Effect::HydrateSessionMetaFromDisk`].
+    SessionMetaFromDisk {
         agent_id: AgentId,
         /// The display title paired with whether it came from a manual
         /// `/rename` (`summary.title_is_manual`, restores the prompt-border
         /// title) — manual-ness cannot exist without a title.
         title: Option<(String, bool)>,
+        /// Persisted per-turn dashboard summary, so a resumed session's row
+        /// shows it without waiting for the next turn.
+        last_turn_summary: Option<String>,
+        /// Generation captured when the hydrate effect was enqueued.
+        last_turn_summary_gen: u64,
     },
     /// Session list fetched for the welcome screen picker.
     SessionListLoaded {
@@ -3045,13 +3117,17 @@ pub enum TaskResult {
     /// Session info fetched successfully.
     SessionInfoComplete {
         agent_id: AgentId,
+        session_id: acp::SessionId,
         info: Box<xai_grok_shell::session::SessionInfoResponse>,
         text: String,
+        nonce: u64,
     },
     /// Session info fetch failed.
     SessionInfoFailed {
         agent_id: AgentId,
+        session_id: acp::SessionId,
         error: String,
+        nonce: u64,
     },
     /// Coding data sharing preference updated.
     CodingDataSharingUpdated {
@@ -3088,33 +3164,39 @@ pub enum TaskResult {
         session_id: String,
         error: String,
     },
-    /// Context info fetched successfully.
+    /// Context info fetched successfully. Drop if `session_id` no longer matches.
     ContextInfoComplete {
         agent_id: AgentId,
+        session_id: acp::SessionId,
         info: Box<xai_grok_shell::session::SessionInfoResponse>,
+        nonce: u64,
     },
-    /// Context info fetch failed.
+    /// Context info fetch failed. Drop if `session_id` no longer matches.
     ContextInfoFailed {
         agent_id: AgentId,
+        session_id: acp::SessionId,
         error: String,
+        nonce: u64,
     },
     /// `/usage` session ledger fetched. Drop if `session_id` no longer matches.
     SessionUsageComplete {
         agent_id: AgentId,
         session_id: acp::SessionId,
         usage: Box<xai_grok_shell::extensions::notification::PromptUsage>,
+        nonce: u64,
     },
     /// `/usage` session ledger fetch failed. Drop if `session_id` no longer matches.
     SessionUsageFailed {
         agent_id: AgentId,
         session_id: acp::SessionId,
         error: String,
+        nonce: u64,
     },
     /// Feedback submitted successfully (fire-and-forget).
     FeedbackComplete {
         agent_id: AgentId,
     },
-    /// Feedback submission failed.
+    /// Feedback submission failed. The shell already persisted the report locally, so only the error is surfaced.
     FeedbackFailed {
         agent_id: AgentId,
         error: String,
@@ -3256,6 +3338,9 @@ pub enum TaskResult {
         agent_id: AgentId,
         new_session_id: acp::SessionId,
         cwd: std::path::PathBuf,
+        /// Parent session id the fork was taken from (for one-shot
+        /// restore-code suppress retarget).
+        parent_session_id: acp::SessionId,
     },
     /// `x.ai/session/fork` failed. The placeholder agent stays in
     /// `app.agents` with no `session_id` so the user can switch away.
@@ -3268,16 +3353,6 @@ pub enum TaskResult {
         points: Vec<crate::views::rewind::RewindPointInfo>,
     },
     RewindPointsFailed {
-        agent_id: AgentId,
-        error: String,
-    },
-    RewindPreviewComplete {
-        agent_id: AgentId,
-        response: crate::views::rewind::RewindResponse,
-        target_prompt_index: usize,
-        mode: crate::views::rewind::RewindMode,
-    },
-    RewindPreviewFailed {
         agent_id: AgentId,
         error: String,
     },
@@ -3299,6 +3374,8 @@ pub enum TaskResult {
         subscription_tier: Option<String>,
         /// Auto top-up rule fetch result; `Unchanged` keeps any cached rule.
         autotopup: crate::views::credit_bar::AutoTopupFetch,
+        /// Usage-modal fetch generation (`0` = background refresh).
+        nonce: u64,
     },
     /// Both independently fetched halves of a manual `/usage` request.
     UsageFetched {
@@ -3320,6 +3397,8 @@ pub enum TaskResult {
         error: String,
         /// When true, swallow the error silently (background refresh).
         silent: bool,
+        /// Usage-modal fetch generation (`0` = background refresh).
+        nonce: u64,
     },
     /// Debounce timer for shell suggestions expired. Routed by the arming
     /// `agent_id`, like the sibling `PluginCtaDebounceExpired`.

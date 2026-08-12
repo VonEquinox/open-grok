@@ -486,8 +486,9 @@ pub const MAX_LABEL_LEN: usize = 64;
 pub const MAX_COLLISION_SUFFIX: u32 = 100;
 
 /// Metadata key for the human-readable worktree label.
-pub const META_KEY_LABEL: &str = "label";
-/// Metadata key for whether the label was user-provided.
+pub use xai_fast_worktree::META_KEY_LABEL;
+/// Metadata key for whether the label was user-provided. Unlike
+/// META_KEY_LABEL, no record consumer below this crate reads it.
 pub const META_KEY_USER_PROVIDED: &str = "user_provided";
 
 /// Sanitize a user-provided label into a filesystem-safe directory name.
@@ -739,12 +740,7 @@ pub(crate) fn source_repo_for_cwd(cwd: &str) -> Option<std::path::PathBuf> {
 /// non-worktree paths or when the DB is unavailable.
 pub fn lookup_worktree_label(cwd: &str) -> Option<String> {
     let (_db, record) = worktree_record_for_cwd(cwd)?;
-    record
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get(META_KEY_LABEL))
-        .and_then(|v| v.as_str())
-        .map(String::from)
+    record.label().map(String::from)
 }
 
 /// Record activity on the worktree containing `cwd` (best-effort, infallible).
@@ -2456,7 +2452,7 @@ pub fn worktree_auto_gc_layer_from_settings(
     }
 }
 
-/// Env + `$GROK_HOME/config.toml` only — **`remote=None` is intentional**.
+/// Env + `$OPENGROK_HOME/config.toml` only — **`remote=None` is intentional**.
 ///
 /// Workspace handle startup has no remote-settings blob (unlike shell agent
 /// init, which resolves env > TOML > remote). Remote `worktree_auto_gc`
@@ -2507,7 +2503,7 @@ pub fn worktree_db_rebuild() -> Result<xai_fast_worktree::RebuildReport> {
 
 pub fn worktree_db_path() -> Result<std::path::PathBuf> {
     let home = resolve_grok_home()?;
-    Ok(home.join("worktrees.db"))
+    Ok(WorktreeDb::resolve_db_path(&home))
 }
 
 /// Resolve an ID-or-path string to a worktree path via DB lookup,

@@ -100,6 +100,7 @@ pub fn conversation_to_row(c: Conversation, reg: &FacetRegistry) -> UnifiedRow {
         git_root_dir: None,
         git_remotes: Vec::new(),
         source_workspace_dir: None,
+        last_turn_summary: None,
         session_kind: None,
     };
     UnifiedRow {

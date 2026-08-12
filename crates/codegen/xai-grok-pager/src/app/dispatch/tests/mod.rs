@@ -76,6 +76,7 @@ use std::time::Instant;
 fn test_app() -> AppView {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     AppView {
+        pending_startup: None,
         active_view: ActiveView::Welcome,
         auth_return_view: None,
         agents: IndexMap::new(),
@@ -99,6 +100,9 @@ fn test_app() -> AppView {
         deepseek_operation_generation: 0,
         deepseek_runtime_update_pending: false,
         pending_deepseek_rebind_agents: Default::default(),
+        meta_operation_generation: 0,
+        meta_runtime_update_pending: false,
+        pending_meta_rebind_agents: Default::default(),
         wafer_operation_generation: 0,
         wafer_runtime_update_pending: false,
         pending_wafer_rebind_agents: Default::default(),
@@ -168,6 +172,7 @@ fn test_app() -> AppView {
         new_session_worktree_mode: crate::app::app_view::WorktreeMode::Never,
         fork_worktree_mode: crate::app::app_view::WorktreeMode::Ask,
         restore_code: None,
+        suppress_code_restore_once: None,
         resume_local_miss: None,
         agent_override: None,
         bootstrap_acp_commands: Vec::new(),
@@ -809,6 +814,7 @@ fn make_picker_entry(id: &str, cwd: &str) -> crate::app::app_view::SessionPicker
         branch: None,
         repo_name: "repo".into(),
         worktree_label: None,
+        last_turn_summary: None,
         card_detail: None,
     }
 }

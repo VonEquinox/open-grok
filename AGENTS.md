@@ -15,7 +15,7 @@ Instructions for AI coding agents (and humans) working in this repository.
 | Public binary | `open-grok` (not `grok`) |
 | User state | `$OPENGROK_HOME` or `~/.opengrok` — **never** `~/.grok` |
 | Project config | `.opengrok/` in the repo |
-| Language | Rust (edition 2024), toolchain pin in `rust-toolchain.toml` |
+| Language | Rust (edition 2024), Rust 1.94.0 pin in `rust-toolchain.toml` |
 | Root `Cargo.toml` | **Generated / read-only** — edit per-crate `Cargo.toml` only |
 
 Open Grok is **not** affiliated with xAI or OpenAI. Credentials, sessions, skills, plugins, and caches are **fully isolated** from upstream Grok Build installs.
@@ -116,6 +116,7 @@ Subagents **inherit** the parent `PermissionHandle` (including always-approve). 
 - Spawn via `task` / spawn_subagent tool → `SubagentCoordinator`.
 - Optional worktree isolation (`xai-fast-worktree` + workspace worktree).
 - Children are full sessions; usage folds back into parent.
+- A user message during `agent_swarm` steers without cancelling: the cohort detaches into `SwarmRegistry`, the model keeps working, and `swarm_wait` rejoins later.
 - Flat-team mailbox tools (`list_agents`, `send_message`, `followup_task`,
   `wait_agent`) let live children coordinate without exposing peer transcripts.
 - Deep map: [`docs/agents/subagents.md`](docs/agents/subagents.md).
@@ -180,7 +181,10 @@ After any non-xAI profile that denies xAI services, the session export boundary 
 ### 5.3 After coding
 
 ```sh
-# Focused checks (prefer package-scoped)
+# Default compile validation: package-scoped and non-linking
+cargo check --locked -p <crate>
+
+# Focused lint/tests when the change requires them
 cargo fmt --all -- --check
 cargo clippy --locked -p <crate> --all-targets
 cargo test --locked -p <crate> -- <filter>
@@ -192,6 +196,8 @@ cargo test --locked -p <crate> -- <filter>
 See [`docs/agents/development.md`](docs/agents/development.md) for full build/test/release commands.
 
 Interpret failures before broadening the patch: the Rust workspace has long compile/link phases and some suites share global state. Re-run a failing test alone to distinguish a deterministic regression from suite interference, but do not hide repeatable failures. Run `bash -n` on changed shell scripts. Use an isolated `OPENGROK_HOME` for tests and installer smokes.
+
+Routine editor and agent validation must default to package-scoped `cargo check`, not `cargo build`, `cargo test`, or workspace-wide checks. Cargo is configured to use its machine-aware logical-CPU default; do not add a fixed `-j` cap unless diagnosing resource contention. Run explicit builds/tests only when their linked artifacts or behavior are needed.
 
 ### 5.4 History-backed completion contracts
 

@@ -1630,7 +1630,10 @@ impl ConversationRequest {
                     // DeepSeek Responses has no opaque provider-native history
                     // carriers today; keep the match explicit so new dialects
                     // fail closed until their replay contract is defined.
-                    (Some(crate::ResponsesDialect::DeepSeek), _) => None,
+                    (
+                        Some(crate::ResponsesDialect::DeepSeek | crate::ResponsesDialect::Meta),
+                        _,
+                    ) => None,
                     _ => None,
                 };
                 if let Some(value) = value {
@@ -2960,26 +2963,24 @@ pub fn upgrade_legacy_reasoning(
                 rs::OutputItem::Reasoning(r) => {
                     siblings.push(ConversationItem::Reasoning(r));
                 }
-                rs::OutputItem::WebSearchCall(ws) => {
-                    if sibling_btc_ids_seen.insert(ws.id.clone()) {
-                        siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
-                            kind: BackendToolKind::WebSearch(ws),
-                        }));
-                    }
+                rs::OutputItem::WebSearchCall(ws) if sibling_btc_ids_seen.insert(ws.id.clone()) => {
+                    siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
+                        kind: BackendToolKind::WebSearch(ws),
+                    }));
                 }
-                rs::OutputItem::CustomToolCall(ct) => {
-                    if sibling_btc_ids_seen.insert(ct.id.clone()) {
-                        siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
-                            kind: BackendToolKind::XSearch(ct),
-                        }));
-                    }
+                rs::OutputItem::CustomToolCall(ct)
+                    if sibling_btc_ids_seen.insert(ct.id.clone()) =>
+                {
+                    siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
+                        kind: BackendToolKind::XSearch(ct),
+                    }));
                 }
-                rs::OutputItem::CodeInterpreterCall(ci) => {
-                    if sibling_btc_ids_seen.insert(ci.id.clone()) {
-                        siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
-                            kind: BackendToolKind::CodeInterpreter(ci),
-                        }));
-                    }
+                rs::OutputItem::CodeInterpreterCall(ci)
+                    if sibling_btc_ids_seen.insert(ci.id.clone()) =>
+                {
+                    siblings.push(ConversationItem::BackendToolCall(BackendToolCallItem {
+                        kind: BackendToolKind::CodeInterpreter(ci),
+                    }));
                 }
                 _ => {}
             }
@@ -3829,6 +3830,7 @@ impl From<ConversationRequest> for ChatCompletionRequest {
             search_parameters: None,
             response_format,
             reasoning_effort: req.reasoning_effort,
+            service_tier: req.service_tier,
             x_grok_conv_id: req.x_grok_conv_id,
             x_grok_req_id: req.x_grok_req_id,
             x_grok_session_id: req.x_grok_session_id,
@@ -5605,7 +5607,24 @@ mod compaction_item_bridge_tests {
 mod tests {
     use super::*;
     use crate::tool_overrides::*;
+    use crate::{ReasoningEffort, SERVICE_TIER_FAST_REQUEST_VALUE};
     use assert_matches::assert_matches;
+
+    #[test]
+    fn chat_completions_forwards_reasoning_effort_and_service_tier() {
+        let request = ConversationRequest {
+            items: vec![ConversationItem::user("hi")],
+            model: Some("reasoning-model".to_owned()),
+            reasoning_effort: Some(ReasoningEffort::High),
+            service_tier: Some(SERVICE_TIER_FAST_REQUEST_VALUE.to_owned()),
+            ..Default::default()
+        };
+
+        let wire = serde_json::to_value(ChatCompletionRequest::from(request)).unwrap();
+
+        assert_eq!(wire["reasoning_effort"], "high");
+        assert_eq!(wire["service_tier"], SERVICE_TIER_FAST_REQUEST_VALUE);
+    }
 
     /// Keeps `forwards_prompt_cache_key()` honest against each mapping: a key that never reaches the wire looks like a 0% cache hit, not a bug.
     #[test]

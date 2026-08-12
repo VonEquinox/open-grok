@@ -181,6 +181,18 @@ pub struct SubagentRequest {
     pub cancel_token: CancellationToken,
 }
 
+impl SubagentRequest {
+    pub fn from_scheduler_loop(&self) -> bool {
+        self.runtime_overrides.loop_task_id.is_some()
+    }
+
+    /// The caller blocks on the foreground await budget (neither backgrounded
+    /// nor awaiting to completion).
+    pub fn awaits_in_foreground(&self) -> bool {
+        !self.run_in_background && !self.await_to_completion
+    }
+}
+
 /// Team identity injected into every model-facing session.
 ///
 /// `agent_id` is the current session ID. `team_scope_id` is the root session
@@ -195,6 +207,10 @@ pub struct AgentMailboxIdentity {
 
 register_resource!("grok_build", "AgentMailboxIdentity", AgentMailboxIdentity);
 
+/// `Message` is the steering channel: it is pushed into the recipient session
+/// live (a running turn consumes it at an interjection boundary; an idle
+/// recipient starts an agent-message turn). `FollowupTask` is the passive
+/// queue: it waits in the recipient's mailbox until drained via `wait_agent`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -205,8 +221,8 @@ pub enum AgentMailboxMessageKind {
 }
 
 impl AgentMailboxMessageKind {
-    pub fn wakes_recipient(self) -> bool {
-        matches!(self, Self::FollowupTask)
+    pub fn steers_recipient(self) -> bool {
+        matches!(self, Self::Message)
     }
 }
 
@@ -906,6 +922,8 @@ pub struct SubagentRegistryCounts {
     pub pending: usize,
     pub active: usize,
     pub completed: usize,
+    /// Spawns parked at the session's concurrent limit, not yet started.
+    pub queued: usize,
 }
 
 #[derive(Educe)]
@@ -1094,9 +1112,12 @@ pub enum SubagentEvent {
     ListActive(SubagentListActiveRequest),
     ListRunning(SubagentListRunningRequest),
     Completions(SubagentCompletionsRequest),
-    /// Discard a closed session's buffered completions and cancel its children.
+    /// Cancel children of `parent_session_id` and drop its buffered completions.
+    /// `respond_to`, if set, resolves when no children remain (caller should
+    /// time-bound the wait).
     TeardownSession {
         parent_session_id: String,
+        respond_to: Option<oneshot::Sender<()>>,
     },
     /// Re-open Task spawns for a parent session after a prior ParentSession stop.
     /// Emitted at the start of each user turn so Stop's late-spawn gate does not
@@ -1256,6 +1277,67 @@ register_resource!(
     "grok_build",
     "SubagentForegroundWait",
     SubagentForegroundWait
+);
+
+/// Host signal that a user message arrived while an orchestration wait is held.
+///
+/// `agent_swarm` (and `swarm_wait`) select on this to detach the cohort and
+/// return control to the model without cancelling live members.
+#[derive(Clone, Default)]
+pub struct OrchestrationSteerSignal {
+    inner: Arc<OrchestrationSteerInner>,
+}
+
+#[derive(Default)]
+struct OrchestrationSteerInner {
+    notify: tokio::sync::Notify,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl OrchestrationSteerSignal {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Generation observed before waiting; a later [`Self::fire`] advances it.
+    pub fn generation(&self) -> u64 {
+        self.inner
+            .generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Wake every parked orchestration wait so the cohort can detach.
+    pub fn fire(&self) {
+        self.inner
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.notify.notify_waiters();
+    }
+
+    /// Resolve once [`Self::fire`] advances the generation past `seen`.
+    pub async fn wait_after(&self, seen: u64) {
+        loop {
+            let notified = self.inner.notify.notified();
+            if self.generation() > seen {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl std::fmt::Debug for OrchestrationSteerSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrchestrationSteerSignal")
+            .field("generation", &self.generation())
+            .finish()
+    }
+}
+
+register_resource!(
+    "grok_build",
+    "OrchestrationSteerSignal",
+    OrchestrationSteerSignal
 );
 
 /// Carries the current parent prompt/turn ID for TaskTool subagent scoping.

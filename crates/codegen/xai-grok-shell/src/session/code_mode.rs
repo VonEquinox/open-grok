@@ -75,6 +75,7 @@ pub(crate) fn is_code_mode_direct_only_tool(name: &str) -> bool {
             | "task"
             | "spawn_subagent"
             | "agent_swarm"
+            | "swarm_wait"
             | "workflow"
             | "get_task_output"
             | "get_command_or_subagent_output"
@@ -1631,6 +1632,7 @@ mod tests {
             "task",
             "spawn_subagent",
             "agent_swarm",
+            "swarm_wait",
             "workflow",
             "get_task_output",
             "get_command_or_subagent_output",

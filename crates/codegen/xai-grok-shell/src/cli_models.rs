@@ -41,7 +41,7 @@ pub async fn list_models(
     client_type: &str,
     client_version: &str,
 ) -> Result<acp::SessionModelState> {
-    let init_resp: acp::InitializeResponse = acp_send(
+    let _init: acp::InitializeResponse = acp_send(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)
             .client_capabilities(
                 acp::ClientCapabilities::new()
@@ -60,14 +60,29 @@ pub async fn list_models(
     )
     .await?;
 
-    let model_state = init_resp
-        .meta
-        .and_then(|m| m.get("modelState").cloned())
-        .ok_or_else(|| anyhow::anyhow!("InitializeResponse missing modelState"))?;
-    let state: acp::SessionModelState = serde_json::from_value(model_state)
-        .map_err(|e| anyhow::anyhow!("Failed to parse modelState: {}", e))?;
+    fetch_model_state(acp_tx).await
+}
 
-    Ok(state)
+/// Fetch model state via `x.ai/models/list` over an initialized channel.
+pub async fn fetch_model_state(acp_tx: &AcpAgentTx) -> Result<acp::SessionModelState> {
+    let params = serde_json::value::to_raw_value(&serde_json::json!({}))?;
+    let resp: acp::ExtResponse = acp_send(
+        acp::ExtRequest::new("x.ai/models/list", params.into()),
+        acp_tx,
+    )
+    .await?;
+    parse_models_list_response(resp.0.get())
+}
+
+fn parse_models_list_response(raw: &str) -> Result<acp::SessionModelState> {
+    let parsed: crate::session::ExtMethodResult<acp::SessionModelState> =
+        serde_json::from_str(raw)?;
+    if let Some(err) = parsed.error {
+        anyhow::bail!("models/list failed: {err}");
+    }
+    parsed
+        .result
+        .ok_or_else(|| anyhow::anyhow!("models/list response missing result"))
 }
 
 #[cfg(test)]

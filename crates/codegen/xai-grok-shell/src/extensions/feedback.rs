@@ -54,10 +54,7 @@ async fn handle_btw(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 
     let req: BtwRequest = parse_params(args)?;
     let sid: acp::SessionId = req.session_id.clone().into();
-    let session_handle = {
-        let sessions = agent.sessions.borrow();
-        sessions.get(&sid).cloned()
-    };
+    let session_handle = agent.resident_handle(&sid);
     let Some(session) = session_handle else {
         return Err(
             acp::Error::invalid_params().data(format!("session not found: {}", req.session_id))
@@ -130,7 +127,7 @@ async fn handle_feedback(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult 
                 };
 
             let session_id = acp::SessionId::new(feedback_input.session_id.clone());
-            let session_handle = agent.sessions.borrow().get(&session_id).cloned();
+            let session_handle = agent.resident_handle(&session_id);
 
             let (model_id, model_metadata) = if let Some(ref session) = session_handle {
                 let (tx1, rx1) = tokio::sync::oneshot::channel();
@@ -296,7 +293,7 @@ async fn handle_feedback(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult 
         "x.ai/feedback/dismiss" => {
             let dismiss_input: FeedbackRequestDismiss = parse_params(args)?;
             let session_id = acp::SessionId::new(dismiss_input.session_id.clone());
-            let session_handle = agent.sessions.borrow().get(&session_id).cloned();
+            let session_handle = agent.resident_handle(&session_id);
             let allows_xai_export = session_handle
                 .as_ref()
                 .is_some_and(|handle| handle.feedback_manager.allows_xai_export());
@@ -391,11 +388,8 @@ async fn handle_review(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     match args.method.as_ref() {
         "x.ai/review/comment" => {
             let request: CommentRequest = parse_params(args)?;
-            let session_handle = agent
-                .sessions
-                .borrow()
-                .get(&acp::SessionId::new(request.session_id.clone()))
-                .cloned();
+            let session_handle =
+                agent.resident_handle(&acp::SessionId::new(request.session_id.clone()));
             let provider_boundary = session_handle
                 .as_ref()
                 .map(|handle| handle.feedback_manager.provider_boundary());
@@ -423,12 +417,13 @@ async fn handle_review(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             });
 
-            if provider_boundary
-                .as_ref()
-                .is_some_and(|boundary| boundary.allows_xai_export())
-                && let Some(gcs_config) = agent
-                    .build_gcs_config(format!("{}/comments", request.session_id))
-                    .await
+            if provider_boundary.as_ref().is_some_and(
+                |boundary: &crate::session::persistence::ProviderBoundary| {
+                    boundary.allows_xai_export()
+                },
+            ) && let Some(gcs_config) = agent
+                .build_gcs_config(format!("{}/comments", request.session_id))
+                .await
             {
                 let json_bytes = serde_json::to_vec_pretty(&record)
                     .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
@@ -473,11 +468,8 @@ async fn handle_review(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         }
         "x.ai/review/comment/delete" => {
             let request: CommentDeleteRequest = parse_params(args)?;
-            let session_handle = agent
-                .sessions
-                .borrow()
-                .get(&acp::SessionId::new(request.session_id.clone()))
-                .cloned();
+            let session_handle =
+                agent.resident_handle(&acp::SessionId::new(request.session_id.clone()));
             let provider_boundary = session_handle
                 .as_ref()
                 .map(|handle| handle.feedback_manager.provider_boundary());
@@ -497,12 +489,13 @@ async fn handle_review(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             });
 
-            if provider_boundary
-                .as_ref()
-                .is_some_and(|boundary| boundary.allows_xai_export())
-                && let Some(gcs_config) = agent
-                    .build_gcs_config(format!("{}/comments", request.session_id))
-                    .await
+            if provider_boundary.as_ref().is_some_and(
+                |boundary: &crate::session::persistence::ProviderBoundary| {
+                    boundary.allows_xai_export()
+                },
+            ) && let Some(gcs_config) = agent
+                .build_gcs_config(format!("{}/comments", request.session_id))
+                .await
             {
                 let json_bytes = serde_json::to_vec_pretty(&record)
                     .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;

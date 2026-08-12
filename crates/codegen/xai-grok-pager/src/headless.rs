@@ -22,6 +22,7 @@ use xai_grok_shell::sampling::types::{
     REASONING_EFFORT_META_KEY, parse_canonical_effort_token, reasoning_effort_meta_value,
 };
 use xai_grok_shell::util::config as cli_config;
+use xai_grok_telemetry::startup::PendingStartup;
 
 use crate::acp::model_state::{EffortTokenError, ModelState};
 use crate::acp::spawn::{AgentShutdownGuard, spawn_grok_shell};
@@ -33,7 +34,7 @@ use crate::headless::reducer::{
 
 mod ext_protocol;
 mod reducer;
-use ext_protocol::{ExtEvent, handle_ext_notification};
+use ext_protocol::{ExtEvent, handle_ext_notification, reply_headless_ext_method};
 
 mod cli;
 pub use cli::{HeadlessPrompt, OutputFormat, parse_json_schema, parse_permission_rules_lenient};
@@ -607,8 +608,8 @@ async fn open_session(
                 .meta({
                     let mut m = acp::Meta::new();
                     m.insert("noReplay".into(), serde_json::Value::Bool(true));
-                    if let Some(true) = restore_code {
-                        m.insert("x.ai/restore_code".into(), serde_json::Value::Bool(true));
+                    if let Some(rc) = restore_code {
+                        m.insert("x.ai/restore_code".into(), serde_json::Value::Bool(rc));
                     }
                     if let Some(model_id) = initial_model_id {
                         m.insert(
@@ -833,13 +834,14 @@ async fn apply_headless_model_and_effort(
 
 /// Startup-materialization context for headless (`-p`) runs. Never chat:
 /// `HeadlessOptions` carries no chat flag, so headless resume targets are
-/// always disk/GCS Build sessions.
+/// always disk/GCS Build sessions. `--worktree` is ignored here: headless
+/// never creates a worktree, so remote miss must not take `DeferToWorktree`.
 fn headless_materialize_ctx(
-    has_worktree: bool,
     resume_title_pinned: bool,
+    restore_code: bool,
 ) -> crate::app::session_startup::MaterializeCtx {
     crate::app::session_startup::MaterializeCtx {
-        has_worktree,
+        has_worktree: false,
         allow_remote_restore:
             crate::app::session_startup::MaterializeCtx::default_allow_remote_restore(),
         chat_mode: false,
@@ -848,6 +850,8 @@ fn headless_materialize_ctx(
         } else {
             crate::app::session_startup::TitleResolution::Allowed
         },
+        restore_code,
+        restore_progress_on_stdout: false,
     }
 }
 
@@ -933,6 +937,18 @@ pub async fn run_single_turn(
         agent_config.cli_agents = parse_cli_agents(json)?;
     }
 
+    let mut pending_startup = Some(PendingStartup::new());
+    let timer = xai_grok_telemetry::startup::begin(crate::acp::Owner::Client);
+    let mut report_startup_failure = |timer: &crate::acp::StartupTimer| {
+        timer.emit_telemetry(
+            crate::acp::AgentKind::Embedded,
+            crate::acp::StartupOutcome::Error,
+            None,
+            false,
+        );
+        PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
+    };
+
     // Materialize resume/fork intent before authentication so provider auth is
     // chosen from the persisted session model, not an unrelated configured
     // default. This remains the same startup plan consumed below.
@@ -945,16 +961,20 @@ pub async fn run_single_turn(
         resume_most_recent,
         continue_last_session: options.continue_last_session,
         fork_session: options.fork_session,
-        has_worktree: options.worktree.is_some(),
+        // Headless never creates a worktree from `-w`.
+        has_worktree: false,
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     let cwd_str = cwd.to_string_lossy().to_string();
     let materialized = session_startup::materialize_startup_for_cwd(
-        headless_materialize_ctx(options.worktree.is_some(), options.resume_title_pinned),
+        headless_materialize_ctx(options.resume_title_pinned, options.restore_code),
         intent,
         &cwd_str,
     )
-    .await?;
+    .await
+    .inspect_err(|_| {
+        report_startup_failure(&timer);
+    })?;
     let persisted_model = match &materialized {
         MaterializedStartup::Resume { session_id, .. } => {
             persisted_summary_by_session_id(session_id)
@@ -1040,6 +1060,7 @@ pub async fn run_single_turn(
     let spawned = match spawn_grok_shell(agent_config, &cancel, memory_config).await {
         Ok(s) => s,
         Err(e) => {
+            report_startup_failure(&timer);
             let msg = format!("Couldn't start session: {e}");
             emitter.on_error(&msg, None);
             anyhow::bail!("{msg}");
@@ -1060,9 +1081,11 @@ pub async fn run_single_turn(
         options.rules.as_deref(),
         options.system_prompt_override.as_deref(),
     );
+    xai_grok_telemetry::startup::enter(crate::acp::StartupPhase::AcpInitialize);
     let init_resp: acp::InitializeResponse = match acp_send(init_req, &acp_tx).await {
         Ok(r) => r,
         Err(e) => {
+            report_startup_failure(&timer);
             let msg = format!("Couldn't initialize: {e}");
             emitter.on_error(&msg, None);
             anyhow::bail!("{msg}");
@@ -1077,6 +1100,7 @@ pub async fn run_single_turn(
     // legacy ACP gate (`provider_auth_override`); xAI uses the agent's
     // `defaultAuthMethodId` (preferred_method pin).
     let t_auth = Instant::now();
+    xai_grok_telemetry::startup::enter(crate::acp::StartupPhase::EagerAuth);
     let default_auth_method_id = crate::acp::parse_default_auth_method_id(init_resp.meta.as_ref());
     let auth_result = match provider_auth_override {
         Some(result) => result,
@@ -1092,6 +1116,7 @@ pub async fn run_single_turn(
     let is_api_key_auth = match auth_result {
         Ok(is_api_key) => is_api_key,
         Err(e) => {
+            report_startup_failure(&timer);
             emitter.on_error(&e.to_string(), None);
             return Err(e);
         }
@@ -1100,10 +1125,29 @@ pub async fn run_single_turn(
         elapsed_ms = t_auth.elapsed().as_millis() as u64,
         "headless: authenticate complete"
     );
+    // Connect ends here; session phases stay out of the phase histogram.
+    timer.emit_telemetry(
+        crate::acp::AgentKind::Embedded,
+        crate::acp::StartupOutcome::Ok,
+        None,
+        false,
+    );
 
-    // Open session
-    let restore_code = options.restore_code.then_some(true);
+    // Open session (reuse early materialization; honor suppress_code_restore).
+
+    let restore_code = match &materialized {
+        MaterializedStartup::Resume {
+            suppress_code_restore: true,
+            ..
+        }
+        | MaterializedStartup::Fork {
+            suppress_code_restore: true,
+            ..
+        } => Some(false),
+        _ => options.restore_code.then_some(true),
+    };
     let t_session = Instant::now();
+    xai_grok_telemetry::startup::enter(crate::acp::StartupPhase::SessionCreate);
     let opened = match materialized {
         MaterializedStartup::NewAuto => {
             open_session(&acp_tx, &cwd, None, None, explicit_initial_model).await
@@ -1151,11 +1195,13 @@ pub async fn run_single_turn(
     } = match opened {
         Ok(v) => v,
         Err(e) => {
+            PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
             let msg = format!("Couldn't create session: {e}");
             emitter.on_error(&msg, None);
             anyhow::bail!("{msg}");
         }
     };
+    PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Ok);
     tracing::debug!(
         elapsed_ms = t_session.elapsed().as_millis() as u64,
         session_id = %session_id.0,
@@ -1196,6 +1242,44 @@ pub async fn run_single_turn(
             context_window: session_models.get_context_window(),
         });
     }
+
+    // One bounded catalog read covers what the session catalog cannot resolve.
+    let effort_unresolved = |token: &str| {
+        if parse_canonical_effort_token(token).is_some() {
+            return false;
+        }
+        let target = options
+            .model
+            .as_deref()
+            .and_then(|m| session_models.resolve_by_name_or_id(m))
+            .or_else(|| session_models.current.clone());
+        match target {
+            Some(model_id) => matches!(
+                session_models.resolve_effort_for_model(&model_id, token),
+                Err(EffortTokenError::UnknownToken { .. } | EffortTokenError::NoActiveModel)
+            ),
+            None => true,
+        }
+    };
+    let needs_fresh_catalog = options
+        .model
+        .as_deref()
+        .is_some_and(|m| session_models.resolve_by_name_or_id(m).is_none())
+        || options
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(effort_unresolved);
+    let session_models = if needs_fresh_catalog {
+        match xai_grok_shell::cli_models::fetch_model_state(&acp_tx).await {
+            Ok(state) => ModelState::from(Some(state)),
+            Err(e) => {
+                tracing::warn!(error = %e, "headless: model catalog refresh failed; using session state");
+                session_models
+            }
+        }
+    } else {
+        session_models
+    };
 
     if let Err(e) = apply_headless_model_and_effort(
         &acp_tx,
@@ -1763,6 +1847,7 @@ fn handle_headless_acp_message(
                 )))
                 .ok();
         }
+        AcpClientMessageBox::ExtMethod(args) => reply_headless_ext_method(args),
         _ => {}
     }
 }

@@ -157,4 +157,20 @@ pub(crate) fn notify_client(gateway: &Option<GatewaySender>, info: &Info, title:
             params.into(),
         ));
     }
+
+    gateway.forward_fire_and_forget(session_info_update(info.id.clone(), title));
+}
+
+pub(crate) fn session_info_update(
+    session_id: acp::SessionId,
+    title: &str,
+) -> acp::SessionNotification {
+    // Renaming is metadata, not activity; omit updatedAt so session/list order
+    // remains anchored to actual session use.
+    acp::SessionNotification::new(
+        session_id,
+        acp::SessionUpdate::SessionInfoUpdate(
+            acp::SessionInfoUpdate::new().title(title.to_owned()),
+        ),
+    )
 }

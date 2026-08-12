@@ -583,6 +583,10 @@ impl SettingsModalState {
         self.try_open_provider_login_secret("deepseek_api_key")
     }
 
+    pub fn try_open_meta_provider_login(&mut self) -> bool {
+        self.try_open_provider_login_secret("meta_api_key")
+    }
+
     pub fn try_open_opencode_go_provider_login(&mut self) -> bool {
         self.try_open_provider_login_secret("opencode_go_api_key")
     }
@@ -1082,6 +1086,7 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         "antigravity_skip_permissions" => Some(Action::SetAntigravitySkipPermissions(new)),
         "respect_manual_folds" => Some(Action::SetRespectManualFolds(new)),
         "page_flip_on_send" => Some(Action::SetPageFlipOnSend(new)),
+        "confirm_before_rewind" => Some(Action::SetConfirmBeforeRewind(new)),
         "combine_queued_prompts" => Some(Action::SetCombineQueuedPrompts(new)),
         "enter_steers" => Some(Action::SetEnterSteers(new)),
         "invert_scroll" => Some(Action::SetInvertScroll(new)),
@@ -1153,6 +1158,10 @@ pub(super) fn action_for_enum_commit(key: SettingKey, choice: &'static str) -> O
         },
         "code_mode" => xai_grok_shell::agent::config::ToolModePreference::from_canonical(choice)
             .map(Action::SetCodeMode),
+        "image_generation_provider" => {
+            xai_grok_shell::agent::config::ImageGenerationProvider::from_canonical(choice)
+                .map(Action::SetImageGenerationProvider)
+        }
         "hunk_tracker_mode" => Some(Action::SetHunkTrackerMode(choice.to_string())),
         "screen_mode" => Some(Action::SetScreenMode(choice.to_string())),
         "kimi_api_endpoint" => Some(Action::SetKimiApiEndpoint(choice.to_string())),

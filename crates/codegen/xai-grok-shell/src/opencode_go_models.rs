@@ -246,11 +246,6 @@ impl OpenCodeGoModelsClient {
             info.base_url = self.base_url.trim_end_matches('/').to_owned();
             info.name = Some(metadata.name.clone().unwrap_or_else(|| id.to_owned()));
             info.description = metadata.description.clone();
-            info.max_completion_tokens = metadata
-                .limit
-                .as_ref()
-                .and_then(|limit| limit.output)
-                .and_then(|value| u32::try_from(value).ok());
             info.api_backend = api_backend;
             info.auth_scheme = auth_scheme;
             info.provider = ModelProvider::OpenCodeGo;
@@ -350,8 +345,8 @@ struct ModelsDevModelProvider {
 struct ModelsDevLimit {
     #[serde(default)]
     context: Option<u64>,
-    #[serde(default)]
-    output: Option<u64>,
+    #[serde(default, rename = "output")]
+    _output: Option<u64>,
 }
 
 #[cfg(test)]
@@ -385,7 +380,7 @@ mod tests {
                         provider: None,
                         limit: Some(ModelsDevLimit {
                             context: Some(256_000),
-                            output: Some(64_000),
+                            _output: Some(1_000_000),
                         }),
                     },
                 ),
@@ -399,7 +394,7 @@ mod tests {
                         }),
                         limit: Some(ModelsDevLimit {
                             context: Some(200_000),
-                            output: Some(32_000),
+                            _output: Some(500_000),
                         }),
                     },
                 ),
@@ -432,11 +427,22 @@ mod tests {
             entries["opencode-go:messages-model"].info.api_backend,
             ApiBackend::Messages
         );
+        assert_eq!(
+            entries["opencode-go:chat-model"].info.max_completion_tokens,
+            None
+        );
+        assert_eq!(
+            entries["opencode-go:messages-model"]
+                .info
+                .max_completion_tokens,
+            None
+        );
         assert_eq!(catalog.warnings().len(), 1);
 
         let mut cfg = crate::agent::config::Config::default();
         let disabled = crate::agent::models::resolve_model_catalog_with_provider_catalogs(
             &cfg,
+            None,
             None,
             None,
             None,
@@ -454,6 +460,7 @@ mod tests {
         cfg.models.opencode_go_enabled_models = vec!["messages-model".to_owned()];
         let enabled = crate::agent::models::resolve_model_catalog_with_provider_catalogs(
             &cfg,
+            None,
             None,
             None,
             None,

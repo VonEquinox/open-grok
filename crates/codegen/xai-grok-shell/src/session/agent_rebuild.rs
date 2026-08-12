@@ -214,6 +214,9 @@ pub(crate) struct AgentRebuildSpec {
     pub session_id_str: String,
     pub team_scope_id: String,
     pub blocking_wait_depth: Arc<crate::tools::tool_context::BlockingWaitState>,
+    pub orchestration_steer:
+        xai_grok_tools::implementations::grok_build::task::types::OrchestrationSteerSignal,
+    pub swarm_registry: xai_grok_tools::implementations::grok_build::SwarmRegistry,
     pub respect_gitignore: bool,
     pub path_not_found_hints: bool,
     /// Fire side of the scheduler mode. The spawn copies the same resolution
@@ -344,6 +347,8 @@ impl AgentRebuildSpec {
             session_id_str,
             team_scope_id,
             blocking_wait_depth,
+            orchestration_steer,
+            swarm_registry,
             respect_gitignore,
             path_not_found_hints,
             scheduler_background_loops,
@@ -527,6 +532,14 @@ impl AgentRebuildSpec {
                     Arc::clone(blocking_wait_depth),
                 ))
                 .await;
+            agent
+                .tool_bridge()
+                .update_resource(orchestration_steer.clone())
+                .await;
+            agent
+                .tool_bridge()
+                .update_resource(swarm_registry.clone())
+                .await;
             if let Some(buffer) = monitor_event_buffer.clone() {
                 agent.tool_bridge().update_resource(buffer).await;
             }
@@ -653,6 +666,10 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         session_id_str: "test-session".to_string(),
         team_scope_id: "test-session".to_string(),
         blocking_wait_depth: Arc::new(crate::tools::tool_context::BlockingWaitState::new()),
+        orchestration_steer:
+            xai_grok_tools::implementations::grok_build::task::types::OrchestrationSteerSignal::new(
+            ),
+        swarm_registry: xai_grok_tools::implementations::grok_build::SwarmRegistry::new(),
         respect_gitignore: false,
         scheduler_background_loops: true,
         path_not_found_hints: false,

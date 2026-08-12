@@ -168,9 +168,9 @@ exposing another agent's transcript.
 | Tool | Behavior |
 | --- | --- |
 | `list_agents` | Lists the root and subagents with stable IDs, lifecycle status, task labels, resume provenance, and worktree paths. |
-| `send_message` | Queues a message without starting a new turn. The recipient reads queued mail with `wait_agent`. |
-| `followup_task` | Delivers a follow-up at a safe model boundary and wakes an idle root session. |
-| `wait_agent` | Reads only the calling agent's inbox. Omit `timeout_ms` to wait up to 30 seconds, or pass `0` to poll. |
+| `send_message` | Steers a live agent: running recipients receive it mid-turn, idle recipients are woken, and recipients that have not started yet receive it as soon as they start. |
+| `followup_task` | Queues a follow-up task in the recipient's mailbox without interrupting its current work. The recipient reads queued tasks with `wait_agent`. |
+| `wait_agent` | Reads only the calling agent's inbox. Steering messages arrive automatically; use this to pick up queued follow-up tasks. Omit `timeout_ms` to wait up to 30 seconds, or pass `0` to poll. |
 
 Mailboxes are scoped to the root session: an agent cannot list or address agents
 owned by another session. Messages are shown in the root conversation and

@@ -598,6 +598,27 @@ fn set_timeline_toggles_displayed_state_when_current_ui_diverges() {
     assert_eq!(app.current_ui.show_timeline, Some(false));
 }
 #[test]
+fn set_confirm_before_rewind_emits_persist_setting_with_correct_payload() {
+    use crate::settings::SettingValue;
+    let mut app = test_app_with_agent();
+    let default_on = app.current_ui.confirm_before_rewind_enabled();
+    let effects = dispatch(Action::SetConfirmBeforeRewind(!default_on), &mut app);
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::PersistSetting {
+            key,
+            value,
+            rollback_value,
+        } => {
+            assert_eq!(*key, "confirm_before_rewind");
+            assert_eq!(value, &SettingValue::Bool(!default_on));
+            assert_eq!(rollback_value, &SettingValue::Bool(default_on));
+        }
+        other => panic!("expected PersistSetting, got {other:?}"),
+    }
+    assert_eq!(app.current_ui.confirm_before_rewind, Some(!default_on));
+}
+#[test]
 fn set_page_flip_on_send_emits_persist_setting_with_correct_payload() {
     use crate::settings::SettingValue;
     let mut app = test_app_with_agent();
@@ -737,6 +758,32 @@ fn dashboard_kimi_login_starts_at_service_picker() {
             choices_idx: 0,
             supports_preview: false,
             original_value: crate::settings::SettingValue::Enum("platform"),
+        }
+    ));
+}
+
+#[test]
+fn dashboard_meta_login_opens_secure_api_key_editor() {
+    use crate::views::settings_modal::{SettingsEntryPoint, SettingsModalMode};
+
+    let mut app = test_app_with_agent();
+    app.dashboard = Some(crate::views::dashboard::DashboardState::new());
+    app.active_view = ActiveView::AgentDashboard;
+
+    let effects = dispatch(Action::OpenMetaApiKeyEditor, &mut app);
+
+    assert!(effects.is_empty());
+    let state = app
+        .dashboard
+        .as_ref()
+        .and_then(|dashboard| dashboard.settings_modal.as_deref())
+        .expect("dashboard /login meta should open the Settings credential editor");
+    assert_eq!(state.entry_point, SettingsEntryPoint::ProviderLogin);
+    assert!(matches!(
+        state.mode(),
+        SettingsModalMode::EditingSecret {
+            key: "meta_api_key",
+            ..
         }
     ));
 }
@@ -1344,6 +1391,48 @@ fn code_mode_setter_persists_and_rolls_back_with_restart_toast() {
 }
 
 #[test]
+fn image_generation_provider_persists_and_rolls_back() {
+    use xai_grok_shell::agent::config::ImageGenerationProvider;
+
+    let mut app = test_app_with_agent();
+    let effects = dispatch(
+        Action::SetImageGenerationProvider(ImageGenerationProvider::OpenAi),
+        &mut app,
+    );
+    assert_eq!(
+        app.current_ui.image_generation_provider,
+        Some(ImageGenerationProvider::OpenAi)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSetting {
+            key: "image_generation_provider",
+            value: crate::settings::SettingValue::Enum("openai"),
+            rollback_value: crate::settings::SettingValue::Enum("grok"),
+        }]
+    ));
+    let toast = app
+        .agents
+        .get(&AgentId(0))
+        .and_then(|agent| agent.toast.as_ref())
+        .map(|(message, _)| message.as_str())
+        .expect("image generation provider setter must show a toast");
+    assert!(toast.contains("OpenAI Images"));
+    assert!(toast.contains("restart Open Grok to apply"));
+
+    let rollback_effects = apply_setting_rollback(
+        &mut app,
+        "image_generation_provider",
+        &crate::settings::SettingValue::Enum("grok"),
+    );
+    assert!(rollback_effects.is_empty());
+    assert_eq!(
+        app.current_ui.image_generation_provider,
+        Some(ImageGenerationProvider::Grok)
+    );
+}
+
+#[test]
 fn local_feature_flag_setter_updates_modal_and_persists() {
     use crate::views::modal::ActiveModal;
 
@@ -1659,6 +1748,10 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
             let away = !crate::appearance::cache::load_page_flip_on_send();
             let _ = dispatch(Action::SetPageFlipOnSend(away), app);
         }
+        "confirm_before_rewind" => {
+            let away = !app.current_ui.confirm_before_rewind_enabled();
+            let _ = dispatch(Action::SetConfirmBeforeRewind(away), app);
+        }
         "combine_queued_prompts" => {
             let away = !crate::appearance::cache::load_combine_queued_prompts();
             let _ = dispatch(Action::SetCombineQueuedPrompts(away), app);
@@ -1771,6 +1864,14 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
         "code_mode" => {
             let _ = dispatch(
                 Action::SetCodeMode(xai_grok_shell::agent::config::ToolModePreference::CodeMode),
+                app,
+            );
+        }
+        "image_generation_provider" => {
+            let _ = dispatch(
+                Action::SetImageGenerationProvider(
+                    xai_grok_shell::agent::config::ImageGenerationProvider::OpenAi,
+                ),
                 app,
             );
         }

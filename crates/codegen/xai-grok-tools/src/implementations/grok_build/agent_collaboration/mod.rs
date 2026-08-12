@@ -145,22 +145,22 @@ macro_rules! collaboration_metadata {
 
 collaboration_metadata!(
     ListAgentsTool,
-    "List the root and subagents in this session's collaboration team. Returns stable agent IDs, lifecycle status, task labels, resume provenance, and worktree paths. It does not expose agent transcripts.",
+    "List the root and subagents in this session's collaboration team. Returns stable agent IDs, lifecycle status, task labels, resume provenance, and worktree paths. It does not expose agent transcripts. The roster only changes when agents spawn or finish, so call this once and reuse the result.",
     true
 );
 collaboration_metadata!(
     SendAgentMessageTool,
-    "Queue a message in another live agent's mailbox without starting a new turn. Use list_agents to discover exact target IDs. The recipient reads queued messages with wait_agent.",
+    "Send a steering message to another live agent. Use list_agents to discover exact target IDs. A running recipient receives it promptly mid-turn; an idle recipient is woken with it; a recipient that has not started yet receives it as soon as it starts. Send each message exactly once — a queued status means it will still be delivered, so never resend it.",
     false
 );
 collaboration_metadata!(
     FollowupAgentTaskTool,
-    "Send a follow-up task to another live agent and wake it promptly. Running recipients receive the message at a safe model boundary; idle root sessions start a synthetic follow-up turn.",
+    "Queue a follow-up task in another live agent's mailbox without interrupting its current work. The recipient reads queued tasks with wait_agent when it reaches a stopping point. Use send_message instead when the recipient must react immediately.",
     false
 );
 collaboration_metadata!(
     WaitAgentTool,
-    "Read this agent's queued mailbox messages, waiting for activity when requested. Only messages addressed to the calling agent are returned.",
+    "Read this agent's queued mailbox messages, such as follow-up tasks, waiting for activity when requested. Only messages addressed to the calling agent are returned. Steering messages from peers are delivered to you automatically, so call this to pick up queued follow-up work or to deliberately wait for mail — do not poll it speculatively.",
     true
 );
 

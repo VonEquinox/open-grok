@@ -346,7 +346,7 @@ fn parent_is_dir(parent: Option<&Path>, dir: &Path) -> bool {
 /// no reasonable recovery path beyond the existing user-triggered refresh.
 ///
 /// **Known limitation:** if `<cwd>/.opengrok/` does not yet
-/// exist at session-open time, the `.grok/` watch fails ENOENT and is
+/// exist at session-open time, the `.opengrok/` watch fails ENOENT and is
 /// swallowed at `debug!`. A later `mkdir <cwd>/.opengrok/` followed by a
 /// write to `<cwd>/.opengrok/config.toml` will NOT be observed — the
 /// `<cwd>/` watch is non-recursive, so subdirectory creation isn't
@@ -592,7 +592,7 @@ pub(crate) struct ProjectDiscoveryWatcher {
 }
 
 impl ProjectDiscoveryWatcher {
-    pub fn start(cwd: &Path) -> Option<(Self, mpsc::UnboundedReceiver<DiscoveryChange>)> {
+    pub(crate) fn start(cwd: &Path) -> Option<(Self, mpsc::UnboundedReceiver<DiscoveryChange>)> {
         let project_root = crate::session::workflow::registry::project_root(cwd);
         let project_grok = project_root.join(".opengrok");
         let (tx, rx) = mpsc::unbounded_channel();

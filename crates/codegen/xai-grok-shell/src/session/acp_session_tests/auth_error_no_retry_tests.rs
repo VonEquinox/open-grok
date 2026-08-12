@@ -576,12 +576,22 @@ async fn legacy_auth_hint_on_404_model_not_found() {
                 "404 with WebLogin must include deprecation message, got: {msg}"
             );
             assert!(
+                msg.contains("open-grok update"),
+                "hint must mention `open-grok update` before re-login, got: {msg}"
+            );
+            assert!(
                 msg.contains("open-grok logout"),
                 "hint must mention `open-grok logout`, got: {msg}"
             );
             assert!(
                 msg.contains("open-grok login"),
                 "hint must mention `open-grok login`, got: {msg}"
+            );
+            let update_at = msg.find("open-grok update").expect("open-grok update");
+            let logout_at = msg.find("open-grok logout").expect("open-grok logout");
+            assert!(
+                update_at < logout_at,
+                "update must come before logout, got: {msg}"
             );
             assert!(
                 msg.contains("Version:"),
@@ -647,12 +657,22 @@ async fn legacy_auth_hint_on_401_unauthorized() {
                 "401 with WebLogin must include deprecation message, got: {msg}"
             );
             assert!(
+                msg.contains("open-grok update"),
+                "hint must mention `open-grok update` before re-login, got: {msg}"
+            );
+            assert!(
                 msg.contains("open-grok logout"),
                 "hint must mention `open-grok logout`, got: {msg}"
             );
             assert!(
                 msg.contains("open-grok login"),
                 "hint must mention `open-grok login`, got: {msg}"
+            );
+            let update_at = msg.find("open-grok update").expect("open-grok update");
+            let logout_at = msg.find("open-grok logout").expect("open-grok logout");
+            assert!(
+                update_at < logout_at,
+                "update must come before logout, got: {msg}"
             );
         })
         .await;

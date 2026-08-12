@@ -593,6 +593,7 @@ async fn run_headless_inner(
                 let mut agent =
                     MvpAgent::new(gateway, &agent_config_clone, auth_manager, prefetched_models)
                         .unwrap_or_else(exit_on_config_error);
+                agent.models_manager.spawn_background_refresh();
                 if let Some(mc) = memory_config_for_first {
                     agent.set_memory_config(mc);
                 }
@@ -707,16 +708,35 @@ async fn migrate_devbox_auth_if_legacy(
     // scope if a reader sees the intermediate state.
     let migration_auth_manager = agent_config.create_auth_manager();
 
-    let new_auth = match crate::auth::devbox_login::mint_devbox_auth(&migration_auth_manager).await
-    {
-        Ok(new_auth) => new_auth,
-        Err(e) => {
-            tracing::warn!(error = ?e, "devbox legacy auth migration: devbox login helper call failed, continuing with legacy auth");
-            xai_grok_telemetry::unified_log::error(
-                "devbox legacy auth migration: mint failed",
-                None,
-                Some(serde_json::json!({ "error": e.to_string() })),
-            );
+    let mint = crate::auth::devbox_login::mint_devbox_auth(&migration_auth_manager);
+    let on_fail = |reason: String| {
+        tracing::warn!(%reason, "devbox legacy auth migration failed, continuing with legacy auth");
+        xai_grok_telemetry::unified_log::error(
+            "devbox legacy auth migration failed",
+            None,
+            Some(serde_json::json!({ "reason": reason })),
+        );
+    };
+    let budget = xai_grok_telemetry::startup::ReadinessBudget::new(
+        crate::http::STARTUP_AUTH_REFRESH_TIMEOUT,
+    );
+    let minted = budget
+        .run(
+            xai_grok_telemetry::startup::StartupPhase::ManagedPolicy,
+            mint,
+        )
+        .await;
+    let new_auth = match minted {
+        Some(Ok(new_auth)) => new_auth,
+        Some(Err(e)) => {
+            on_fail(format!("devbox login helper call failed: {e}"));
+            return Some(auth);
+        }
+        None => {
+            on_fail(format!(
+                "mint timed out after {}s",
+                crate::http::STARTUP_AUTH_REFRESH_TIMEOUT.as_secs()
+            ));
             return Some(auth);
         }
     };
@@ -2326,7 +2346,7 @@ mod tests {
         let cancel_for_actor = cancel.clone();
         let actor = tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
-                if matches!(cmd, crate::session::SessionCommand::Shutdown) {
+                if matches!(cmd, crate::session::SessionCommand::Shutdown(_)) {
                     assert!(
                         !cancel_for_actor.is_cancelled(),
                         "session flush must happen BEFORE the leader is cancelled"

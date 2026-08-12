@@ -41,7 +41,7 @@ pub mod x_search;
 pub use agent_collaboration::{
     FollowupAgentTaskTool, ListAgentsTool, SendAgentMessageTool, WaitAgentTool,
 };
-pub use agent_swarm::AgentSwarmTool;
+pub use agent_swarm::{AgentSwarmTool, SwarmFinishedNotice, SwarmRegistry, SwarmWaitTool};
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use deploy_app::{AppBuilderDeployerConfig, DEPLOY_APP_TOOL_NAME};

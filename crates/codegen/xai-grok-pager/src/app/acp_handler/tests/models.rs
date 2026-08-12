@@ -422,12 +422,27 @@
     /// applies it alongside the model id so the prompt header / status bar
     /// show the right effort without waiting for a subsequent
     /// `x.ai/models/update`.
+    ///
+    /// Capability filtering still applies — only models that advertise
+    /// `supportsReasoningEffort` accept a broadcast effort (see
+    /// `model_changed_clears_unsupported_reasoning_effort_on_follower`).
     #[test]
     fn model_changed_applies_reasoning_effort_on_follower() {
         use xai_grok_shell::sampling::types::ReasoningEffort;
         let mut app = make_app_with_agent("sess-1");
         let agent = app.agents.get_mut(&AgentId(0)).unwrap();
         seed_models(agent, "grok-3", &["grok-3", "grok-4"]);
+        for id in ["grok-3", "grok-4"] {
+            let mid = acp::ModelId::new(std::sync::Arc::from(id));
+            if let Some(info) = agent.session.models.available.get_mut(&mid) {
+                info.meta = serde_json::json!({
+                    "supportsReasoningEffort": true,
+                    "reasoningEffort": "medium",
+                })
+                .as_object()
+                .cloned();
+            }
+        }
 
         let notif = model_changed_ext("sess-1", "grok-4", Some("high"));
         assert!(handle_ext_notification(&notif, &mut app));
@@ -437,6 +452,56 @@
             agent.session.models.reasoning_effort,
             Some(ReasoningEffort::High),
             "follower must mirror the broadcast's reasoning_effort"
+        );
+    }
+
+    /// Provider capability filtering on `ModelChanged`: a broadcast effort for
+    /// a model that does not advertise `supportsReasoningEffort` must clear
+    /// (not mirror) so stale effort from a prior reasoning model cannot stick
+    /// on a non-reasoning / provider-isolated target.
+    #[test]
+    fn model_changed_clears_unsupported_reasoning_effort_on_follower() {
+        use xai_grok_shell::sampling::types::ReasoningEffort;
+        let mut app = make_app_with_agent("sess-1");
+        let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+        seed_models(agent, "grok-3", &["grok-3", "grok-4"]);
+        let reasoning_id = acp::ModelId::new(std::sync::Arc::from("grok-3"));
+        if let Some(info) = agent.session.models.available.get_mut(&reasoning_id) {
+            info.meta = serde_json::json!({
+                "supportsReasoningEffort": true,
+                "reasoningEffort": "high",
+            })
+            .as_object()
+            .cloned();
+        }
+        agent
+            .session
+            .models
+            .set_current(reasoning_id, Some(ReasoningEffort::High));
+        assert_eq!(
+            agent.session.models.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+
+        // grok-4 has no supportsReasoningEffort meta (bare seed).
+        let notif = model_changed_ext("sess-1", "grok-4", Some("high"));
+        assert!(handle_ext_notification(&notif, &mut app));
+
+        let agent = app.agents.get(&AgentId(0)).unwrap();
+        assert_eq!(
+            agent
+                .session
+                .models
+                .current
+                .as_ref()
+                .map(|id| id.0.as_ref()),
+            Some("grok-4"),
+            "model id from the broadcast must still apply"
+        );
+        assert_eq!(
+            agent.session.models.reasoning_effort,
+            None,
+            "unsupported/stale broadcast effort must clear on the follower"
         );
     }
 

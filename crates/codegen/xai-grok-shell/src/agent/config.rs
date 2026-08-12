@@ -691,6 +691,8 @@ pub struct Requirements {
     pub image_edit: Constrained<bool>,
     pub video_gen: Constrained<bool>,
     pub write_file: Constrained<bool>,
+    /// Voice dictation (STT). Pin via requirements/managed `[features] voice_mode`.
+    pub voice_mode: Constrained<bool>,
     pub sandbox_auto_allow_bash: Constrained<bool>,
     pub sandbox_profile: Constrained<String>,
     pub respect_gitignore: Constrained<bool>,
@@ -1641,6 +1643,13 @@ pub struct Config {
     /// [`crate::config::SubagentsConfig::resolve_max_depth`]).
     #[serde(skip)]
     pub subagents_max_depth: u32,
+    #[serde(skip)]
+    pub subagents_max_concurrent: usize,
+    #[serde(skip)]
+    pub subagents_limit_behavior:
+        xai_grok_tools::implementations::grok_build::task::admission::LimitBehavior,
+    #[serde(skip)]
+    pub workflow_max_concurrent_agents: usize,
     /// Per-subagent model ID overrides from `[subagents.models]` in config.toml.
     /// Keys are agent names, values are model IDs. Set alongside `subagents_enabled`
     /// from `SubagentsConfig::resolve()`.
@@ -1801,7 +1810,9 @@ fn resolve_subagent_permission_mode(
 pub use xai_grok_agent::config::AgentDefinition;
 pub use xai_grok_agent::config::Effort;
 pub use xai_grok_agent::config::PermissionMode;
-pub use xai_grok_shared::ui_config::{ContextualHints, ToolModePreference, UiConfig};
+pub use xai_grok_shared::ui_config::{
+    ContextualHints, ImageGenerationProvider, ToolModePreference, UiConfig,
+};
 /// Configuration for selecting the agent definition.
 ///
 /// Set in `config.toml` under `[agent]`:
@@ -1963,6 +1974,11 @@ impl Default for Config {
             cli_agent_overrides: CliAgentOverrides::default(),
             subagents_enabled: true,
             subagents_max_depth: crate::config::SubagentsConfig::DEFAULT_MAX_DEPTH,
+            subagents_max_concurrent:
+                xai_grok_tools::implementations::grok_build::task::admission::DEFAULT_MAX_CONCURRENT,
+            subagents_limit_behavior: Default::default(),
+            workflow_max_concurrent_agents:
+                crate::session::workflow::host_service::DEFAULT_WORKFLOW_MAX_CONCURRENT_AGENTS,
             subagent_model_overrides: std::collections::HashMap::new(),
             subagent_toggle: std::collections::HashMap::new(),
             subagent_roles: std::collections::HashMap::new(),
@@ -2272,6 +2288,8 @@ impl Config {
     /// per cwd after that cwd's authoritative folder-trust resolve.
     pub fn resolve_subagents(&mut self, cli_flag: bool, raw_config: &toml::Value) {
         let sa = crate::config::SubagentsConfig::resolve(cli_flag, raw_config);
+        let remote_settings = self.remote_settings.clone();
+        self.resolve_subagent_limits(&sa, remote_settings.as_ref());
         self.subagents_enabled = sa.enabled;
         self.subagent_model_overrides = sa.models;
         self.subagent_toggle = sa.toggle;
@@ -2284,6 +2302,29 @@ impl Config {
             .and_then(|r| r.subagents_max_depth);
         self.subagents_max_depth =
             crate::config::SubagentsConfig::resolve_max_depth(env.as_deref(), sa.max_depth, remote);
+    }
+    fn resolve_subagent_limits(
+        &mut self,
+        sa: &crate::config::SubagentsConfig,
+        remote: Option<&crate::util::config::RemoteSettings>,
+    ) {
+        use crate::config::SubagentsConfig;
+        let env = |name: &str| std::env::var(name).ok();
+        self.subagents_max_concurrent = SubagentsConfig::resolve_max_concurrent(
+            env(SubagentsConfig::ENV_MAX_CONCURRENT).as_deref(),
+            sa.max_concurrent,
+            remote.and_then(|r| r.subagents_max_concurrent),
+        );
+        self.subagents_limit_behavior = SubagentsConfig::resolve_limit_behavior(
+            env(SubagentsConfig::ENV_LIMIT_BEHAVIOR).as_deref(),
+            sa.limit_behavior.as_deref(),
+            remote.and_then(|r| r.subagents_limit_behavior.as_deref()),
+        );
+        self.workflow_max_concurrent_agents = SubagentsConfig::resolve_workflow_max_concurrent(
+            env(SubagentsConfig::ENV_WORKFLOW_MAX_CONCURRENT).as_deref(),
+            sa.workflow_max_concurrent,
+            remote.and_then(|r| r.workflow_max_concurrent_agents),
+        );
     }
     /// Resolve all `#[serde(skip)]` runtime fields that have resolver functions.
     ///
@@ -2316,6 +2357,26 @@ impl Config {
         let remote = ctx.remote_settings.and_then(|r| r.subagents_max_depth);
         self.subagents_max_depth =
             crate::config::SubagentsConfig::resolve_max_depth(env.as_deref(), toml_max, remote);
+        let subagents_toml = crate::config::SubagentsConfig {
+            max_concurrent: ctx
+                .raw_config
+                .get("subagents")
+                .and_then(|s| s.get("max_concurrent"))
+                .and_then(|v| v.as_integer()),
+            limit_behavior: ctx
+                .raw_config
+                .get("subagents")
+                .and_then(|s| s.get("limit_behavior"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            workflow_max_concurrent: ctx
+                .raw_config
+                .get("subagents")
+                .and_then(|s| s.get("workflow_max_concurrent"))
+                .and_then(|v| v.as_integer()),
+            ..Default::default()
+        };
+        self.resolve_subagent_limits(&subagents_toml, ctx.remote_settings);
         let tools = crate::config::ToolsConfig::resolve(ctx.raw_config);
         self.respect_gitignore = match self.requirements.respect_gitignore.pinned() {
             Some(pinned) => pinned,
@@ -2432,6 +2493,12 @@ impl Config {
     }
     pub fn is_session_recap_enabled(&self) -> bool {
         self.resolve_session_recap().value
+    }
+    pub(crate) fn is_turn_summary_enabled(&self) -> bool {
+        self.resolve_turn_summary().value
+    }
+    pub(crate) fn is_voice_mode_enabled(&self) -> bool {
+        self.resolve_voice_mode().value
     }
     /// Two-pass (prefire) compaction gate. Default OFF (opt-in) — enable via
     /// remote settings `two_pass_compaction_enabled`, the `[features] two_pass_compaction`
@@ -2681,6 +2748,34 @@ impl Config {
             .default(true)
             .resolve()
     }
+    /// Per-turn dashboard summary gate. Default ON — disable via remote
+    /// settings `turn_summary`, the `[features] turn_summary` config.toml key,
+    /// or `GROK_TURN_SUMMARY` env.
+    pub(crate) fn resolve_turn_summary(&self) -> Resolved<bool> {
+        let ff = self.remote_settings.as_ref().and_then(|s| s.turn_summary);
+        BoolFlag::env("GROK_TURN_SUMMARY")
+            .config(self.features.turn_summary)
+            .feature_flag(ff)
+            .default(true)
+            .resolve()
+    }
+    /// Voice dictation gate. Default on.
+    ///
+    /// Precedence: requirements > `GROK_VOICE_MODE` > config/managed
+    /// `[features] voice_mode` > remote `voice_mode_enabled` > default true.
+    /// The pager may force API-key sessions on when only remote is off.
+    pub(crate) fn resolve_voice_mode(&self) -> Resolved<bool> {
+        let ff = self
+            .remote_settings
+            .as_ref()
+            .and_then(|s| s.voice_mode_enabled);
+        BoolFlag::env("GROK_VOICE_MODE")
+            .requirement(self.requirements.voice_mode.pinned())
+            .config(self.features.voice_mode)
+            .feature_flag(ff)
+            .default(true)
+            .resolve()
+    }
     /// `image_gen` (+ `/imagine`). Default on.
     ///
     /// `imagine_tools_disabled` is a remote force-off (env/config cannot
@@ -2794,7 +2889,7 @@ impl Config {
             .default(true)
             .resolve()
     }
-    /// Background workflows (`workflow` tool, `.grok/workflows/*.rhai`,
+    /// Background workflows (`workflow` tool, `.opengrok/workflows/*.rhai`,
     /// `/deep-research`, host-owned `/goal` driver). Default ON: deployments
     /// that never receive remote settings still get workflows; `Some(false)`
     /// remote / config / env remains a kill-switch.
@@ -3262,7 +3357,7 @@ pub struct SyncBoolFlag {
     default: bool,
 }
 impl SyncBoolFlag {
-    pub const fn new(extract_toml: fn(&toml::Value) -> Option<bool>) -> Self {
+    pub(crate) const fn new(extract_toml: fn(&toml::Value) -> Option<bool>) -> Self {
         Self {
             extract_toml,
             disable_env: None,
@@ -3284,15 +3379,15 @@ impl SyncBoolFlag {
         self
     }
     /// Fallback when no source above fires.
-    pub const fn inherit(mut self, resolver: fn() -> bool) -> Self {
+    pub(crate) const fn inherit(mut self, resolver: fn() -> bool) -> Self {
         self.inherit = Some(resolver);
         self
     }
-    pub const fn default(mut self, val: bool) -> Self {
+    pub(crate) const fn default(mut self, val: bool) -> Self {
         self.default = val;
         self
     }
-    pub fn resolve(&self) -> bool {
+    pub(crate) fn resolve(&self) -> bool {
         if let Some(enabled) = read_requirements_toml()
             .as_ref()
             .and_then(|r| (self.extract_toml)(r))
@@ -3673,7 +3768,8 @@ pub fn resolve_model_list(
     prefetched: Option<IndexMap<String, ModelEntry>>,
 ) -> IndexMap<String, ModelEntry> {
     resolve_model_list_with_provider_catalogs(
-        cfg, prefetched, None, false, None, false, None, false, None, false, None, false,
+        cfg, prefetched, None, false, None, false, None, false, None, false, None, false, None,
+        false,
     )
 }
 
@@ -3704,6 +3800,8 @@ pub fn resolve_model_list_with_codex(
         false,
         None,
         false,
+        None,
+        false,
     )
 }
 
@@ -3721,6 +3819,8 @@ pub fn resolve_model_list_with_provider_catalogs(
     fireworks_authoritative: bool,
     deepseek_remote: Option<IndexMap<String, ModelEntry>>,
     deepseek_authoritative: bool,
+    meta_remote: Option<IndexMap<String, ModelEntry>>,
+    meta_authoritative: bool,
     opencode_go_remote: Option<IndexMap<String, ModelEntry>>,
     opencode_go_authoritative: bool,
 ) -> IndexMap<String, ModelEntry> {
@@ -3865,6 +3965,13 @@ pub fn resolve_model_list_with_provider_catalogs(
         deepseek_remote,
         ModelProvider::DeepSeek,
         deepseek_authoritative,
+    );
+    merge_remote_provider_partition(
+        &mut resolved,
+        &defaults,
+        meta_remote,
+        ModelProvider::Meta,
+        meta_authoritative,
     );
     merge_remote_provider_partition(
         &mut resolved,
@@ -4198,6 +4305,10 @@ fn default_models(
                 m.env_key = Some(EnvKeys::single(
                     crate::deepseek_models::DEEPSEEK_API_KEY_ENV,
                 ));
+            }
+            if m.provider == ModelProvider::Meta {
+                m.base_url = Some(crate::meta_models::api_base_url());
+                m.env_key = Some(EnvKeys::single(crate::meta_models::META_API_KEY_ENV));
             }
             if m.provider == ModelProvider::Wafer {
                 m.base_url = Some(crate::wafer_models::api_base_url());
@@ -4543,7 +4654,7 @@ impl ConfigModelOverride {
             // across a provider override. Explicit fields below may opt back
             // into values valid for the newly selected provider.
             entry.info.api_backend = match entry.info.provider {
-                ModelProvider::Codex => ApiBackend::Responses,
+                ModelProvider::Codex | ModelProvider::Meta => ApiBackend::Responses,
                 ModelProvider::Xai
                 | ModelProvider::Kimi
                 | ModelProvider::Fireworks
@@ -4649,6 +4760,10 @@ impl ConfigModelOverride {
         }
         if !self.reasoning_efforts.is_empty() {
             entry.info.reasoning_efforts = self.reasoning_efforts.clone();
+        }
+        if self.supports_reasoning_effort == Some(false) {
+            entry.info.reasoning_effort = None;
+            entry.info.reasoning_efforts.clear();
         }
         if let Some(v) = self.supports_reasoning_summary_parameter {
             entry.info.supports_reasoning_summary_parameter = v;
@@ -4993,6 +5108,10 @@ impl ModelEntry {
     /// provider's trusted endpoint; explicit per-model BYOK remains valid for
     /// custom endpoints.
     pub fn has_usable_provider_credentials(&self) -> bool {
+        self.has_usable_provider_credentials_at(&crate::util::grok_home::grok_home())
+    }
+
+    fn has_usable_provider_credentials_at(&self, grok_home: &std::path::Path) -> bool {
         if self.has_own_credentials() {
             return true;
         }
@@ -5001,17 +5120,11 @@ impl ModelEntry {
         }
         if self.info.provider.is_kimi() {
             return crate::kimi_models::endpoint_for_base_url(&self.info.base_url)
-                .and_then(|endpoint| {
-                    crate::auth::read_kimi_api_key(&crate::util::grok_home::grok_home(), endpoint)
-                })
+                .and_then(|endpoint| crate::auth::read_kimi_api_key(grok_home, endpoint))
                 .is_some();
         }
         trusted_built_in_session_endpoint(self.info.provider, &self.info.base_url)
-            && crate::auth::read_provider_api_key(
-                &crate::util::grok_home::grok_home(),
-                self.info.provider,
-            )
-            .is_some()
+            && crate::auth::read_provider_api_key(grok_home, self.info.provider).is_some()
     }
 }
 impl std::ops::Deref for ModelEntry {
@@ -5262,6 +5375,14 @@ pub struct Features {
     /// `None` = defer to remote settings / env / default (`true`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_recap: Option<bool>,
+    /// Per-turn dashboard summary generated at turn end.
+    /// `None` = defer to remote settings / env / default (`true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_summary: Option<bool>,
+    /// Voice dictation (STT). `None` = env / remote / default on.
+    /// Set `false` in requirements or managed config to force off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_mode: Option<bool>,
     /// Two-pass (prefire) compaction: speculatively summarize the history
     /// prefix in the background, then summarize NOTE₁ + recent tail at
     /// compaction. `None` = defer to remote settings / env / default (`false`).
@@ -5430,8 +5551,10 @@ fn trusted_built_in_session_endpoint(provider: ModelProvider, base_url: &str) ->
                     && crate::fireworks_models::is_trusted_api_base_url(base_url))
                 || (provider.is_deepseek()
                     && crate::deepseek_models::is_trusted_api_base_url(base_url))
+                || (provider.is_meta() && crate::meta_models::is_trusted_api_base_url(base_url))
                 || (provider.is_open_code_go()
                     && crate::opencode_go_models::is_trusted_api_base_url(base_url))
+                || (provider.is_wafer() && crate::wafer_models::is_trusted_api_base_url(base_url))
         }
         xai_grok_sampling_types::BuiltInSessionAuthKind::XaiSession => {
             crate::util::is_xai_api_bearer_url(base_url)
@@ -5456,6 +5579,14 @@ pub(crate) fn first_own_credential(
 /// Priority: model api_key/env_key > cached auth-provider token > session
 /// token > XAI_API_KEY.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
+    resolve_credentials_at_home(model, session_key, &crate::util::grok_home::grok_home())
+}
+
+fn resolve_credentials_at_home(
+    model: &ModelEntry,
+    session_key: Option<&str>,
+    grok_home: &std::path::Path,
+) -> ResolvedCredentials {
     let info = model.info();
     let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
         (
@@ -5479,20 +5610,11 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
         match info.provider.profile().session_auth {
             xai_grok_sampling_types::BuiltInSessionAuthKind::ApiKeyOnly => {
                 let stored = if info.provider.is_kimi() {
-                    crate::kimi_models::endpoint_for_base_url(&info.base_url).and_then(|endpoint| {
-                        crate::auth::read_kimi_api_key(
-                            &crate::util::grok_home::grok_home(),
-                            endpoint,
-                        )
-                    })
+                    crate::kimi_models::endpoint_for_base_url(&info.base_url)
+                        .and_then(|endpoint| crate::auth::read_kimi_api_key(grok_home, endpoint))
                 } else {
                     trusted_built_in_session_endpoint(info.provider, &info.base_url)
-                        .then(|| {
-                            crate::auth::read_provider_api_key(
-                                &crate::util::grok_home::grok_home(),
-                                info.provider,
-                            )
-                        })
+                        .then(|| crate::auth::read_provider_api_key(grok_home, info.provider))
                         .flatten()
                 };
                 if stored.is_none()
@@ -5668,10 +5790,10 @@ pub fn try_resolve_model_credentials(
 /// Per-model auth facts (BYOK status + auth scheme) from one effective-config
 /// load, memoized by the session actor.
 #[derive(Clone, Copy)]
-pub struct ModelAuthFacts {
-    pub byok: ModelByok,
-    pub auth_scheme: AuthScheme,
-    pub provider: ModelProvider,
+pub(crate) struct ModelAuthFacts {
+    pub(crate) byok: ModelByok,
+    pub(crate) auth_scheme: AuthScheme,
+    pub(crate) provider: ModelProvider,
 }
 /// Resolve `model_id` to its auth facts and auth-provider reference from one
 /// effective-config load; both ride the same memo (see
@@ -5679,7 +5801,7 @@ pub struct ModelAuthFacts {
 /// model absent from the catalog → `NotByok`. An empty `model_id` (no sampling
 /// config yet) → `Unknown`, not `NotByok`, so the gate isn't activated for an
 /// unidentified model.
-pub fn resolve_model_auth_facts_and_provider(
+pub(crate) fn resolve_model_auth_facts_and_provider(
     model_id: &str,
 ) -> (ModelAuthFacts, Option<crate::auth::AuthProviderRef>) {
     if model_id.is_empty() {
@@ -6083,7 +6205,11 @@ pub fn sampling_config_for_model(
             .sends_x_grok_headers()
             .then_some(client_version)
             .flatten(),
-        reasoning_effort: info.reasoning_effort,
+        reasoning_effort: if info.supports_reasoning_effort {
+            info.reasoning_effort
+        } else {
+            None
+        },
         reasoning_context: None,
         service_tier: None,
         reasoning_summary: model_reasoning_summary(info),
@@ -7403,6 +7529,63 @@ reasoning_effort = "low"
         assert_eq!(explicit.auth_type, xai_chat_state::AuthType::ApiKey);
         assert_eq!(explicit.api_key.as_deref(), Some("endpoint-owned-key"));
         assert_eq!(explicit.base_url, "https://vendor.example/v1");
+    }
+
+    #[test]
+    #[serial]
+    fn stored_meta_and_wafer_keys_resolve_only_on_trusted_hosts() {
+        use crate::auth::store_provider_api_key;
+
+        let home = tempfile::tempdir().expect("temp OPENGROK_HOME");
+        store_provider_api_key(home.path(), ModelProvider::Meta, "meta-stored-secret")
+            .expect("store Meta key");
+        store_provider_api_key(home.path(), ModelProvider::Wafer, "wafer-stored-secret")
+            .expect("store Wafer key");
+
+        let mut meta = test_model_entry(
+            "meta:muse-spark-1.2",
+            crate::meta_models::META_API_BASE_URL,
+            None,
+            None,
+            None,
+        );
+        meta.info.provider = ModelProvider::Meta;
+        meta.info.api_backend = ApiBackend::Responses;
+        meta.env_key = Some(EnvKeys::single(crate::meta_models::META_API_KEY_ENV));
+        let meta_creds = resolve_credentials_at_home(&meta, None, home.path());
+        assert_eq!(meta_creds.api_key.as_deref(), Some("meta-stored-secret"));
+        assert!(meta.has_usable_provider_credentials_at(home.path()));
+
+        let mut meta_proxy = meta.clone();
+        meta_proxy.info.base_url = "https://proxy.example/v1".to_owned();
+        assert!(
+            resolve_credentials_at_home(&meta_proxy, None, home.path())
+                .api_key
+                .is_none()
+        );
+        assert!(!meta_proxy.has_usable_provider_credentials_at(home.path()));
+
+        let mut wafer = test_model_entry(
+            "wafer:example",
+            crate::wafer_models::WAFER_API_BASE_URL,
+            None,
+            None,
+            None,
+        );
+        wafer.info.provider = ModelProvider::Wafer;
+        wafer.env_key = Some(EnvKeys::single(crate::wafer_models::WAFER_API_KEY_ENV));
+        let wafer_creds = resolve_credentials_at_home(&wafer, None, home.path());
+        assert_eq!(wafer_creds.api_key.as_deref(), Some("wafer-stored-secret"));
+        assert!(wafer.has_usable_provider_credentials_at(home.path()));
+
+        let mut wafer_proxy = wafer.clone();
+        wafer_proxy.info.base_url = "https://proxy.example/v1".to_owned();
+        assert!(
+            resolve_credentials_at_home(&wafer_proxy, None, home.path())
+                .api_key
+                .is_none()
+        );
+        assert!(!wafer_proxy.has_usable_provider_credentials_at(home.path()));
     }
 
     #[test]
@@ -8872,6 +9055,93 @@ reasoning_effort = "low"
             None,
         );
         assert_eq!(sampling_config.api_backend, ApiBackend::Responses);
+    }
+    #[test]
+    fn reasoning_effort_override_supported_values_reach_sampler() {
+        let endpoints = EndpointsConfig::default();
+        let base = test_model_entry(
+            "reasoning-model",
+            "https://api.example.com/v1",
+            None,
+            None,
+            None,
+        );
+        let model = ConfigModelOverride {
+            reasoning_effort: Some(ReasoningEffort::High),
+            supports_reasoning_effort: Some(true),
+            reasoning_efforts: vec![ReasoningEffortOption {
+                id: "high".to_owned(),
+                value: ReasoningEffort::High,
+                label: "High".to_owned(),
+                description: None,
+                default: true,
+            }],
+            ..Default::default()
+        }
+        .apply("reasoning-model", Some(base), &endpoints);
+
+        assert!(model.info.supports_reasoning_effort);
+        assert_eq!(model.info.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(model.info.reasoning_efforts.len(), 1);
+        let sampling_config = sampling_config_for_model(
+            &model,
+            resolve_credentials(&model, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            sampling_config.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+    #[test]
+    fn reasoning_effort_override_false_clears_conflicting_values() {
+        let endpoints = EndpointsConfig::default();
+        let mut base = test_model_entry(
+            "plain-model",
+            "https://api.example.com/v1",
+            None,
+            None,
+            None,
+        );
+        base.info.supports_reasoning_effort = true;
+        base.info.reasoning_effort = Some(ReasoningEffort::Low);
+        base.info.reasoning_efforts = vec![ReasoningEffortOption {
+            id: "low".to_owned(),
+            value: ReasoningEffort::Low,
+            label: "Low".to_owned(),
+            description: None,
+            default: true,
+        }];
+        let mut model = ConfigModelOverride {
+            reasoning_effort: Some(ReasoningEffort::High),
+            supports_reasoning_effort: Some(false),
+            reasoning_efforts: vec![ReasoningEffortOption {
+                id: "high".to_owned(),
+                value: ReasoningEffort::High,
+                label: "High".to_owned(),
+                description: None,
+                default: true,
+            }],
+            ..Default::default()
+        }
+        .apply("plain-model", Some(base), &endpoints);
+        model.info.derive_reasoning_effort_fields();
+
+        assert!(!model.info.supports_reasoning_effort);
+        assert_eq!(model.info.reasoning_effort, None);
+        assert!(model.info.reasoning_efforts.is_empty());
+        let sampling_config = sampling_config_for_model(
+            &model,
+            resolve_credentials(&model, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(sampling_config.reasoning_effort, None);
     }
     #[test]
     fn parses_model_use_concise_true() {
@@ -10467,6 +10737,41 @@ reasoning_effort = "low"
             "remote settings/remote false must kill-switch default on"
         );
         assert_eq!(r.source, ConfigSource::Remote);
+    }
+    /// Precedence: env > config.toml > remote settings > default(true). One
+    /// test covers the full ladder (the `resolve_two_pass_compaction` pattern).
+    #[test]
+    #[serial]
+    fn resolve_turn_summary_precedence() {
+        unsafe { std::env::remove_var("GROK_TURN_SUMMARY") };
+        let r = Config::default().resolve_turn_summary();
+        assert!(r.value, "turn_summary defaults on");
+        assert_eq!(r.source, ConfigSource::Default);
+        let remote_off = Config {
+            remote_settings: Some(crate::util::config::RemoteSettings {
+                turn_summary: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let r = remote_off.resolve_turn_summary();
+        assert!(!r.value, "remote false must kill-switch default on");
+        assert_eq!(r.source, ConfigSource::Remote);
+        let config_over_remote = Config {
+            features: Features {
+                turn_summary: Some(true),
+                ..Default::default()
+            },
+            ..remote_off
+        };
+        let r = config_over_remote.resolve_turn_summary();
+        assert!(r.value, "config.toml beats remote kill-switch");
+        assert_eq!(r.source, ConfigSource::Config);
+        unsafe { std::env::set_var("GROK_TURN_SUMMARY", "0") };
+        let r = config_over_remote.resolve_turn_summary();
+        assert!(!r.value, "env wins over config + remote");
+        assert_eq!(r.source, ConfigSource::Env);
+        unsafe { std::env::remove_var("GROK_TURN_SUMMARY") };
     }
     /// Precedence: env > config.toml > remote settings > default(false). One test
     /// covers the full ladder so we do not maintain a matrix of flag cases.
@@ -14074,6 +14379,8 @@ default = "grok-4.5"
             false,
             None,
             false,
+            None,
+            false,
         );
         assert!(resolved.contains_key("grok-4.5"));
         assert!(resolved.contains_key("kimi-k3"));
@@ -14351,6 +14658,8 @@ default = "grok-4.5"
             false,
             None,
             false,
+            None,
+            false,
         );
         assert!(resolved.contains_key("grok-live"));
         assert!(resolved.contains_key("gpt-5.6-sol"));
@@ -14376,6 +14685,8 @@ default = "grok-4.5"
             false,
             Some(kimi),
             true,
+            None,
+            false,
             None,
             false,
             None,

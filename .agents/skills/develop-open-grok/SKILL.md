@@ -25,6 +25,7 @@ description: Safely implement and verify scoped Open Grok changes in this Rust w
 Run the smallest complete stack for the changed behavior:
 
 ```sh
+cargo check --locked -p <crate>
 cargo fmt --all -- --check
 cargo clippy --locked -p <crate> --all-targets
 cargo test --locked -p <crate> -- <focused-filter>
@@ -32,6 +33,7 @@ cargo test --locked -p <crate> -- <focused-filter>
 ```
 
 - Run `bash -n <script>` for every changed shell helper.
+- Default routine compile validation to package-scoped `cargo check`; only link with `cargo build` or `cargo test` when the requested behavior needs it.
 - Use an isolated `OPENGROK_HOME` for runtime tests.
 - Do not mistake a long first compile or release link for a hang; inspect process activity first.
 - If a broad suite fails, rerun the failure alone. Report global-state interference separately, but never hide a repeatable failure.

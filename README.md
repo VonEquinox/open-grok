@@ -330,8 +330,11 @@ Open Grok is maintained at
 from the Grok Build local source snapshot
 `c1b5909ec707c069f1d21a93917af044e71da0d7` dated 2026-07-15. That exact
 snapshot is the fork baseline because the upstream repository currently has
-replacement, unrelated history. Codex behavior is ported from a pinned revision of
-[`openai/codex`](https://github.com/openai/codex). The pinned commit and
+replacement, unrelated history. Compatible upstream snapshots have since been
+ported through Grok Build `1.0.0` at
+`8a14c91d88875a831a38b3a066b1683116bcb31c` (2026-08-09), without merging the
+unrelated histories. Codex behavior is ported from a pinned revision of
+[`openai/codex`](https://github.com/openai/codex). The pinned commits and
 deliberate compatibility differences are recorded in the documents linked above.
 
 This community fork is not affiliated with, sponsored by, or endorsed by xAI,

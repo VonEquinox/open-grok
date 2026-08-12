@@ -278,6 +278,10 @@ pub async fn set_page_flip_on_send(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.page_flip_on_send = Some(value)).await
 }
 
+pub async fn set_confirm_before_rewind(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.confirm_before_rewind = Some(value)).await
+}
+
 /// Persist `[ui].combine_queued_prompts` via `update_config`.
 pub async fn set_combine_queued_prompts(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.combine_queued_prompts = Some(value)).await
@@ -518,6 +522,13 @@ pub async fn set_remember_tool_approvals(value: bool) -> Result<()> {
 /// Persist the restart-required `[ui].code_mode` override.
 pub async fn set_code_mode(value: crate::agent::config::ToolModePreference) -> Result<()> {
     update_config(|cfg| cfg.ui.code_mode = Some(value)).await
+}
+
+/// Persist the restart-required `[ui].image_generation_provider` route.
+pub async fn set_image_generation_provider(
+    value: crate::agent::config::ImageGenerationProvider,
+) -> Result<()> {
+    update_config(|cfg| cfg.ui.image_generation_provider = Some(value)).await
 }
 
 /// Persist `[ui].show_thinking_blocks` via `update_config`.

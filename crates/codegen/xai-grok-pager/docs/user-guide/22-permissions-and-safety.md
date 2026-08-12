@@ -276,7 +276,7 @@ allow = [
 
 ### 3. Claude Code Compatibility (`.claude/settings.json`)
 
-Open Grok reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root). The native `.grok` source for permission rules is `config.toml`, described in the section above.
+Open Grok reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root). The native `.opengrok` source for permission rules is `config.toml`, described in the section above.
 
 Example:
 
@@ -360,7 +360,7 @@ Path patterns are globs matched against the tool path after lexical normalizatio
 
 ### Tool Names
 
-Recognized tool names: `Bash`, `Read` (and `NotebookRead`), `Edit` (and `Write`, `NotebookEdit`), `Grep` (and `Glob`), `MCPTool`, `WebFetch`, `WebSearch`. A bare `*` rule matches every tool. Globs are not supported in the tool-name position.
+Recognized tool names: `Bash`, `Read`, `Edit` (and `Write`), `Grep` (and `Glob`), `MCPTool`, `WebFetch`, `WebSearch`. A bare `*` rule matches every tool. Globs are not supported in the tool-name position.
 
 Rules naming an unrecognized tool (for example `Agent(model:opus)`) are skipped with a warning rather than failing the load.
 

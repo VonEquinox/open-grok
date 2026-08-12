@@ -23,6 +23,77 @@ fn records_model_tool_results() -> bool {
         .try_with(|sink| *sink == ModelToolResultSink::Conversation)
         .unwrap_or(true)
 }
+
+std::thread_local! {
+    static INFERENCE_ATTEMPT_COUNTS: std::cell::RefCell<std::collections::HashMap<String, InferenceAttemptState>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[derive(Default)]
+struct InferenceAttemptState {
+    attempt_count: u32,
+    retry_pending: bool,
+}
+
+fn note_inference_stream_started(request_id: &str) {
+    INFERENCE_ATTEMPT_COUNTS.with(|attempts| {
+        let mut attempts = attempts.borrow_mut();
+        let state = attempts.entry(request_id.to_owned()).or_default();
+        state.attempt_count = state.attempt_count.max(1);
+        state.retry_pending = false;
+    });
+}
+
+fn note_inference_retry(request_id: &str, retry_attempt: u32) -> u32 {
+    let attempt_count = retry_attempt.saturating_add(1);
+    INFERENCE_ATTEMPT_COUNTS.with(|attempts| {
+        let mut attempts = attempts.borrow_mut();
+        let state = attempts.entry(request_id.to_owned()).or_default();
+        state.attempt_count = state.attempt_count.max(attempt_count);
+        state.retry_pending = true;
+    });
+    attempt_count
+}
+
+fn finish_inference_request(request_id: &str, include_pending_retry: bool) -> u32 {
+    INFERENCE_ATTEMPT_COUNTS
+        .with(|attempts| attempts.borrow_mut().remove(request_id))
+        .map(|state| {
+            if state.retry_pending && !include_pending_retry {
+                state.attempt_count.saturating_sub(1)
+            } else {
+                state.attempt_count
+            }
+        })
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn retry_status_code(kind: xai_grok_sampler::SamplingErrorKind, reason: &str) -> Option<u16> {
+    reason
+        .strip_prefix("API error (status ")
+        .and_then(|rest| rest.split_once(')'))
+        .and_then(|(status, _)| status.split_whitespace().next())
+        .and_then(|status| status.parse().ok())
+        .or_else(|| (kind == xai_grok_sampler::SamplingErrorKind::RateLimited).then_some(429))
+}
+
+fn inference_route_log_fields(
+    config: Option<&xai_grok_sampling_types::SamplingConfig>,
+    resolved_model_id: Option<&str>,
+) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::json!({
+        "provider": config.map(|config| config.provider.as_str()),
+        "model_raw": config.map(|config| config.model.as_str()),
+        "resolved_model_id": resolved_model_id,
+        "api_backend": config.map(|config| config.api_backend),
+        "reasoning_effort": config.and_then(|config| config.reasoning_effort.map(|effort| effort.as_str())),
+        "service_tier": config.and_then(|config| config.service_tier.as_deref()),
+    })
+    .as_object()
+    .cloned()
+    .expect("inference telemetry fields must serialize as an object")
+}
 /// Whether a tool name is an MCP `create_pull_request` (qualified
 /// `server__create_pull_request` or bare).
 fn is_mcp_create_pull_request(tool_name: &str) -> bool {
@@ -555,7 +626,8 @@ impl SessionActor {
             }
             map
         };
-        let shared_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
+        let shared_xai_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
+        let shared_codex_recovery = Arc::new(tokio::sync::OnceCell::<bool>::const_new());
         let workspace_ops = self.workspace_ops.clone();
         let pending_interjections = self.pending_interjections.clone();
         let session_id: Arc<str> = Arc::from(&*self.session_info.id.0);
@@ -565,7 +637,11 @@ impl SessionActor {
             .map(|(idx, prepared)| {
                 let prepared = Arc::new(prepared.clone());
                 let am = self.auth_manager.clone();
-                let shared_recovery = Arc::clone(&shared_recovery);
+                let auth_refresh_route = self.tool_auth_refresh_route(&prepared.tool_name);
+                let shared_recovery = match auth_refresh_route {
+                    ToolAuthRefreshRoute::XaiSession => Arc::clone(&shared_xai_recovery),
+                    ToolAuthRefreshRoute::CodexOAuth => Arc::clone(&shared_codex_recovery),
+                };
                 let workspace_ops = workspace_ops.clone();
                 let session_id = session_id.clone();
                 let pending_interjections = pending_interjections.clone();
@@ -596,6 +672,7 @@ impl SessionActor {
                             biased;
                             result = call_with_auth_retry(
                                 am.as_ref(),
+                                auth_refresh_route,
                                 Some(&shared_recovery),
                                 &prepared.tool_name,
                                 run_tool,
@@ -611,6 +688,7 @@ impl SessionActor {
                     } else {
                         call_with_auth_retry(
                             am.as_ref(),
+                            auth_refresh_route,
                             Some(&shared_recovery),
                             &prepared.tool_name,
                             run_tool,
@@ -656,7 +734,7 @@ impl SessionActor {
             }
         });
         let _drainer_guard = crate::util::AbortOnDrop(drainer);
-        while let Some((idx, mut result, mut duration_ms)) = dispatch_rx.recv().await {
+        while let Some((idx, result, duration_ms)) = dispatch_rx.recv().await {
             let prepared = approved_slots[idx]
                 .take()
                 .expect("dispatch index should match an approved slot exactly once");
@@ -677,32 +755,6 @@ impl SessionActor {
                 duration_ms,
             );
             let mut post_tool_use_result: Option<serde_json::Value> = None;
-            if let Some((server, _)) =
-                crate::session::mcp_servers::parse_mcp_tool_name(&prepared.tool_name)
-                && server.starts_with(crate::session::managed_mcp::MANAGED_MCP_PREFIX)
-            {
-                let auth_rejected = match &result {
-                    Err(err) => xai_grok_mcp::servers::is_auth_rejection_message(&err.to_string()),
-                    Ok(tool_result) => {
-                        tool_result.output.is_error()
-                            && xai_grok_mcp::servers::is_auth_rejection_message(
-                                &tool_result.prompt_text,
-                            )
-                    }
-                };
-                if auth_rejected && self.reactive_managed_reauth(&server).await.is_ok() {
-                    let retry_start = std::time::Instant::now();
-                    result = dispatch_tool(&self.workspace_ops, &prepared, &self.session_info.id.0)
-                        .await;
-                    duration_ms =
-                        duration_ms.saturating_add(retry_start.elapsed().as_millis() as u64);
-                    self.events.tool_started(
-                        prepared.tool_name.clone(),
-                        tool_call_id.clone(),
-                        duration_ms,
-                    );
-                }
-            }
             let tool_result_size_bytes = match &result {
                 Ok(tool_result) => tool_result.prompt_text.len() as i64,
                 Err(_) => 0,
@@ -718,10 +770,11 @@ impl SessionActor {
                         .clone()
                         .or_else(|| prepared.dispatch_target_name.clone())
                         .unwrap_or_else(|| prepared.tool_name.clone());
+                    let drained = DrainedToolSuccess::new(tool_result);
                     post_tool_use_result = self
                         .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
                         .then(|| {
-                            serde_json::to_value(&tool_result.output)
+                            serde_json::to_value(drained.output())
                                 .unwrap_or(serde_json::Value::Null)
                         });
                     let followups = self
@@ -730,7 +783,7 @@ impl SessionActor {
                             &prepared.call_id,
                             &prepared.tool_name,
                             &effective_tool_name,
-                            tool_result,
+                            drained,
                             prepared.concatenated_json_count,
                             &prepared.model_id,
                             &prepared.parsed_args,
@@ -1063,6 +1116,7 @@ impl SessionActor {
             }
             result = call_with_auth_retry(
                 self.auth_manager.as_ref(),
+                self.tool_auth_refresh_route(&prepared.tool_name),
                 None,
                 &prepared.tool_name,
                 dispatch,
@@ -1073,23 +1127,26 @@ impl SessionActor {
         let response = match result {
             Ok(tool_result) => {
                 async {
-                    let structured = tool_result.output.code_mode_result().map_err(|error| {
-                        format!("failed to encode `{tool_name}` output: {error}")
-                    })?;
-                    let post_tool_use_result = self
-                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
-                        .then(|| structured.clone());
+                    // Match the batch tool path: harvest tool-layer images before
+                    // Code Mode / PostToolUse serialize and bridge success handling.
                     let effective_tool_name = tool_result
                         .effective_tool_name
                         .clone()
                         .or_else(|| prepared.dispatch_target_name.clone())
                         .unwrap_or_else(|| prepared.tool_name.clone());
+                    let drained = DrainedToolSuccess::new(tool_result);
+                    let structured = drained.output().code_mode_result().map_err(|error| {
+                        format!("failed to encode `{tool_name}` output: {error}")
+                    })?;
+                    let post_tool_use_result = self
+                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
+                        .then(|| structured.clone());
                     self.handle_bridge_tool_success(
                         &prepared.tool_call_id,
                         &prepared.call_id,
                         &prepared.tool_name,
                         &effective_tool_name,
-                        tool_result,
+                        drained,
                         prepared.concatenated_json_count,
                         &prepared.model_id,
                         &prepared.parsed_args,
@@ -1251,14 +1308,8 @@ impl SessionActor {
         }
         let mcp_parts = parse_mcp_tool_name(&call.function.name);
         let is_mcp_tool = mcp_parts.is_some();
-        if let Some((ref server, _)) = mcp_parts
-            && server.starts_with(crate::session::managed_mcp::MANAGED_MCP_PREFIX)
-        {
-            let _span = tracing::info_span!("tool.refresh_managed_mcp").entered();
-            self.refresh_managed_mcp_if_stale().await;
-        }
         if is_mcp_tool && !self.mcp_state.lock().await.is_initialized() {
-            match self.mcp_strategy {
+            match self.mcp_strategy.get() {
                 McpInitStrategy::Blocking => {
                     let _span = tracing::info_span!("tool.wait_mcp_init").entered();
                     self.wait_for_mcp_initialized().await;
@@ -1550,7 +1601,7 @@ impl SessionActor {
                     .get()
                     .map(|cwd| std::path::PathBuf::from(cwd.as_str())),
             });
-            let decision = {
+            let resolution = {
                 let _pending_guard =
                     crate::session::pending_interaction::PendingInteractionGuard::new(
                         self.pending_interactions.clone(),
@@ -1560,7 +1611,7 @@ impl SessionActor {
                         crate::session::pending_interaction::PendingKind::Permission,
                     );
                 self.permissions
-                    .request_with_path_context(
+                    .request_with_path_context_resolved(
                         access_kind.clone(),
                         tool_call_update,
                         path_context,
@@ -1570,6 +1621,8 @@ impl SessionActor {
                     )
                     .await
             };
+            let manager_event = resolution.event;
+            let decision = resolution.decision;
             self.events.permission_resolved(
                 &call.function.name,
                 match &decision {
@@ -1588,53 +1641,33 @@ impl SessionActor {
                 },
                 perm_start,
             );
-            let wait_ms = perm_start.elapsed().as_millis() as u64;
-            let (decision_outcome, _reject_reason) = match &decision {
-                Decision::Allow | Decision::Ask => {
-                    (xai_grok_telemetry::events::PermissionOutcome::Allow, None)
-                }
-                Decision::Reject(reason) | Decision::PolicyDeny(reason) => (
-                    xai_grok_telemetry::events::PermissionOutcome::Deny,
-                    Some(reason.to_string()),
-                ),
-                Decision::Cancelled => (
-                    xai_grok_telemetry::events::PermissionOutcome::Cancelled,
-                    None,
-                ),
-                Decision::FollowupMessage(_) => (
-                    xai_grok_telemetry::events::PermissionOutcome::Followup,
-                    None,
-                ),
-            };
+            let shell_wait_ms = perm_start.elapsed().as_millis() as u64;
+            let decision_outcome = crate::session::telemetry::permission_outcome(&decision);
+            let resolved = crate::session::telemetry::resolved_decision_telemetry(
+                manager_event.as_ref(),
+                &decision,
+                perm_mode,
+                shell_wait_ms,
+                self.permissions.is_yolo_mode(),
+            );
             tracing::info_span!(
                 "tool.decision",
                 tool_name = %call.function.name,
                 tool_use_id = %call.id,
                 decision = decision_outcome.as_str(),
-                source = crate::session::telemetry::permission_decision_source(
-                    &decision,
-                    self.permissions.is_yolo_mode(),
-                ),
-                wait_ms = wait_ms as i64,
+                source = resolved.source.as_deref().unwrap_or(""),
+                wait_ms = resolved.wait_ms as i64,
             )
             .in_scope(|| {});
             xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::PermissionDecisionPayload {
-                    tool_name: call.function.name.clone(),
-                    access_kind: telemetry_access_kind,
-                    decision: decision_outcome,
-                    wait_ms,
-                    permission_mode: perm_mode,
-                    source: Some(
-                        crate::session::telemetry::permission_decision_source(
-                            &decision,
-                            self.permissions.is_yolo_mode(),
-                        )
-                        .to_owned(),
-                    ),
-                    subagent_session_id: subagent_session_id.clone(),
-                    subagent_type: None,
-                },
+                crate::session::telemetry::permission_decision_payload(
+                    call.function.name.clone(),
+                    telemetry_access_kind,
+                    &decision,
+                    subagent_session_id.clone(),
+                    manager_event.as_ref(),
+                    resolved,
+                ),
             );
             match decision {
                 Decision::PolicyDeny(ref reason) | Decision::Reject(ref reason) => {
@@ -2037,24 +2070,14 @@ impl SessionActor {
         let prompt_id = format!("plan-resume-{}", chrono::Utc::now().timestamp_millis());
         let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
         let (respond_to, _rx) = oneshot::channel();
-        self.queue_input(
-            prompt_blocks,
-            prompt_id,
-            mode,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false,
-            None,
-            None,
-            respond_to,
-            None,
-            None,
-        )
-        .await;
+        let _ = self
+            .queue_input(QueueInputRequest::new(
+                prompt_blocks,
+                prompt_id,
+                mode,
+                respond_to,
+            ))
+            .await;
         SessionActor::maybe_start_running_task(self.clone(), completion_tx).await;
     }
     /// Refine the initial (minimal) ToolCall that was registered during
@@ -2682,12 +2705,13 @@ impl SessionActor {
         call_id: &str,
         requested_tool_name: &str,
         effective_tool_name: &str,
-        result: ToolRunResult,
+        drained: DrainedToolSuccess,
         concatenated_json_count: usize,
         model_id: &str,
         tool_parsed_args: &serde_json::Value,
     ) -> Result<Vec<ConversationItem>, acp::Error> {
         use crate::session::acp_conversion::{acp_plan_update, acp_tool_update, maybe_rewrite};
+        let (mut result, mut tool_layer_images) = drained.into_parts();
         let consumed_ids =
             xai_grok_tools::reminders::task_completion::consumed_completion_ids(&result.output);
         if !consumed_ids.is_empty() {
@@ -2716,6 +2740,7 @@ impl SessionActor {
             let state = self.mcp_state.lock().await;
             state.mcp_tool_meta.get(effective_tool_name).cloned()
         };
+        tool_layer_images.extend(drain_tool_layer_extracted_images(&mut result.output));
         if let Some(mut tool_update) =
             acp_tool_update(&result.output, call_id, path_rewriter.as_ref(), tool_meta)
         {
@@ -2797,13 +2822,12 @@ impl SessionActor {
             }
         };
         let mut extracted_images = extraction.images;
-        let prompt_text = extraction.text;
-        if !self.is_cursor_harness()
-            && let ToolsToolOutput::ReadFile(ReadFileOutput::FileContent(ref fc)) = result.output
-        {
-            extracted_images.extend(fc.extracted_images.iter().cloned());
-        }
-        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), prompt_text);
+        split_tool_layer_for_harness(
+            self.is_cursor_harness(),
+            &mut extracted_images,
+            tool_layer_images,
+        );
+        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), extraction.text);
         if !self.is_cursor_harness()
             && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(ref image_content)) =
                 result.output
@@ -2999,7 +3023,11 @@ impl SessionActor {
     ) {
         use xai_grok_sampler::{SamplingChannel, SamplingEvent};
         match event {
-            SamplingEvent::StreamStarted { timestamp_ms, .. } => {
+            SamplingEvent::StreamStarted {
+                request_id,
+                timestamp_ms,
+            } => {
+                note_inference_stream_started(request_id.as_str());
                 {
                     let prompt_id = self
                         .current_prompt_id
@@ -3113,8 +3141,11 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Completed {
-                response, metrics, ..
+                request_id,
+                response,
+                metrics,
             } => {
+                finish_inference_request(request_id.as_str(), true);
                 if let Some(tx) = self.turn_stream_drained.lock().take() {
                     let _ = tx.send(());
                 }
@@ -3161,6 +3192,7 @@ impl SessionActor {
                 doom_loop_triggers,
                 doom_loop_aborted_at_chunk,
             } => {
+                let attempt_count = note_inference_retry(request_id.as_str(), attempt);
                 if kind == xai_grok_sampler::SamplingErrorKind::DoomLoopDetected {
                     let triggers = doom_loop_triggers.unwrap_or_default();
                     let attempt_number = {
@@ -3180,16 +3212,41 @@ impl SessionActor {
                     self.signals_handle()
                         .record_doom_loop_recovery_attempt(triggers, doom_loop_aborted_at_chunk);
                 }
+                let (sampling_config, model_metadata) = tokio::join!(
+                    self.chat_state_handle.get_sampling_config(),
+                    self.chat_state_handle.get_last_model_metadata(),
+                );
+                let mut fields = inference_route_log_fields(
+                    sampling_config.as_ref(),
+                    model_metadata.resolved_model_id.as_deref(),
+                );
+                fields.insert(
+                    "sampler_request_id".to_string(),
+                    serde_json::Value::String(request_id.as_str().to_owned()),
+                );
+                fields.insert("attempt".to_string(), serde_json::json!(attempt));
+                fields.insert(
+                    "attempt_count".to_string(),
+                    serde_json::json!(attempt_count),
+                );
+                fields.insert("max_retries".to_string(), serde_json::json!(max_retries));
+                fields.insert(
+                    "kind".to_string(),
+                    serde_json::Value::String(kind.as_str().to_owned()),
+                );
+                fields.insert(
+                    "status_code".to_string(),
+                    serde_json::json!(retry_status_code(kind, &reason)),
+                );
+                fields.insert("is_retryable".to_string(), serde_json::Value::Bool(true));
+                fields.insert(
+                    "reason".to_string(),
+                    serde_json::Value::String(crate::util::truncate(&reason, 300).to_owned()),
+                );
                 xai_grok_telemetry::unified_log::warn(
                     "shell.turn.inference_retry",
                     Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "sampler_request_id": request_id.as_str(),
-                        "attempt": attempt,
-                        "max_retries": max_retries,
-                        "kind": kind.as_str(),
-                        "reason": crate::util::truncate(&reason, 300),
-                    })),
+                    Some(serde_json::Value::Object(fields)),
                 );
                 self.send_xai_notification(XaiSessionUpdate::RetryState(
                     crate::extensions::notification::RetryState::Retrying {
@@ -3201,16 +3258,52 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Failed { request_id, error } => {
+                let attempt_count = finish_inference_request(
+                    request_id.as_str(),
+                    error.message != "request cancelled",
+                );
+                let (sampling_config, model_metadata) = tokio::join!(
+                    self.chat_state_handle.get_sampling_config(),
+                    self.chat_state_handle.get_last_model_metadata(),
+                );
+                let mut fields = inference_route_log_fields(
+                    sampling_config.as_ref(),
+                    model_metadata.resolved_model_id.as_deref(),
+                );
+                fields.insert(
+                    "sampler_request_id".to_string(),
+                    serde_json::Value::String(request_id.as_str().to_owned()),
+                );
+                fields.insert(
+                    "attempt_count".to_string(),
+                    serde_json::json!(attempt_count),
+                );
+                fields.insert(
+                    "kind".to_string(),
+                    serde_json::Value::String(error.kind.as_str().to_owned()),
+                );
+                fields.insert(
+                    "status_code".to_string(),
+                    serde_json::json!(error.status_code),
+                );
+                fields.insert(
+                    "is_retryable".to_string(),
+                    serde_json::Value::Bool(error.is_retryable),
+                );
+                fields.insert(
+                    "should_retry".to_string(),
+                    serde_json::json!(error.should_retry),
+                );
+                fields.insert(
+                    "message".to_string(),
+                    serde_json::Value::String(
+                        crate::util::truncate(&error.message, 300).to_owned(),
+                    ),
+                );
                 xai_grok_telemetry::unified_log::error(
                     "shell.turn.inference_failed",
                     Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "sampler_request_id": request_id.as_str(),
-                        "kind": error.kind.as_str(),
-                        "status_code": error.status_code,
-                        "is_retryable": error.is_retryable,
-                        "message": crate::util::truncate(&error.message, 300),
-                    })),
+                    Some(serde_json::Value::Object(fields)),
                 );
                 self.signals_handle()
                     .record_error_typed(error.kind.as_str());
@@ -3713,6 +3806,112 @@ mod plan_mode_edit_gate_tests {
         );
     }
 }
+#[cfg(test)]
+mod inference_telemetry_tests {
+    use super::{
+        finish_inference_request, inference_route_log_fields, note_inference_retry,
+        note_inference_stream_started, retry_status_code,
+    };
+    use xai_grok_sampler::SamplingErrorKind;
+    use xai_grok_sampling_types::{ApiBackend, ModelProvider, ReasoningEffort, SamplingConfig};
+
+    #[test]
+    fn route_fields_include_only_sanitized_inference_metadata() {
+        let mut config = SamplingConfig {
+            base_url: "https://provider.example/v1".to_string(),
+            model: "accounts/example/models/raw-model".to_string(),
+            max_completion_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            api_backend: ApiBackend::Responses,
+            provider: ModelProvider::Fireworks,
+            extra_headers: Default::default(),
+            query_params: Default::default(),
+            env_http_headers: Default::default(),
+            context_window: std::num::NonZeroU64::new(128_000).unwrap(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            service_tier: Some("priority".to_string()),
+            stream_tool_calls: None,
+        };
+        config.extra_headers.insert(
+            "Authorization".to_string(),
+            "Bearer must-not-log".to_string(),
+        );
+
+        let fields = inference_route_log_fields(Some(&config), Some("resolved-model"));
+
+        assert_eq!(fields["provider"], "fireworks");
+        assert_eq!(fields["model_raw"], "accounts/example/models/raw-model");
+        assert_eq!(fields["resolved_model_id"], "resolved-model");
+        assert_eq!(fields["api_backend"], "responses");
+        assert_eq!(fields["reasoning_effort"], "high");
+        assert_eq!(fields["service_tier"], "priority");
+        assert!(!fields.contains_key("base_url"));
+        assert!(!fields.contains_key("extra_headers"));
+        assert!(!fields.contains_key("query_params"));
+        assert!(!fields.contains_key("env_http_headers"));
+        assert!(
+            !serde_json::Value::Object(fields)
+                .to_string()
+                .contains("must-not-log")
+        );
+    }
+
+    #[test]
+    fn retry_status_extracts_only_known_http_statuses() {
+        assert_eq!(
+            retry_status_code(
+                SamplingErrorKind::Api,
+                "API error (status 503 Service Unavailable): upstream unavailable"
+            ),
+            Some(503)
+        );
+        assert_eq!(
+            retry_status_code(
+                SamplingErrorKind::Api,
+                "API error (status 503): upstream unavailable"
+            ),
+            Some(503)
+        );
+        assert_eq!(
+            retry_status_code(SamplingErrorKind::RateLimited, "rate limited"),
+            Some(429)
+        );
+        assert_eq!(
+            retry_status_code(SamplingErrorKind::Http, "request error: private detail"),
+            None
+        );
+    }
+
+    #[test]
+    fn attempt_count_tracks_retries_and_cleans_up_terminal_requests() {
+        let request_id = "telemetry-attempt-test";
+        let _ = finish_inference_request(request_id, true);
+
+        note_inference_stream_started(request_id);
+        assert_eq!(note_inference_retry(request_id, 1), 2);
+        note_inference_stream_started(request_id);
+        assert_eq!(note_inference_retry(request_id, 2), 3);
+        assert_eq!(finish_inference_request(request_id, true), 3);
+        assert_eq!(finish_inference_request(request_id, true), 1);
+    }
+
+    #[test]
+    fn cancellation_does_not_count_a_retry_still_in_backoff() {
+        let request_id = "telemetry-cancelled-retry-test";
+        let _ = finish_inference_request(request_id, true);
+
+        note_inference_stream_started(request_id);
+        assert_eq!(note_inference_retry(request_id, 1), 2);
+        assert_eq!(finish_inference_request(request_id, false), 1);
+
+        note_inference_stream_started(request_id);
+        assert_eq!(note_inference_retry(request_id, 1), 2);
+        note_inference_stream_started(request_id);
+        assert_eq!(finish_inference_request(request_id, false), 2);
+    }
+}
+
 #[cfg(test)]
 mod plan_approval_helper_tests {
     use super::{

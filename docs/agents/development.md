@@ -6,7 +6,7 @@ Also see: root [`README.md`](../../README.md), [`CONTRIBUTING.md`](../../CONTRIB
 
 ## Prerequisites
 
-- Rust pin: `rust-toolchain.toml` (currently **1.92.0** + rustfmt, clippy)
+- Rust pin: `rust-toolchain.toml` (currently **1.94.0** + rustfmt, clippy)
 - `protoc` via `./bin/protoc` (Dotslash) or `PROTOC` / `PATH`
 - Xcode CLT for signed macOS release artifacts (Apple Silicon release path)
 
@@ -37,8 +37,9 @@ OPENGROK_HOME=/tmp/og-test ./bin/open-grok-dev   # isolated state
 
 1. **Root `Cargo.toml` is generated / read-only.** Edit per-crate `Cargo.toml` files.
 2. Prefer **`--locked`** on cargo commands so `Cargo.lock` stays consistent.
-3. Prefer **package-scoped** builds/tests (`-p xai-grok-shell`) over full workspace unless you need cross-crate validation.
-4. Features of note on `xai-grok-pager-bin`: `jemalloc`, `sandbox-enforce`; release uses profile **`release-dist`** + feature `release-dist`.
+3. Default routine validation to **package-scoped `cargo check`** (`cargo check --locked -p xai-grok-shell`). It skips final linking and avoids creating executable churn. Use `cargo build`, Clippy, or tests only when the change requires them.
+4. Cargo uses its machine-aware default job count (one job per logical CPU). Do not hard-code a repository-wide `-j` limit; use a temporary override only when diagnosing contention.
+5. Features of note on `xai-grok-pager-bin`: `jemalloc`, `sandbox-enforce`; release uses profile **`release-dist`** + feature `release-dist`.
 
 ## Formatting and lint
 
@@ -133,7 +134,7 @@ cargo test --locked -p xai-grok-shell --test codex_auth_contract -- <filter>
 
 | Item | Detail |
 | --- | --- |
-| Canonical version | `OPEN_GROK_VERSION` (e.g. `0.1.220-open-grok.9`) |
+| Canonical version | `OPEN_GROK_VERSION` (e.g. `1.0.0-open-grok.59`) |
 | Embedded version | Build injects `GROK_VERSION` → `xai-grok-version` |
 | Public command | `open-grok` only |
 | Managed install path | `$OPENGROK_HOME/bin/open-grok` |
@@ -141,6 +142,11 @@ cargo test --locked -p xai-grok-shell --test codex_auth_contract -- <filter>
 | CLI | `open-grok update --check` / `open-grok update` |
 | Disable auto | `[cli] auto_update = false`, `--no-auto-update`, `OPENGROK_DISABLE_AUTOUPDATER=1` |
 | Release notes | `docs/releases/` |
+
+The public version follows the upstream Grok Build release line and keeps
+Open Grok's monotonic fork serial as SemVer prerelease metadata. For example,
+the first fork release based on upstream `1.0.0` is
+`1.0.0-open-grok.59`, following `0.1.220-open-grok.58`.
 
 ### macOS release build (Apple Silicon)
 

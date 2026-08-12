@@ -12,5 +12,6 @@ workspace = true
 anyhow = { workspace = true }
 pbjson-build = { workspace = true }
 prost-build = { workspace = true }
+prost-reflect = "0.16"
 tempfile = { workspace = true }
 tonic-prost-build = { workspace = true }

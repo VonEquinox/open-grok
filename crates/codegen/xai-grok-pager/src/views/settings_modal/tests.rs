@@ -770,13 +770,24 @@ fn render_setting_row_shows_full_label_when_one_line_fits() {
     );
 }
 
-/// The default registry contains Appearance settings
-/// (3 bools + 3 enums + 1 int = 7 entries), the Editor entry
-/// `multiline_mode`, the Agent entries `permission_mode` and
-/// `plan_mode`, the Privacy entry `coding_data_sharing`, the
-/// Models entry `default_model`, and the Advanced entries
-/// `show_tips` and `auto_update`. `default_reasoning_effort` and
-/// `auto_compact_threshold_percent` are not exposed in the modal.
+#[test]
+fn default_registry_contains_meta_api_key_secret() {
+    let registry = crate::settings::SettingsRegistry::defaults();
+    let meta = registry
+        .find("meta_api_key")
+        .expect("Meta API key must be available in Settings");
+    assert_eq!(meta.label, "Meta API key");
+    assert!(matches!(meta.kind, SettingKind::Secret));
+}
+
+/// Exhaustive visible-row contract for the default (non-minimal, voice-off,
+/// no-antigravity) settings modal. Pins category headers and every top-level
+/// setting key in registry order, including Open Grok provider/Code Mode
+/// rows and Advanced opt-in feature flags (telemetry, web_fetch localhost,
+/// remember-mode, crash handler, mouse reporting toggle, shell/AI
+/// suggestions, sandbox auto-allow bash, respect gitignore).
+/// `default_reasoning_effort` and `auto_compact_threshold_percent` stay
+/// unexposed; voice and antigravity rows stay gated out of this fixture.
 #[test]
 fn rows_contain_categories_and_settings_through_pr_14() {
     let prev_voice = crate::app::voice_mode_enabled();
@@ -868,6 +879,8 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             // both the pager drain and the shell promote. Registered before
             // multiline_mode, so it renders first).
             "combine_queued_prompts",
+            // SHARED-owned confirm_before_rewind (Editor): rewind confirm dialog.
+            "confirm_before_rewind",
             // SHARED-owned enter_steers (Editor): mid-turn Enter ↔ send-now swap.
             "enter_steers",
             // PAGER-owned multiline (Editor category).
@@ -896,6 +909,8 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "plan_mode",
             // SHELL-owned coding_data_sharing (Privacy category).
             "coding_data_sharing",
+            // SHELL-owned image provider (Models category, restart-required).
+            "image_generation_provider",
             // SHELL-owned default_model (Models category).
             "default_model",
             // Kimi service selector and isolated credentials.
@@ -906,6 +921,8 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "fireworks_api_key",
             // Direct DeepSeek isolated credential.
             "deepseek_api_key",
+            // Meta API isolated credential.
+            "meta_api_key",
             // OpenCode Go isolated credential and opt-in discovered models.
             "opencode_go_api_key",
             // Wafer AI isolated credential.
@@ -942,12 +959,23 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "hunk_tracker_mode",
             "memory.enabled",
             "memory.dream.enabled",
+            // Advanced opt-in feature flags (config/env-only until exposed
+            // in Settings → Advanced; keep registry order).
+            "features.telemetry",
             "features.lsp_tools",
             "features.web_fetch",
+            "toolset.web_fetch.allow_local",
             "features.two_pass_compaction",
             "features.non_git_warning",
+            "features.remember_mode",
             "doom_loop_recovery.enabled",
             "features.subagent_worktree_snapshot",
+            "diagnostics.crash_handler",
+            "ui.mouse_reporting_toggle",
+            "suggestions.enabled",
+            "suggestions.ai_enabled",
+            "sandbox.auto_allow_bash",
+            "tools.respect_gitignore",
         ]
     );
 }
@@ -2997,6 +3025,63 @@ fn try_enter_picking_enum_returns_false_for_non_enum_row() {
         matches!(s.mode(), SettingsModalMode::Browse),
         "mode must not change on non-Enum row"
     );
+}
+
+/// A persisted `fork_secondary_model` slug renders as the catalog display
+/// name and seeds the picker on that model's row — not the stale-value
+/// fallback (index 1). The catalog carries two models so a fallback seed
+/// and a genuine match land on different indices.
+#[test]
+fn fork_secondary_model_picker_opens_on_persisted_model() {
+    use agent_client_protocol as acp;
+    // Must differ from the baseline slug or the empty-fold arm hides the lookup.
+    let slug = "grok-4.5-fast";
+    assert_ne!(slug, xai_grok_shell::models::default_model());
+    let snapshot = PagerLocalSnapshot {
+        available_models: vec![
+            ("Grok 3".to_string(), acp::ModelId::new(Arc::from("grok-3"))),
+            (
+                "Grok 4.5 Fast".to_string(),
+                acp::ModelId::new(Arc::from(slug)),
+            ),
+        ],
+        ..PagerLocalSnapshot::default()
+    };
+    let ui = UiConfig {
+        fork_secondary_model: slug.to_string(),
+        ..UiConfig::default()
+    };
+    let mut s = SettingsModalState::new(Arc::new(SettingsRegistry::defaults()), ui, snapshot);
+
+    // Row value shows the display name, matching the default_model row.
+    assert_eq!(
+        s.value_for("fork_secondary_model"),
+        Some(SettingValue::String("Grok 4.5 Fast".to_string())),
+    );
+
+    assert!(s.focus_key("fork_secondary_model"));
+    assert!(s.try_enter_picking_enum());
+    match s.mode() {
+        SettingsModalMode::PickingEnum {
+            key,
+            choices_idx,
+            ref original_value,
+            ..
+        } => {
+            assert_eq!(key, "fork_secondary_model");
+            // Choices: [(no override), Grok 3, Grok 4.5 Fast] → idx 2.
+            assert_eq!(
+                choices_idx, 2,
+                "picker must open on the persisted model, not the stale fallback",
+            );
+            assert_eq!(
+                original_value,
+                &SettingValue::String("Grok 4.5 Fast".to_string()),
+                "original_value must carry the display name so Esc-revert round-trips",
+            );
+        }
+        ref other => panic!("expected PickingEnum mode, got {other:?}"),
+    }
 }
 
 // -- render_picking_enum narrow-terminal coverage --

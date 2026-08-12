@@ -67,13 +67,11 @@ async fn handle_share_session(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRe
         .ok_or_else(|| acp::Error::resource_not_found(Some("Session not found".into())))?;
 
     let provider_boundary = agent
-        .sessions
-        .borrow()
-        .get(&acp::SessionId::new(request.session_id.clone()))
+        .resident_handle(&acp::SessionId::new(request.session_id.clone()))
         .map(|handle| handle.feedback_manager.provider_boundary());
-    let live_allows_xai_export = provider_boundary
-        .as_ref()
-        .is_none_or(|boundary| boundary.allows_xai_export());
+    let live_allows_xai_export = provider_boundary.as_ref().is_none_or(
+        |boundary: &crate::session::persistence::ProviderBoundary| boundary.allows_xai_export(),
+    );
     if summary.ever_used_codex || !live_allows_xai_export {
         return Err(acp::Error::invalid_params()
             .data("Codex-backed sessions cannot be shared through xAI services."));
@@ -114,10 +112,9 @@ async fn handle_share_session(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRe
         .await;
     }
 
-    if provider_boundary
-        .as_ref()
-        .is_some_and(|boundary| !boundary.allows_xai_export())
-    {
+    if provider_boundary.as_ref().is_some_and(
+        |boundary: &crate::session::persistence::ProviderBoundary| !boundary.allows_xai_export(),
+    ) {
         return Err(acp::Error::invalid_params()
             .data("Session crossed the Codex provider boundary while sharing."));
     }

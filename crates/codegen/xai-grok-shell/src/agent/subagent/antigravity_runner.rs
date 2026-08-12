@@ -203,10 +203,19 @@ pub(super) async fn run_antigravity_subagent(
         antigravity_conversation_id: inherited_conversation.clone(),
     };
     write_subagent_meta(&subagent_meta_dir, &meta);
+    // Antigravity dispatch does not receive admission `queued_for` /
+    // `session_running` from the coordinator (those stay on the in-process
+    // path). Treat launch as immediately admitted with this member as the
+    // sole counted runner known here; owner / workflow id still come from
+    // the request so Antigravity stays on the same owner axis as HTTP kids.
     xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::SubagentLaunched {
         subagent_id: subagent_id.clone(),
         parent_session_id: ctx.parent_session_id.clone(),
         subagent_type: request.subagent_type.clone(),
+        owner: super::telemetry_owner_kind(&request),
+        workflow_run_id: request.owner.workflow_run_id().map(str::to_string),
+        queued_ms: None,
+        session_running: 1,
         persona: effective_runtime.persona.clone(),
         fork_context: false,
         resume_from: request.resume_from.clone(),
@@ -447,6 +456,8 @@ pub(super) async fn run_antigravity_subagent(
     xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::SubagentCompleted {
         subagent_id: subagent_id.clone(),
         parent_session_id: ctx.parent_session_id.clone(),
+        owner: super::telemetry_owner_kind(&request),
+        workflow_run_id: request.owner.workflow_run_id().map(str::to_string),
         outcome,
         duration_ms,
         tool_calls: 0,

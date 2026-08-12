@@ -5,6 +5,7 @@
     unreachable_code,
     dead_code
 )]
+#![warn(unreachable_pub)]
 #[cfg(all(test, feature = "dhat-heap"))]
 #[global_allocator]
 static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
@@ -24,6 +25,7 @@ pub mod config;
 pub mod deepseek_models;
 pub mod fireworks_models;
 pub mod kimi_models;
+pub mod meta_models;
 pub mod opencode_go_models;
 pub mod wafer_models;
 pub use xai_grok_shell_base::cpu_profile;

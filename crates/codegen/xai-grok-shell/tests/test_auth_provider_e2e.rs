@@ -28,7 +28,7 @@ async fn provider_backed_model_sends_minted_token_on_the_wire() {
     sandbox.remove_env("GROK_LEADER_SOCKET");
 
     let grok_home = sandbox.grok_home().to_path_buf();
-    std::fs::create_dir_all(&grok_home).expect("create .grok home");
+    std::fs::create_dir_all(&grok_home).expect("create OPENGROK_HOME");
 
     let counter = grok_home.join("mint-count");
     let helper = grok_home.join("mock-auth.sh");
@@ -147,7 +147,7 @@ async fn undefined_provider_fails_closed_and_never_leaks_session_key() {
     sandbox.remove_env("GROK_LEADER_SOCKET");
 
     let grok_home = sandbox.grok_home().to_path_buf();
-    std::fs::create_dir_all(&grok_home).expect("create .grok home");
+    std::fs::create_dir_all(&grok_home).expect("create OPENGROK_HOME");
 
     // Model references `gateway`, but no `[auth_provider.gateway]` table exists.
     std::fs::write(
@@ -225,7 +225,7 @@ async fn provider_with_args_and_json_output_sends_minted_token() {
     sandbox.remove_env("GROK_LEADER_SOCKET");
 
     let grok_home = sandbox.grok_home().to_path_buf();
-    std::fs::create_dir_all(&grok_home).expect("create .grok home");
+    std::fs::create_dir_all(&grok_home).expect("create OPENGROK_HOME");
 
     // The helper records the args it was invoked with (proving direct exec, no
     // shell) and prints a JSON token payload.

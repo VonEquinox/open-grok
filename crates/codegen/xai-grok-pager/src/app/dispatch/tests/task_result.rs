@@ -1961,8 +1961,39 @@ fn successful_model_switch_updates_provider_and_round_trips_xai_access_state() {
         Effect::FetchBilling {
             agent_id: fetched_agent,
             silent: true,
+            ..
         } if *fetched_agent == id
     )));
+}
+
+#[test]
+fn openai_images_are_not_blocked_by_xai_free_tier() {
+    let mut app = test_app_with_agent();
+    app.primary_provider = PrimaryProvider::Xai;
+    app.subscription_tier = Some("Free".to_owned());
+    app.current_ui.image_generation_provider =
+        Some(xai_grok_shell::agent::config::ImageGenerationProvider::OpenAi);
+
+    app.apply_tier_restrictions();
+
+    assert!(
+        !app.tier_restricted_commands
+            .iter()
+            .any(|name| name == "imagine"),
+        "OpenAI Images uses Codex entitlement, not the xAI image tier",
+    );
+    assert!(
+        app.tier_restricted_commands
+            .iter()
+            .any(|name| name == "imagine-video"),
+        "video generation remains xAI-only",
+    );
+    assert!(
+        app.tier_restricted_commands
+            .iter()
+            .any(|name| name == "voice"),
+        "unrelated xAI tier restrictions must remain active",
+    );
 }
 
 #[test]
@@ -2496,6 +2527,62 @@ fn no_deferred_switch_means_no_extra_effect() {
             .any(|e| matches!(e, Effect::SwitchModel { .. }))
     );
     assert!(!app.agents[&id].session.model_switch_pending);
+}
+
+#[test]
+fn session_success_arms_finish_startup_obligation() {
+    xai_grok_telemetry::unified_log::redirect_to_temp_for_tests();
+    let id = AgentId(0);
+    let results = [
+        TaskResult::SessionCreated {
+            agent_id: id,
+            session_id: "new-session".into(),
+            models: None,
+            scheduler_background_loops: None,
+        },
+        TaskResult::SessionLoaded {
+            agent_id: id,
+            session_id: "resumed-session".into(),
+            models: None,
+            code_restored: false,
+            restore_summary: None,
+            restore_degree: None,
+            running_prompt_id: None,
+            scheduler_background_loops: None,
+        },
+        TaskResult::WorktreeSessionCreated {
+            agent_id: id,
+            session_id: "worktree-session".into(),
+            worktree_path: std::path::PathBuf::from("/tmp/wt"),
+            session_cwd: std::path::PathBuf::from("/tmp/wt"),
+            models: None,
+            scheduler_background_loops: None,
+        },
+        TaskResult::WorktreeForked {
+            agent_id: id,
+            session_id: "forked-session".into(),
+            worktree_path: std::path::PathBuf::from("/tmp/wt"),
+            session_cwd: std::path::PathBuf::from("/tmp/wt"),
+            code_restored: false,
+            restore_summary: None,
+            restore_degree: None,
+            resume_session_id: None,
+        },
+    ];
+
+    for result in results {
+        let mut app = test_app_with_agent();
+        app.agents.get_mut(&id).unwrap().session.session_id = None;
+        app.pending_startup = Some(xai_grok_telemetry::startup::PendingStartup::new());
+        let label = format!("{result:?}");
+
+        dispatch(Action::TaskComplete(result), &mut app);
+
+        assert!(
+            app.pending_startup.is_none(),
+            "a usable session must take the startup obligation: {label}",
+        );
+    }
 }
 
 #[test]

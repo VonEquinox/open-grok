@@ -411,7 +411,7 @@ pub(crate) async fn run_auth_flow_with_stderr_bridge(
 /// Every interactive login returns through here, so reporting the failure here
 /// costs one event per attempt — a retried request, or the discovery cache
 /// background token refresh shares, can't inflate it. Never changes the result.
-pub async fn run_auth_flow(
+pub(crate) async fn run_auth_flow(
     auth_manager: &Arc<AuthManager>,
     grok_com_config: &GrokComConfig,
     reauth: bool,
